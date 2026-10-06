@@ -20,6 +20,7 @@ from pathlib import Path
 import numpy as np
 from matplotlib.figure import Figure
 
+import ame_ntc as ntc
 from ame_marco import rigidez_marco
 from ame_revision import (COMBINACIONES, avisos as _avisos, combinar, derivas_modales, irregularidades,
                           theta_pdelta)
@@ -119,24 +120,89 @@ def _num_opc(d, clave, defecto):
     return parse_num(d[clave], clave) if str(d[clave]).strip() else None
 
 
-def _params_espectro(d):
-    estado = d.get('estado') or ESTADOS[0]
+def _spec_dict(d, intensidad):
+    """Parámetros del espectro de la intensidad dada: d['espectros'][intensidad] o los campos sueltos."""
+    esp = d.get('espectros')
+    if not esp:
+        return d
+    if intensidad not in esp:
+        raise ValueError(f'Captura el espectro SASID de la intensidad "{intensidad}" (faltan: a0, c, Ta, Tb, k, Ts).')
+    src = dict(d, **esp[intensidad])
+    faltan = [k for k in ('a0', 'c', 'Ta', 'Tb', 'k', 'Ts') if not str(src.get(k, '')).strip()]
+    if faltan:
+        raise ValueError(f'Captura el espectro SASID de la intensidad "{intensidad}" (faltan: {", ".join(faltan)}).')
+    return src
+
+
+def _params_espectro(d, estado_auto=None, material='Concreto', intensidad='Base de diseño'):
+    pedido = d.get('estado')
+    estado = (estado_auto or ESTADOS[0]) if (not pedido or str(pedido).startswith('Autom')) else pedido
     comb = d.get('combinacion') or COMBINACIONES[0]
     if estado not in ESTADOS:
         raise ValueError(f'Estado límite no válido: {estado}.')
     if comb not in COMBINACIONES:
         raise ValueError(f'Combinación modal no válida: {comb}.')
-    zeta = _num_opc(d, 'zeta', 0.05)
+    zeta_defecto = ntc.ZETA_MATERIAL.get(material, 0.05)
+    zeta = _num_opc(d, 'zeta', zeta_defecto)
+    sp = _spec_dict(d, intensidad)
     return dict(Q=parse_vector(d['Q'], 'Q'),
-                k1=parse_num(d['k1'], 'k1'), a0=parse_num(d['a0'], 'a0'), c=parse_num(d['c'], 'c'),
-                Ta=parse_num(d['Ta'], 'Ta'), Tb=parse_num(d['Tb'], 'Tb'), k=parse_num(d['k'], 'k'),
-                Ts=parse_num(d['Ts'], 'Ts'),
+                k1=parse_num(d['k1'], 'k1'), a0=parse_num(sp['a0'], 'a0'), c=parse_num(sp['c'], 'c'),
+                Ta=parse_num(sp['Ta'], 'Ta'), Tb=parse_num(sp['Tb'], 'Tb'), k=parse_num(sp['k'], 'k'),
+                Ts=parse_num(sp['Ts'], 'Ts'),
                 factor_Fu=parse_num(d.get('factor_Fu', '1.1') or '1.1', 'Factor Fu'),
                 mult_V=parse_num(d.get('mult_V', '1') or '1', 'Multiplicador V estático'),
                 estado=estado, Ks=_num_opc(d, 'Ks', 0.25) or 0.25, combinacion=comb,
-                zeta=zeta if zeta is not None else 0.05,
+                zeta=zeta if zeta is not None else zeta_defecto,
                 lim_dl=_num_opc(d, 'lim_dl', 0.004), lim_sv=_num_opc(d, 'lim_sv', 0.03),
-                lim_oi=_num_opc(d, 'lim_oi', None))
+                lim_oi=_num_opc(d, 'lim_oi', 0.005))
+
+
+NORMA_DEFECTO = dict(irreg=[], fuerte_torsion=False, fuerte_elev=False, gamma_c=1.0,
+                     gamma_c_txt='Estructura regular: γc = 1.0.', b_planta=None, zona='', regular=True,
+                     R_unitaria=False, R1_otros=True, intensidad='Base de diseño', subgrupo=None, objetivo=None,
+                     material='Concreto', R_legacy=True)
+
+
+def _flag(v):
+    return v is True or str(v).strip().lower() in ('true', 'sí', 'si', '1', 'yes')
+
+
+def _objetivo_de(d):
+    """Grupo, subgrupo, intensidad y objetivo de diseño (NTC-S 2023) a partir de subgrupo/tipo e intensidad."""
+    sub = str(d.get('subgrupo') or '').strip().upper()
+    tipo = str(d.get('tipo') or 'Grupo B')
+    if sub in ntc.SUBGRUPOS:
+        grupo = ntc.SUBGRUPOS[sub]
+    elif sub:
+        raise ValueError(f'Subgrupo no válido: {sub} (usa B2, B1, A2 o A1).')
+    else:
+        grupo, _ = grupo_sismo(tipo)
+        sub = grupo
+    intensidad = d.get('intensidad') or ('Infrecuente' if 'infrec' in tipo.lower() else 'Base de diseño')
+    if intensidad not in ntc.INTENSIDADES:
+        raise ValueError(f'Intensidad sísmica no válida: {intensidad}.')
+    objetivo = ntc.objetivo_diseno(grupo, intensidad)
+    nombre = {v: k for k, v in CLAVE_ESTADO.items()}[objetivo['clave']]
+    sismo = {'Frecuente': 'F', 'Base de diseño': 'B', 'Infrecuente': 'I'}[intensidad]
+    return dict(grupo=grupo, subgrupo=sub, intensidad=intensidad, sismo=sismo, objetivo=objetivo, estado_auto=nombre)
+
+
+def _params_norma(d, material):
+    """Irregularidades (γc), torsión accidental, método estático y R = 1 en materiales distintos del concreto."""
+    irreg = d.get('irreg') or []
+    if isinstance(irreg, str):
+        irreg = re.findall(r'5\.[23]\.\d', irreg)
+    ft, fe = _flag(d.get('fuerte_torsion')), _flag(d.get('fuerte_elev'))
+    gc, txt = ntc.gamma_c(irreg, ft, fe)
+    zona = str(d.get('zona') or '').strip().upper()
+    if zona and zona not in ntc.LIMITES_ALTURA_ESTATICO:
+        raise ValueError('La zona geotécnica debe ser I, II o III.')
+    r1 = d.get('R1_otros', True)
+    r1 = True if r1 == '' else _flag(r1)
+    return dict(irreg=sorted(set(irreg)), fuerte_torsion=ft, fuerte_elev=fe, gamma_c=gc, gamma_c_txt=txt,
+                b_planta=_num_opc(d, 'b_planta', None), zona=zona,
+                regular=str(d.get('regularidad') or 'Regular').lower().startswith('reg'),
+                R_unitaria=(material != 'Concreto') and r1, R1_otros=r1)
 
 
 def grupo_sismo(tipo):
@@ -336,11 +402,14 @@ def preparar_modelo(d):
             K[i, i] = ks[i] + (ks[i + 1] if i + 1 < n else 0)
             if i + 1 < n:
                 K[i, i + 1] = K[i + 1, i] = -ks[i + 1]
-    grupo, sismo = grupo_sismo(d.get('tipo', 'Grupo B'))
+    mat = d.get('material') or 'Concreto'
+    obj = _objetivo_de(d)
     return dict(M=np.diag(m), K=K, n=n, alturas=np.array(alturas), cargas=np.array(W), dist_x=np.ones(n),
-                grupo=grupo, sismo=sismo, E=E, info=filas, material=d.get('material') or 'Concreto',
-                direccion=direccion, vigas='flexibles' if flexibles else 'rigidas',
-                geom=dict(bays=bays, xs=xs, niveles=geom_niv), **_params_espectro(d))
+                grupo=obj['grupo'], sismo=obj['sismo'], subgrupo=obj['subgrupo'], intensidad=obj['intensidad'],
+                objetivo=obj['objetivo'], E=E, info=filas, material=mat, direccion=direccion,
+                vigas='flexibles' if flexibles else 'rigidas', R_legacy=False,
+                geom=dict(bays=bays, xs=xs, niveles=geom_niv),
+                **_params_norma(d, mat), **_params_espectro(d, obj['estado_auto'], mat, obj['intensidad']))
 
 
 def convertir_legacy(d):
@@ -369,8 +438,23 @@ def _r0(Q):
     return 1.75 if Q < 3 else 2.0
 
 
-def _fgrupo(p):
-    return 0.75 if (p['grupo'] == 'A' and p['sismo'] == 'B') else 1.0
+def _frp(p, clave='SV'):
+    """R′/R: 0.75 en ocupación inmediata y 1 en seguridad de vida (apuntes, p. 10).
+
+    En proyectos del formato anterior (K y M a mano) se conserva la regla vieja: grupo A con sismo base -> 0.75."""
+    if clave == 'OI':
+        return ntc.FACTOR_R_OI
+    if p.get('R_legacy', True) and p['grupo'] == 'A' and p['sismo'] == 'B':
+        return ntc.FACTOR_R_OI
+    return 1.0
+
+
+def _R(p, Q, T):
+    """Sobrerresistencia R = k1·R0 + k2 (R = 1 en materiales distintos del concreto, apuntes p. 11)."""
+    T = np.asarray(T, float)
+    if p.get('R_unitaria'):
+        return np.ones_like(T)
+    return p['k1'] * _r0(Q) + _k2(T, p['Ta'])
 
 
 def _k2(T, Ta):
@@ -390,7 +474,7 @@ def _a_minima(p, Rprima_prom, esc):
     return a * G * esc
 
 
-def espectro(p, Q, esc, serie, dl=False):
+def espectro(p, Q, esc, serie, dl=False, clave='SV'):
     """Sa/(Q'R') en la malla 'serie' (esc=1 cm/s^2; esc=1/981 g). Devuelve (curva, a_minima)."""
     a0, c, Ta, Tb, k = p['a0'] * esc, p['c'] * esc, p['Ta'], p['Tb'], p['k']
     Sa = np.zeros_like(serie)
@@ -408,12 +492,11 @@ def espectro(p, Q, esc, serie, dl=False):
     if dl:  # limitación de daños: espectro elástico por Ks, sin Q' ni R'
         return Sa * p['Ks'], 0.0
 
-    k2 = _k2(serie, Ta)
-    f = _fgrupo(p)
+    f = _frp(p, clave)
     # R' promedio (igual que el script original: promedio sobre toda la malla, con r0 de Q(1))
-    Rprom = f * np.mean(p['k1'] * _r0(p['Q'][0]) + k2)
+    Rprom = f * np.mean(_R(p, p['Q'][0], serie))
     a_min = _a_minima(p, Rprom, esc)
-    r = f * (p['k1'] * _r0(Q) + k2)
+    r = f * _R(p, Q, serie)
 
     curva = Sa / (q * r)
     idx = np.flatnonzero(curva <= a_min)
@@ -422,14 +505,14 @@ def espectro(p, Q, esc, serie, dl=False):
     return curva, a_min
 
 
-def _q_r(p, Q, T):
+def _q_r(p, Q, T, clave='SV'):
     """Q' y R' del espectro de diseño para los periodos T."""
     T = np.maximum(np.atleast_1d(np.asarray(T, float)), 1e-9)
     k, Ta, Tb = p['k'], p['Ta'], p['Tb']
     pp = k + (1 - k) * (Tb / T) ** 2
     q = np.where(T < Ta, 1 + (Q - 1) * np.sqrt(1 / k) * T / Ta,
                  np.where(T < Tb, 1 + (Q - 1) * np.sqrt(1 / k), 1 + (Q - 1) * np.sqrt(np.maximum(pp / k, 0))))
-    return q, _fgrupo(p) * (p['k1'] * _r0(Q) + _k2(T, Ta))
+    return q, _frp(p, clave) * _R(p, Q, T)
 
 
 def _interp(x, xp, fp):
@@ -453,19 +536,21 @@ def _revisiones(p, res):
     for clave, nombre, limite in (('DL', 'Limitación de daños', p['lim_dl']),
                                   ('SV', 'Seguridad de vida', p['lim_sv']),
                                   ('OI', 'Ocupación inmediata', p['lim_oi'])):
+        gc = 1.0 if clave == 'DL' else p['gamma_c']  # γc no aplica a limitación de daños (apuntes p. 12)
         if clave == 'DL':
             curva, _ = espectro(p, 1.0, 1.0, res['serie'], dl=True)
-            amp = np.ones(n)  # fuerzas sin FC
+            amp = np.ones(n)  # fuerzas sin FC y sin Q·R′
         else:
             pq = p if clave == 'SV' else dict(p, Q=np.array([1.0]))
-            Q = pq['Q'][0]
-            curva, _ = espectro(pq, Q, 1.0, res['serie'])
-            q_, r_ = _q_r(pq, Q, T)
-            amp = FC * q_ * r_  # desplazamiento inelástico = FC·Q'·R'·desplazamiento reducido
+            Q = float(pq['Q'][0])
+            curva, _ = espectro(pq, Q, 1.0, res['serie'], clave=clave)
+            R1 = float(_frp(p, clave) * _R(pq, Q, T[0]))  # R′ con el periodo fundamental (apuntes p. 12)
+            amp = np.full(n, FC * Q * R1)  # desplazamientos × FC·Q·R′ (apuntes p. 13 y 15)
         Sa = _interp(T, res['serie'], curva)
         d = fi * (Sa * gam / lam)
         deriva = combinar(derivas_modales(d * amp), w, zeta, comb)
-        estados[clave] = dict(nombre=nombre, limite=limite, Sa=Sa, amp=amp, d=d, deriva=deriva,
+        estados[clave] = dict(nombre=nombre, limite=None if limite is None else limite * gc, limite_base=limite,
+                              gamma_c=gc, Sa=Sa, amp=amp, d=d, deriva=deriva,
                               deriva_el=combinar(derivas_modales(d), w, zeta, comb), dist=deriva / h_cm)
     rev = dict(estados=estados, theta=np.zeros(n), P=None, V=None, irreg_masa=[], irreg_rigidez=[],
                k_ef=np.zeros(n))
@@ -480,7 +565,85 @@ def _revisiones(p, res):
     return rev
 
 
+def _normativa(p, res):
+    """Factores aplicados, γc, cortante basal mínimo, cimentación, torsión accidental y método estático."""
+    n, T, clave, FC = p['n'], res['T'], res['clave'], p['factor_Fu']
+    T1 = float(T[0])
+    pp = p if clave == 'SV' else dict(p, Q=np.array([1.0]))
+    Q0 = float(pp['Q'][0])
+    obj = p.get('objetivo')
+    out = dict(clave=clave, T1=T1, objetivo=obj)
+    filas = []
+
+    def fila(nombre, valor, fuente=''):
+        filas.append((nombre, valor, fuente))
+
+    sub = p.get('subgrupo') or p['grupo']
+    asce = ntc.RIESGO_ASCE.get(sub)
+    fila('Grupo / subgrupo', f'{p["grupo"]} / {sub}' + (f' (ASCE 7 categoría {asce})' if asce else ''), 'Apuntes p. 10')
+    fila('Intensidad sísmica', p['intensidad'], 'SASID')
+    if obj:
+        fila('Nivel de desempeño', obj['desempeno'], 'Tabla 1.1a')
+        fila('Espectro de diseño', obj['espectro'], 'Tabla 3.1.1')
+    fila('Estado de cálculo', p['estado'], '')
+    fila('Amortiguamiento ζ', f'{p["zeta"]:g}', 'Concreto 0.05 · acero 0.03 (p. 14)')
+    if clave == 'DL':
+        fila('Ks', f'{p["Ks"]:g}', 'Sa(BD)·Ks, sin factor de carga')
+    else:
+        r0 = _r0(Q0)
+        k2 = 0.0 if p['R_unitaria'] else float(_k2(T1, p['Ta']))
+        R_ = float(_R(pp, Q0, T1))
+        frp = _frp(p, clave)
+        q1 = float(_q_r(pp, Q0, T1, clave)[0][0])
+        fila('Q', f'{Q0:g}', ntc.GUIA_Q.get(Q0, 'Q fuera de los valores usuales'))
+        fila('k1', f'{p["k1"]:g}', 'Hiperestaticidad: 0.8 / 1.0 / 1.25 (p. 23)')
+        if p['R_unitaria']:
+            fila('R = k1·R0 + k2', '1', 'R = 1 en materiales distintos del concreto (p. 11)')
+        else:
+            fila('R0', f'{r0:g}', '1.75 si Q < 3 · 2 si Q ≥ 3')
+            fila(f'k2 (T1 = {T1:.4f} s)', f'{k2:.4f}', 'k2 = 0.5·(1 − √(T/Ta)) ≥ 0')
+            fila('R = k1·R0 + k2', f'{R_:.4f}', 'Con el periodo fundamental (p. 12)')
+        fila("R′ = " + ('0.75·R' if frp != 1 else 'R'), f'{frp * R_:.4f}', 'OI: 0.75R · SV: R (p. 10)')
+        fila("Q′ (T1)", f'{q1:.4f}', 'Q′ = 1 + (Q − 1)·√(p/k)…')
+        fila("Q′·R′ (T1)", f'{q1 * frp * R_:.4f}', 'Reduce las ordenadas del espectro')
+        fila("FC·Q·R′ (distorsiones)", f'{FC * Q0 * frp * R_:.4f}', 'Desplazamientos × FC·Q·R′ (p. 13, 15)')
+    fila('γc por irregularidad', f'{p["gamma_c"]:g}', p['gamma_c_txt'])
+    out['factores'] = filas
+
+    # --- cortante basal mínimo: V ≥ FC·a_min·W (apuntes p. 10, inciso 7.5)
+    W = p['cargas']
+    if W is not None and res['a_min_g']:
+        W_T = float(np.sum(W))
+        v_min = FC * res['a_min_g'] * W_T
+        out['vmin'] = dict(a_min_g=res['a_min_g'], W_T=W_T, V_min=v_min, V_din=res['V_din'],
+                           cumple=res['V_din'] >= v_min * (1 - 1e-9), factor=max(1.0, v_min / res['V_din']))
+    # --- cimentación: elementos mecánicos × 0.65·R′ (p. 9, inciso 3)
+    if clave != 'DL':
+        R1 = float(_frp(p, clave) * _R(pp, Q0, T1))
+        f_c = ntc.FACTOR_CIMENTACION * R1
+        out['cimentacion'] = dict(R_prima=R1, factor=f_c, V=f_c * res['V_din'], M=f_c * float(res['tabla_din']['Mvu'].sum()))
+    # --- torsión accidental (p. 9)
+    if p['b_planta']:
+        e_a = ntc.excentricidad_accidental(n, p['b_planta'])
+        Fu_arriba = res['tabla_din']['Fu']  # de arriba hacia abajo
+        out['torsion'] = dict(b=p['b_planta'], e_a=e_a, Mt=e_a * Fu_arriba[::-1], Fu=Fu_arriba[::-1])
+    # --- aplicabilidad del método estático (p. 20)
+    H = float(np.sum(p['alturas']))
+    lim = ntc.altura_maxima_estatico(p['zona'], p['regular']) if p['zona'] else None
+    out['estatico'] = dict(H=H, limite=lim, zona=p['zona'], regular=p['regular'],
+                           aplica=p['grupo'] == 'B' and (lim is None or H <= lim))
+    # --- participación modal (p. 15): más de 3 modos, 95 % de masa efectiva o todos los modos con T ≥ 0.4 s
+    M, fi = p['M'], res['fi']
+    m_ef = np.array([(fi[:, j] @ M @ np.ones(n)) ** 2 / (fi[:, j] @ M @ fi[:, j]) for j in range(n)]) / np.trace(M)
+    acum = np.cumsum(m_ef)
+    out['modos'] = dict(m_ef=m_ef, acum=acum, n95=int(np.argmax(acum >= 0.95)) + 1 if acum[-1] >= 0.95 else n,
+                        n_T04=int(np.sum(T >= 0.4)))
+    return out
+
+
 def calcular(p):
+    for k_, v_ in NORMA_DEFECTO.items():
+        p.setdefault(k_, v_)
     M, K, n = p['M'], p['K'], p['n']
     res = dict(p=p)
 
@@ -508,8 +671,8 @@ def calcular(p):
     Sa_modal = np.zeros((n, len(Qs)))
     a_min = a_min_g = None
     for i, q in enumerate(Qs):
-        curvas[i], a_min = espectro(pp, q, 1.0, serie, dl=clave == 'DL')
-        curvas_g[i], a_min_g = espectro(pp, q, 1 / G, serie, dl=clave == 'DL')
+        curvas[i], a_min = espectro(pp, q, 1.0, serie, dl=clave == 'DL', clave=clave)
+        curvas_g[i], a_min_g = espectro(pp, q, 1 / G, serie, dl=clave == 'DL', clave=clave)
         Sa_modal[:, i] = _interp(T, serie, curvas[i])
     res.update(serie=serie, curvas=curvas, curvas_g=curvas_g, Sa_modal=Sa_modal, a_min=a_min, a_min_g=a_min_g,
                Qs=Qs, clave=clave)
@@ -526,7 +689,8 @@ def calcular(p):
     # --- Tabla de fuerzas por nivel (dinámico) ---
     h_desc = res['alturas_acum'][::-1]
     F_desc = F_final[::-1] / 1000
-    Fu = F_desc * p['factor_Fu']
+    FC = 1.0 if clave == 'DL' else p['factor_Fu']  # limitación de daños: fuerzas sin factor de carga (apuntes p. 12)
+    Fu = F_desc * FC
     Vu = np.cumsum(Fu)
     Mvu = h_desc * Fu
     res['tabla_din'] = dict(nivel=np.arange(n, 0, -1), h=h_desc, F=F_desc, Fu=Fu, Vu=Vu, Mvu=Mvu)
@@ -535,9 +699,9 @@ def calcular(p):
     # --- R' y QR' por modo ---
     filas = []
     for j in range(n):
-        k2 = float(_k2(T[j], p['Ta']))
+        k2 = 0.0 if p['R_unitaria'] else float(_k2(T[j], p['Ta']))
         for q in Qs:
-            Rp = _fgrupo(p) * (p['k1'] * _r0(q) + k2)
+            Rp = float(_frp(p, clave) * _R(pp, q, T[j]))
             filas.append((j + 1, T[j], q, k2, Rp, q * Rp))
     res['QR'] = filas
     res['modo_Tmax'] = int(np.argmax(T)) + 1
@@ -549,7 +713,7 @@ def calcular(p):
         hWi = h_inv * Wi
         Fmax = float(curvas_g[0].max())
         Fi = Fmax * (h_inv * Wi / hWi.sum()) * Wi.sum()
-        Fi11 = Fi * p['factor_Fu']
+        Fi11 = Fi * FC
         Vacum = np.cumsum(Fi11)
         Mvu_e = Fi11 * h_inv
         res['tabla_est'] = dict(nivel=np.arange(n, 0, -1), h=h_inv, Wi=Wi, hWi=hWi, Fi=Fi,
@@ -558,6 +722,7 @@ def calcular(p):
         res['V_est'] = Vacum[-1]
         res['factor_escala'] = Vacum[-1] * p['mult_V'] / res['V_din']
     res['revision'] = _revisiones(p, res)
+    res['normativa'] = _normativa(p, res)
     res['avisos'] = _avisos(res)
     return res
 
@@ -579,7 +744,7 @@ def tabla_distorsiones(res):
     p, n = res['p'], res['p']['n']
     est = res['revision']['estados']
     claves = ('DL', 'SV', 'OI')
-    enc = ['Nivel', 'h (m)'] + [f'γ {est[c]["nombre"]}' for c in claves] + ['Cumple']
+    enc = ['Nivel', 'h (m)'] + [f'γ {est[c]["nombre"]}' + (' ★' if c == res['clave'] else '') for c in claves] + ['Cumple']
     filas = []
     for i in range(n - 1, -1, -1):
         cumple = []
@@ -604,6 +769,36 @@ def tabla_pdelta(res):
         filas.append([i + 1, float(rev['P'][i]), float(rev['V'][i]), float(rev['estados']['SV']['deriva_el'][i]),
                       float(th), estado, float(rev['k_ef'][i])])
     return enc, filas
+
+
+def texto_normativa(res):
+    """Líneas de texto del marco normativo (NTC-S 2023, apuntes de clase)."""
+    nm, p = res['normativa'], res['p']
+    s = ['\n=== MARCO NORMATIVO (NTC-S 2023, apuntes de clase) ===']
+    ancho = max(len(f[0]) for f in nm['factores']) + 2
+    for nombre, valor, fuente in nm['factores']:
+        s.append(f'  {nombre:<{ancho}}{valor:<34}{fuente}')
+    if p.get('objetivo') and p['objetivo']['nota']:
+        s.append('  ! ' + p['objetivo']['nota'])
+    v = nm.get('vmin')
+    if v:
+        s.append(f'\nCortante basal mínimo: FC·a_min·W = {p["factor_Fu"]:g}·{v["a_min_g"]:.5f}·{v["W_T"]:.2f} = {v["V_min"]:.3f} t · '
+                 f'V dinámico = {v["V_din"]:.3f} t → ' + ('cumple' if v['cumple'] else f'NO cumple (escalar × {v["factor"]:.3f})'))
+    c = nm.get('cimentacion')
+    if c:
+        s.append(f'Cimentación (× 0.65·R′ = {c["factor"]:.3f}): V = {c["V"]:.3f} t · Mvolteo = {c["M"]:.3f} t·m')
+    t = nm.get('torsion')
+    if t:
+        s.append(f'\nTorsión accidental (b = {t["b"]:g} m): e_a = [0.05 + 0.05(i−1)/(n−1)]·b; Mt = Fu·e_a')
+        s.append(_tabla_txt(['Nivel', 'e_a (m)', 'Fu (t)', 'Mt (t·m)'],
+                            [[i + 1, float(t['e_a'][i]), float(t['Fu'][i]), float(t['Mt'][i])] for i in range(p['n'] - 1, -1, -1)]))
+    e = nm['estatico']
+    s.append(f'Método estático: H = {e["H"]:.1f} m' + (f' (límite {e["limite"]:g} m, zona {e["zona"]}, '
+             f'{"regular" if e["regular"] else "irregular"})' if e['limite'] else '') + ' → '
+             + ('aplicable' if e['aplica'] else 'NO aplicable (grupo A o altura excedida)'))
+    m = nm['modos']
+    s.append(f'Participación modal: {m["n95"]} modo(s) alcanzan 95% de la masa efectiva; modos con T ≥ 0.4 s: {m["n_T04"]}.')
+    return s
 
 
 def reporte_texto(res):
@@ -669,11 +864,13 @@ def reporte_texto(res):
                  + ('   (V dinámico ya cumple, factor < 1)' if res['factor_escala'] < 1 else ''))
     else:
         s.append('\n(Sin cargas/longitudes: no se calculó el espectro estático ni el factor de escala.)')
+    s.extend(texto_normativa(res))
     rev = res['revision']
     s.append('\n=== REVISIÓN DE DISTORSIONES (γ = deriva / altura de entrepiso) ===')
     for c in ('DL', 'SV', 'OI'):
         e = rev['estados'][c]
-        s.append(f'  {e["nombre"]:<22} límite = ' + (f'{e["limite"]:g}' if e['limite'] is not None else 'sin definir'))
+        s.append(f'  {e["nombre"]:<22} límite = ' + (f'{e["limite"]:g}' if e['limite'] is not None else 'sin definir')
+                 + (f'  (γmáx {e["limite_base"]:g} × γc {e["gamma_c"]:g})' if e['gamma_c'] != 1.0 and e['limite'] is not None else ''))
     enc, filas = tabla_distorsiones(res)
     s.append(_tabla_txt(enc[:-1], [f[:-1] for f in filas]))
     s.append('Cumple (LD / SV / OI): ' + '; '.join(f'N{f[0]}: {f[-1]}' for f in filas))
@@ -1014,6 +1211,34 @@ def exportar_excel(res, ruta):
             ['V dinámico (t)', res['V_din']], ['FACTOR DE ESCALA', res['factor_escala']]], '0.000000')
         ancho(ws, 30)
 
+    # Normativa
+    ws = hoja('Normativa')
+    nm = res['normativa']
+    titulo(ws, 'Factores y reglas aplicadas (NTC-S 2023, apuntes de clase)')
+    tabla(ws, ['Concepto', 'Valor', 'Fuente / regla'], [list(f) for f in nm['factores']])
+    v = nm.get('vmin')
+    if v:
+        titulo(ws, 'Cortante basal mínimo')
+        tabla(ws, ['a_min (g)', 'W total (t)', 'V mínimo (t)', 'V dinámico (t)', 'Cumple'],
+              [[v['a_min_g'], v['W_T'], v['V_min'], v['V_din'], 'Sí' if v['cumple'] else f'No (× {v["factor"]:.3f})']], '0.0000')
+    c = nm.get('cimentacion')
+    if c:
+        titulo(ws, "Cimentación: elementos mecánicos × 0.65·R′")
+        tabla(ws, ["R′ (T1)", '0.65·R′', 'V (t)', 'Mvolteo (t·m)'], [[c['R_prima'], c['factor'], c['V'], c['M']]], '0.0000')
+    t = nm.get('torsion')
+    if t:
+        titulo(ws, f'Torsión accidental (b = {t["b"]:g} m)')
+        tabla(ws, ['Nivel', 'e_a (m)', 'Fu (t)', 'Mt (t·m)'],
+              [[i + 1, float(t['e_a'][i]), float(t['Fu'][i]), float(t['Mt'][i])] for i in range(n - 1, -1, -1)], '0.0000')
+    e = nm['estatico']
+    titulo(ws, 'Método estático')
+    tabla(ws, ['H (m)', 'Límite (m)', 'Aplicable'], [[e['H'], e['limite'] if e['limite'] else '-', 'Sí' if e['aplica'] else 'No']], '0.00')
+    titulo(ws, 'Participación modal')
+    tabla(ws, ['Modo', 'Masa efectiva', 'Acumulada'], [[j + 1, float(nm['modos']['m_ef'][j]), float(nm['modos']['acum'][j])] for j in range(n)], '0.0000')
+    ancho(ws, 24)
+    ws.column_dimensions['B'].width = 46
+    ws.column_dimensions['C'].width = 60
+
     # Revisiones y avisos
     ws = hoja('Revisiones')
     rev = res['revision']
@@ -1098,7 +1323,7 @@ EJEMPLOS_MODELO = {
                  dict(h='3.5', ejes='todos', seccion='H:30x1.6x40x1', artic='', viga='H:20x1x45x0.8', cargas='3.0', W=''),
                  dict(h='3.5', ejes='todos', seccion='H:25x1.2x35x0.9', artic='', viga='H:20x1x40x0.8', cargas='2.5', W='')],
         E='', fc='', tipo='Grupo B', Q='3', k1='1.0', a0='224', c='975', Ta='0.8', Tb='1.7', k='0.445',
-        Ts='1.0', factor_Fu='1.1', mult_V='1', zeta='0.02'),
+        Ts='1.0', factor_Fu='1.1', mult_V='1', zeta='0.03'),
 }
 
 

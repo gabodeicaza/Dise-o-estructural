@@ -1,6 +1,8 @@
 """Combinación modal, revisiones posteriores (distorsiones, P-Δ, irregularidades) y avisos de coherencia."""
 import numpy as np
 
+import ame_ntc as ntc
+
 COMBINACIONES = ('SRSS', 'CQC', 'Suma absoluta')
 
 # Criterios generales (ASCE 7) cuando la norma de cada país no los fija en este programa
@@ -154,8 +156,12 @@ def avisos(res):
                 continue
             mal = [i + 1 for i in range(n) if e['dist'][i] > e['limite']]
             if mal:
-                add('alerta', f'{e["nombre"]}: la distorsión supera {e["limite"]:g} en el nivel(es) '
-                              f'{", ".join(map(str, sorted(mal)))} (máx. {e["dist"].max():.4f}).')
+                gobierna = clave == res['clave']
+                sev = 'alerta' if gobierna else ('aviso' if clave == 'DL' else 'info')
+                lim = f'{e["limite"]:g}' + (f' (γmáx {e["limite_base"]:g} × γc {e["gamma_c"]:g})' if e['gamma_c'] != 1 else '')
+                add(sev, ('' if gobierna else 'Referencia (no es tu estado de diseño) · ')
+                    + f'{e["nombre"]}: la distorsión supera {lim} en el nivel(es) '
+                      f'{", ".join(map(str, sorted(mal)))} (máx. {e["dist"].max():.4f}).')
         th = rev['theta']
         for i in range(n):
             if th[i] > THETA_MAXIMO:
@@ -165,8 +171,53 @@ def avisos(res):
         if rev['irreg_masa']:
             add('aviso', f'Irregularidad de masa en el nivel(es) {", ".join(map(str, rev["irreg_masa"]))} '
                          f'(peso > {IRREG_MASA:g} veces el de un piso adyacente).')
-        if rev['irreg_rigidez']:
-            add('aviso', f'Posible piso blando en el nivel(es) {", ".join(map(str, rev["irreg_rigidez"]))}.')
+        if rev['irreg_rigidez'] and '5.3.2' not in p.get('irreg', []):
+            add('aviso', f'Posible piso blando en el nivel(es) {", ".join(map(str, rev["irreg_rigidez"]))}. '
+                         'Si aplica la irregularidad 5.3.2, márcala en "Irregularidades" para corregir γmáx.')
+        k = rev['k_ef']
+        fuertes = []
+        for i in range(n - 1):
+            vecinos = [k[j] for j in (i - 1, i + 1) if 0 <= j < n]
+            if k[i] < 0.4 * k[i + 1] or k[i] < 0.4 * np.mean(vecinos):
+                fuertes.append(i + 1)
+        if fuertes and not p.get('fuerte_elev'):
+            add('aviso', f'Rigidez del nivel(es) {", ".join(map(str, fuertes))} menor que 40% de la del nivel superior '
+                         'o del promedio de los adyacentes: posible irregularidad fuerte en elevación (5.3.3). '
+                         "Si aplica: γc = 0.33, Q′ = 1 en el entrepiso débil y análisis no lineal.")
+
+    # --- Marco normativo (apuntes NTC-S 2023)
+    nm = res.get('normativa')
+    if nm:
+        obj = nm.get('objetivo')
+        if obj and obj['nota']:
+            add('aviso', obj['nota'])
+        if p.get('intensidad', 'Base de diseño') != 'Base de diseño':
+            add('info', f'Intensidad {p["intensidad"].lower()}: verifica que a0, c, Ta, Tb, k y Ts sean los del espectro '
+                        'SASID de esa intensidad.')
+        geom_ = p.get('geom')
+        if geom_ and p['k1'] != 1.25:
+            sug = ntc.k1_sugerido(len(geom_['bays']))
+            if abs(p['k1'] - sug) > 1e-9:
+                add('info', f'Tu marco tiene {len(geom_["bays"])} crujía(s): según los apuntes k1 = 0.8 con menos de 3 '
+                            f'crujías resistentes, 1.0 con 3 o más y 1.25 en sistemas duales. Usaste k1 = {p["k1"]:g}.')
+        if p.get('R_unitaria'):
+            add('info', f'Material {p.get("material", "").lower()}: R = 1 (los apuntes indican R = 1 para materiales '
+                        'distintos del concreto). Puedes desactivarlo en "Otros datos normativos".')
+        zdef = ntc.ZETA_MATERIAL.get(p.get('material'))
+        if zdef is not None and abs(z - zdef) > 1e-9:
+            add('info', f'ζ = {z:g}: los apuntes usan {zdef:g} para {p["material"].lower()}. El espectro de SASID debe '
+                        'pedirse con el mismo amortiguamiento.')
+        v = nm.get('vmin')
+        if v and not v['cumple']:
+            add('aviso', f'Cortante basal mínimo: V dinámico = {v["V_din"]:.2f} t < FC·a_min·W = {v["V_min"]:.2f} t. '
+                         f'Escala las fuerzas × {v["factor"]:.3f}.')
+        e_ = nm['estatico']
+        if not e_['aplica']:
+            razon = 'es del grupo A' if p['grupo'] == 'A' else f'supera {e_["limite"]:g} m (H = {e_["H"]:.1f} m)'
+            add('aviso', f'Según los apuntes el método estático no aplica porque la estructura {razon}: '
+                         'el factor de escala se muestra solo como referencia.')
+        if p.get('gamma_c', 1.0) != 1.0:
+            add('info', p['gamma_c_txt'] + ' Se aplica a los límites de ocupación inmediata y seguridad de vida.')
 
     # --- Cortante basal
     fe = res.get('factor_escala')

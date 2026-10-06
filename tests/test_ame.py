@@ -15,6 +15,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+import ame_ntc as ntc  # noqa: E402
 import ame_pdf  # noqa: E402
 import ame_sismico as ame  # noqa: E402
 from ame_marco import rigidez_marco  # noqa: E402
@@ -260,13 +261,33 @@ def test_limitacion_de_danos_usa_Sa_por_Ks():
     assert r['a_min'] == 0.0
 
 
-def test_distorsion_dl_es_Ks_entre_FC_de_la_de_vida():
-    r = correr(EJ2)
+def un_nivel(**extra):
+    d = copy.deepcopy(EJ2)
+    d['niveles'] = [dict(h='3.5', ejes='todos', seccion='40x40', artic='', cargas='3', W='')]
+    d.update(extra)
+    return d
+
+
+def test_distorsion_sv_amplifica_con_FC_Q_Rprima_del_periodo_fundamental():
+    """Apuntes p. 13 y 15: desplazamientos × FC·Q·R′, con R′ evaluado en el periodo fundamental."""
+    r = correr(un_nivel())
+    p, T1 = r['p'], r['T'][0]
+    R1 = float(ame._R(p, 4.0, T1))
     est = r['revision']['estados']
-    cociente = est['DL']['dist'] / est['SV']['dist']
-    assert cociente == pytest.approx(0.25 / 1.1, rel=1e-3)  # en las hojas: Ks = 0.22727
-    # desplazamientos iguales: vida y ocupación inmediata coinciden
-    assert est['OI']['dist'] == pytest.approx(est['SV']['dist'], rel=1e-6)
+    assert est['SV']['amp'] == pytest.approx(1.1 * 4.0 * R1)
+    # con un solo modo: γ_DL / γ_SV = Ks·Q′(T) / (FC·Q)   (DL: Sa·Ks sin FC; SV: Sa/(Q′R′) · FC·Q·R′)
+    q = float(ame._q_r(p, 4.0, T1)[0][0])
+    assert est['DL']['dist'][0] / est['SV']['dist'][0] == pytest.approx(0.25 * q / (1.1 * 4.0), rel=1e-6)
+
+
+def test_ocupacion_inmediata_usa_Q_uno_y_R_prima_075R():
+    r = correr(un_nivel(subgrupo='A1'))
+    p = r['p']
+    assert p['estado'] == 'Ocupación inmediata' and r['Qs'] == pytest.approx([1.0])
+    R = float(ame._R(dict(p, Q=np.array([1.0])), 1.0, r['T'][0]))
+    assert r['revision']['estados']['OI']['amp'][0] == pytest.approx(1.1 * 1.0 * 0.75 * R)
+    fila = {f[0]: f[1] for f in r['normativa']['factores']}
+    assert float(fila["R′ = 0.75·R"]) == pytest.approx(0.75 * R, abs=1e-4)
 
 
 def test_theta_pdelta_a_mano():
@@ -289,9 +310,13 @@ def test_irregularidades():
 
 
 def test_los_ejemplos_marcan_los_avisos_esperados():
-    textos = ' '.join(t for _, t in correr(EJ4)['avisos'])
-    assert 'Seguridad de vida: la distorsión supera' in textos  # nivel 1 con 0.0306 > 0.03
+    r = correr(EJ4)
+    textos = ' '.join(t for _, t in r['avisos'])
     assert 'piso blando' in textos.lower()
+    # el estado de diseño (seguridad de vida) cumple su límite 0.03; la limitación de daños solo es referencia
+    assert r['revision']['estados']['SV']['dist'].max() < 0.03
+    assert 'Referencia (no es tu estado de diseño) · Limitación de daños' in textos
+    assert not [t for s_, t in r['avisos'] if s_ == 'alerta']
 
 
 def test_avisos_de_parametros_incoherentes():
@@ -328,6 +353,187 @@ def test_modo_principal_de_estado_coincide_con_la_revision():
     assert r['d'] == pytest.approx(r['revision']['estados']['SV']['d'])
 
 
+# ---------------------------------------------------------------- marco normativo NTC-S 2023 (apuntes)
+@pytest.mark.parametrize('grupo, intensidad, clave', [
+    ('B', 'Frecuente', 'DL'), ('A', 'Frecuente', 'DL'), ('B', 'Base de diseño', 'SV'), ('A', 'Base de diseño', 'OI'),
+    ('A', 'Infrecuente', 'SV'), ('B', 'Infrecuente', 'SV')])
+def test_objetivo_de_diseno_segun_la_matriz_de_los_apuntes(grupo, intensidad, clave):
+    assert ntc.objetivo_diseno(grupo, intensidad)['clave'] == clave
+
+
+def test_prevencion_de_colapso_del_grupo_B_avisa_que_requiere_acelerogramas():
+    assert 'acelerogramas' in ntc.objetivo_diseno('B', 'Infrecuente')['nota']
+    assert ntc.objetivo_diseno('B', 'Infrecuente')['desempeno'] == 'Prevención de colapso'
+
+
+def test_tipo_del_formato_anterior_se_traduce_a_grupo_e_intensidad():
+    d = copy.deepcopy(EJ2)
+    d['tipo'] = 'Grupo A - sismo infrecuente'
+    p = ame.preparar_modelo(d)
+    assert (p['grupo'], p['intensidad'], p['estado']) == ('A', 'Infrecuente', 'Seguridad de vida')
+    d['tipo'] = 'Grupo A - sismo base'
+    assert ame.preparar_modelo(d)['estado'] == 'Ocupación inmediata'
+
+
+def test_subgrupos_y_categoria_de_riesgo_asce():
+    assert [ntc.SUBGRUPOS[s] for s in ('B2', 'B1', 'A2', 'A1')] == ['B', 'B', 'A', 'A']
+    assert [ntc.RIESGO_ASCE[s] for s in ('B2', 'B1', 'A2', 'A1')] == ['I', 'II', 'III', 'IV']
+    d = copy.deepcopy(EJ2)
+    d['subgrupo'] = 'A2'
+    p = ame.preparar_modelo(d)
+    assert p['grupo'] == 'A' and p['subgrupo'] == 'A2'
+    d['subgrupo'] = 'Z9'
+    with pytest.raises(ValueError, match='Subgrupo no válido'):
+        ame.preparar_modelo(d)
+
+
+def test_espectro_por_intensidad():
+    d = copy.deepcopy(EJ2)
+    bd = dict(a0='224', c='975', Ta='0.8', Tb='1.7', k='0.445', Ts='1.0')
+    inf = dict(a0='300', c='1300', Ta='0.8', Tb='1.7', k='0.445', Ts='1.0')
+    d['espectros'] = {'Base de diseño': bd, 'Infrecuente': inf}
+    v_bd = correr(dict(d, intensidad='Base de diseño'))['V_din']
+    v_inf = correr(dict(d, intensidad='Infrecuente'))['V_din']
+    assert v_inf / v_bd == pytest.approx(1300 / 975, rel=0.05)  # sube el plato del espectro
+    with pytest.raises(ValueError, match='espectro SASID de la intensidad "Frecuente"'):
+        ame.preparar_modelo(dict(d, intensidad='Frecuente'))
+
+
+def test_limitacion_de_danos_sin_factor_de_carga():
+    r = correr(dict(copy.deepcopy(EJ2), intensidad='Frecuente'))
+    t = r['tabla_din']
+    assert r['p']['estado'] == 'Limitación de daños'
+    assert t['Fu'] == pytest.approx(t['F'])  # "sin FC" (apuntes p. 12)
+    assert r['revision']['estados']['DL']['gamma_c'] == 1.0
+
+
+@pytest.mark.parametrize('irreg, fuerte_t, fuerte_e, esperado', [
+    ([], False, False, 1.0), (['5.3.2'], False, False, 0.8), (['5.2.1', '5.2.3'], False, False, 0.7),
+    (['5.2.1', '5.2.3', '5.3.1'], False, False, 0.6), ([], True, False, 0.6), (['5.3.1'], True, False, 0.5),
+    (['5.2.1'], True, False, 0.6),  # 5.2.1 no cuenta como condición adicional de la fuerte irregularidad por torsión
+    ([], False, True, 0.33)])
+def test_gamma_c_segun_las_tablas_c542_c553_c563(irreg, fuerte_t, fuerte_e, esperado):
+    assert ntc.gamma_c(irreg, fuerte_t, fuerte_e)[0] == pytest.approx(esperado)
+
+
+def test_irregularidad_reduce_el_limite_de_ocupacion_inmediata_y_vida_pero_no_el_de_danos():
+    r = correr(dict(copy.deepcopy(EJ2), irreg=['5.3.2', '5.3.1']))
+    est = r['revision']['estados']
+    assert est['SV']['limite'] == pytest.approx(0.03 * 0.7)
+    assert est['OI']['limite'] == pytest.approx(0.005 * 0.7)
+    assert est['DL']['limite'] == pytest.approx(0.004)
+    with pytest.raises(ValueError, match='no reconocida'):
+        ntc.gamma_c(['9.9.9'])
+
+
+def test_excentricidad_accidental_de_los_apuntes():
+    assert ntc.excentricidad_accidental(3, 12) == pytest.approx([0.6, 0.9, 1.2])   # 0.05b, 0.075b, 0.10b
+    assert ntc.excentricidad_accidental(1, 10) == pytest.approx([0.5])
+    r = correr(dict(copy.deepcopy(EJ2), b_planta='12'))
+    tor = r['normativa']['torsion']
+    assert tor['Mt'] == pytest.approx(tor['e_a'] * tor['Fu'])
+    assert 'torsion' not in correr(EJ2)['normativa']
+
+
+def test_aplicabilidad_del_metodo_estatico():
+    assert ntc.altura_maxima_estatico('I', True) == 40 and ntc.altura_maxima_estatico('I', False) == 30
+    assert ntc.altura_maxima_estatico('II', True) == 30 and ntc.altura_maxima_estatico('III', False) == 20
+    assert ntc.altura_maxima_estatico('', True) is None
+    assert correr(dict(copy.deepcopy(EJ2), zona='III'))['normativa']['estatico']['aplica']       # H = 12 m ≤ 30 m
+    assert not correr(dict(copy.deepcopy(EJ2), zona='III', subgrupo='A1'))['normativa']['estatico']['aplica']
+    alto = copy.deepcopy(EJ2)
+    alto['niveles'] = [dict(alto['niveles'][1]) for _ in range(9)]          # 31.5 m en zona III regular
+    assert not correr(dict(alto, zona='III'))['normativa']['estatico']['aplica']
+    with pytest.raises(ValueError, match='zona geotécnica'):
+        ame.preparar_modelo(dict(copy.deepcopy(EJ2), zona='IV'))
+
+
+def test_cimentacion_con_065_R_prima():
+    r = correr(EJ2)
+    c = r['normativa']['cimentacion']
+    R1 = float(ame._R(r['p'], 4.0, r['T'][0]))
+    assert c['factor'] == pytest.approx(0.65 * R1)
+    assert c['V'] == pytest.approx(c['factor'] * r['V_din'])
+    assert 'cimentacion' not in correr(dict(copy.deepcopy(EJ2), intensidad='Frecuente'))['normativa']
+
+
+def test_cortante_basal_minimo():
+    r = correr(EJ2)
+    v = r['normativa']['vmin']
+    assert v['V_min'] == pytest.approx(1.1 * r['a_min_g'] * sum(i['W'] for i in r['p']['info']))
+    assert v['cumple'] == (r['V_din'] >= v['V_min'])
+    assert v['factor'] >= 1.0
+    # un edificio muy rígido y pesado con espectro bajo debe poder incumplirlo y avisarlo
+    d = copy.deepcopy(EJ2)
+    d.update(a0='1', c='5.1', Ts='2')
+    r2 = correr(d)
+    assert (not r2['normativa']['vmin']['cumple']) == any('Cortante basal mínimo' in t for _, t in r2['avisos'])
+
+
+def test_R_igual_a_uno_en_materiales_distintos_del_concreto():
+    r = correr(EJ5)
+    assert r['p']['R_unitaria'] and all(f[4] == pytest.approx(1.0 * 1.0) for f in r['QR'])
+    d = copy.deepcopy(EJ5)
+    d['R1_otros'] = False
+    r2 = correr(d)
+    assert not r2['p']['R_unitaria'] and r2['QR'][0][4] > 1.7
+    assert r2['V_din'] < r['V_din']                  # con R = 1 las fuerzas de diseño son mayores
+    assert not correr(EJ2)['p']['R_unitaria']        # concreto: R = k1·R0 + k2
+
+
+def test_amortiguamiento_por_material():
+    assert correr(EJ2)['p']['zeta'] == 0.05
+    d = copy.deepcopy(EJ5)
+    d.pop('zeta')
+    assert correr(d)['p']['zeta'] == 0.03
+    d['zeta'] = '0.02'
+    assert correr(d)['p']['zeta'] == 0.02
+
+
+def test_participacion_modal_acumulada():
+    r = correr(EJ2)
+    m = r['normativa']['modos']
+    assert m['acum'][-1] == pytest.approx(1.0) and m['n95'] <= 3 and m['n_T04'] == 1
+
+
+def test_avisos_normativos():
+    textos = lambda r: ' | '.join(t for _, t in r['avisos'])
+    # k1 distinto del sugerido para el número de crujías (hoja 14: 1 crujía con k1 = 1.0)
+    assert 'k1 = 0.8 con menos de 3 crujías' in textos(correr(EJ1))
+    d3 = copy.deepcopy(EJ2)
+    d3['crujias'] = '4 5 4'
+    d3['niveles'] = [dict(n, cargas='4') for n in d3['niveles']]
+    assert 'k1 = 0.8' not in textos(correr(d3))
+    # grupo B, infrecuente: prevención de colapso
+    assert 'acelerogramas' in textos(correr(dict(copy.deepcopy(EJ2), intensidad='Infrecuente')))
+    # grupo A: el estático no aplica
+    assert 'método estático no aplica' in textos(correr(dict(copy.deepcopy(EJ2), subgrupo='A1')))
+    # R = 1 y ζ del acero
+    assert 'R = 1' in textos(correr(EJ5))
+    # intensidad distinta de la base: recordar el espectro
+    assert 'espectro SASID de esa intensidad' in textos(correr(dict(copy.deepcopy(EJ2), intensidad='Infrecuente')))
+    # solo el estado de diseño marca alerta; los demás son referencia
+    r = correr(EJ4)
+    alertas = [t for s_, t in r['avisos'] if s_ == 'alerta']
+    assert all('Seguridad de vida' in t for t in alertas)
+    assert any('Referencia' in t for s_, t in r['avisos'] if s_ == 'info')
+
+
+def test_deteccion_de_fuerte_irregularidad_en_elevacion():
+    d = copy.deepcopy(EJ2)
+    d['niveles'][1] = dict(d['niveles'][1], seccion='15x15')     # el nivel 2 queda muchísimo más flexible
+    r = correr(d)
+    textos = ' | '.join(t for _, t in r['avisos'])
+    assert r['revision']['irreg_rigidez'] == [2]
+    assert 'piso blando' in textos.lower() and '(5.3.3)' in textos
+    # al marcarla, el aviso desaparece y se aplica γc = 0.33 a los límites de OI y SV
+    r2 = correr(dict(d, fuerte_elev=True))
+    assert 'posible irregularidad fuerte' in textos
+    assert 'posible irregularidad fuerte' not in ' | '.join(t for _, t in r2['avisos'])
+    assert r2['p']['gamma_c'] == pytest.approx(0.33)
+    assert r2['revision']['estados']['SV']['limite'] == pytest.approx(0.03 * 0.33)
+
+
 # ---------------------------------------------------------------- exportación
 def test_excel_y_pdf_se_generan():
     from openpyxl import load_workbook
@@ -336,7 +542,7 @@ def test_excel_y_pdf_se_generan():
         buf = io.BytesIO()
         ame.exportar_excel(r, buf)
         hojas = load_workbook(io.BytesIO(buf.getvalue())).sheetnames
-        assert {'Datos', 'Modal', 'Espectro', 'Dinámico', 'Estático', 'Revisiones', 'Gráficas'} <= set(hojas)
+        assert {'Datos', 'Modal', 'Espectro', 'Dinámico', 'Estático', 'Normativa', 'Revisiones', 'Gráficas'} <= set(hojas)
         pdf = io.BytesIO()
         ame_pdf.memoria_pdf(r, pdf, proyecto='Prueba', autor='Pruebas')
         assert pdf.getvalue().startswith(b'%PDF') and len(pdf.getvalue()) > 30_000
@@ -347,7 +553,8 @@ def test_pdf_con_formulas_y_letras_griegas():
     buf = io.BytesIO()
     ame_pdf.memoria_pdf(correr(EJ2), buf, proyecto='Torre Ø', autor='Á')
     texto = ''.join(pg.get_text() for pg in pymupdf.open(stream=buf.getvalue(), filetype='pdf'))
-    for esperado in ('Memoria de cálculo', 'λ', 'γ', 'Σ', 'T < Tₐ', 'Torre Ø'):
+    for esperado in ('Memoria de cálculo', 'λ', 'γ', 'Σ', 'T < Tₐ', 'Torre Ø', 'Marco normativo (NTC-S 2023)',
+                     'Cortante basal mínimo', 'Cimentación'):
         assert esperado in texto
 
 
@@ -386,6 +593,21 @@ def test_pagina_web_corre_con_todos_los_ejemplos():
     at.sidebar.selectbox(key='estado').select('Limitación de daños').run()
     at.sidebar.radio(key='direccion').set_value('Y').run()
     at.sidebar.selectbox(key='material').select('Acero').run()
+    assert not at.exception
+    # objetivo de diseño: grupo A / base -> ocupación inmediata; infrecuente exige su propio espectro
+    at.sidebar.selectbox(key='subgrupo').select('A1').run()
+    assert not at.exception and not any('Revisa los datos' in e.value for e in at.error)
+    at.sidebar.selectbox(key='intensidad').select('Infrecuente').run()
+    assert at.error and 'espectro SASID' in at.error[0].value and not at.exception
+    for k, v in dict(a0='300', c='1300', Ta='0.8', Tb='1.7', k='0.445', Ts='1.0').items():
+        at.sidebar.text_input(key=k).set_value(v)
+    at.run()
+    assert not at.exception and not any('Revisa los datos' in e.value for e in at.error)
+    at.sidebar.selectbox(key='intensidad').select('Base de diseño').run()
+    assert at.sidebar.text_input(key='a0').value == '224'        # el espectro base se conservó
+    at.sidebar.multiselect(key='irreg').set_value(['5.3.2']).run()
+    at.sidebar.text_input(key='b_planta').set_value('12').run()
+    at.sidebar.selectbox(key='zona').select('III').run()
     assert not at.exception
     at.text_input(key='crujias').set_value('').run()
     assert at.error and not at.exception  # mensaje claro, sin caerse
