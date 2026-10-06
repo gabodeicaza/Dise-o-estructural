@@ -212,6 +212,8 @@ def parse_ejes(texto, nejes, nombre, defecto):
         return list(defecto)
     if t in ('todos', 'todas', 'all', '*'):
         return list(range(1, nejes + 1))
+    if t in ('0', 'no', '-', 'ninguno', 'ninguna', 'none'):
+        return []  # "ninguna" (útil en articuladas: todas empotradas)
     ejes = set()
     for tok in _tokens(t):
         m = re.fullmatch(r'(\d+)(?:-(\d+))?', tok)
