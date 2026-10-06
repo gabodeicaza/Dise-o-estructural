@@ -342,7 +342,7 @@ class App:
         e = res['tabla_est']
         llenar(self.t_est, zip(e['nivel'], e['h'], e['Wi'], e['hWi'], e['Fi'], e['Fu'], e['Vu'], e['Mvu']))
         n = p['n']
-        qr = {fila[0]: fila[-1] for fila in res['QR'][::len(p['Q'])]}  # Q·R' con la primera Q
+        qr = {fila[0]: fila[-1] for fila in res['QR'][::len(res['Qs'])]}  # Q·R' con la primera Q
         llenar(self.t_mod, [[j + 1, res['T'][j], res['f'][j], res['w'][j], res['gam'][j],
                              res['Sa_modal'][j, 0], qr[j + 1]] for j in range(n)])
         self.txt.delete('1.0', 'end')
