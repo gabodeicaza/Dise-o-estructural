@@ -298,6 +298,7 @@ def mostrar(df, dec=4):
 
 tabs = st.tabs(['Fuerzas por nivel', 'Revisiones', 'Normativa', 'Modos', 'Detalle completo', 'Formas modales', 'Espectro'])
 with tabs[0]:
+    st.pyplot(ame.fig_diagramas(res))
     t = res['tabla_din']
     st.markdown('**Análisis dinámico (modal espectral)**')
     mostrar(pd.DataFrame({'Nivel': t['nivel'], 'h (m)': t['h'], 'F (t)': t['F'], 'Fu (t)': t['Fu'],
@@ -306,7 +307,6 @@ with tabs[0]:
     st.markdown('**Análisis estático (para el factor de escala)**')
     mostrar(pd.DataFrame({'Nivel': e['nivel'], 'h (m)': e['h'], 'Wi (t)': e['Wi'], 'Wihi (t·m)': e['hWi'],
                           'Fi (t)': e['Fi'], 'Fu (t)': e['Fu'], 'Vu (t)': e['Vu'], 'Mvu (t·m)': e['Mvu']}))
-    st.pyplot(ame.fig_fuerzas(res))
 with tabs[1]:
     rev = res['revision']
     st.markdown('**Distorsiones de entrepiso por estado límite** (★ = estado de diseño)')

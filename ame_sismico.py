@@ -1085,6 +1085,67 @@ def fig_fuerzas(res):
     return fig
 
 
+def fig_diagramas(res):
+    """Diagramas Fu, Vu y Mvu como en las hojas de clase: marco con las fuerzas, escalera de cortantes y volteo."""
+    from matplotlib.patches import FancyArrowPatch, Rectangle
+    p, n = res['p'], res['p']['n']
+    t = res['tabla_din']
+    zs = np.concatenate([[0.0], np.cumsum(p['alturas'])])
+    H = zs[-1]
+    Fu, Vu = t['Fu'][::-1], t['Vu'][::-1]   # de abajo hacia arriba (Vu: cortante en cada entrepiso)
+    xs = p['geom']['xs'] if 'geom' in p else np.array([0.0, max(4.0, 0.45 * H)])
+    L = float(xs[-1])
+    fig = Figure(figsize=(10, min(8.5, max(4.4, 0.34 * H + 2.2))), dpi=100)
+    gs = fig.add_gridspec(1, 3, width_ratios=[1.3, 1, 0.8], wspace=0.08)
+    ylim = (-0.06 * H, 1.08 * H)
+
+    # --- marco con las fuerzas sísmicas
+    ax = fig.add_subplot(gs[0])
+    ax.axis('off')
+    ax.set_title('Fu (t)', color=AZULES[2], fontsize=11, fontweight='bold')
+    for x in xs:
+        ax.plot([x, x], [0, H], color=AZULES[0], lw=1.8, zorder=2)
+    for z in zs[1:]:
+        ax.plot([0, L], [z, z], color=AZULES[0], lw=2.4, zorder=2)
+    ax.plot([-0.1 * L, 1.1 * L], [0, 0], color=AZULES[0], lw=1.6)
+    for xh in np.arange(-0.1 * L, 1.1 * L, 0.04 * L):
+        ax.plot([xh, xh - 0.03 * L], [0, -0.025 * H], color=AZULES[3], lw=0.8)
+    fmax = max(Fu)
+    for z, f in zip(zs[1:], Fu):
+        largo = L * (0.22 + 0.5 * f / fmax)
+        ax.add_patch(FancyArrowPatch((-largo, z), (0, z), arrowstyle='-|>', mutation_scale=14, color=AZULES[2], lw=2, zorder=4))
+        ax.text(-largo, z + 0.012 * H, f'{f:.2f}', ha='left', va='bottom', fontsize=11, fontweight='bold', color=AZULES[0])
+    ax.set_xlim(-0.95 * L, 1.15 * L)
+    ax.set_ylim(*ylim)
+
+    # --- escalera de cortantes
+    ax2 = fig.add_subplot(gs[1])
+    ax2.axis('off')
+    ax2.set_title('Vu (t)', color=AZULES[2], fontsize=11, fontweight='bold')
+    plt_hatch = {'hatch': '////'}
+    for i in range(n):
+        ax2.add_patch(Rectangle((0, zs[i]), Vu[i], zs[i + 1] - zs[i], fc='#DCE9F7', ec=AZULES[2], lw=1.4, **plt_hatch))
+        ax2.text(Vu[i] * 1.02, zs[i + 1], f'{Vu[i]:.2f}', ha='left', va='bottom', fontsize=11, fontweight='bold',
+                 color=AZULES[0])
+    ax2.plot([0, 0], [0, H], color=AZULES[0], lw=1.2)
+    ax2.plot([-0.05 * max(Vu), 1.05 * max(Vu)], [0, 0], color=AZULES[0], lw=1.6)
+    ax2.set_xlim(-0.05 * max(Vu), 1.4 * max(Vu))
+    ax2.set_ylim(*ylim)
+
+    # --- momento de volteo
+    ax3 = fig.add_subplot(gs[2])
+    ax3.axis('off')
+    ax3.set_title('Mvu (t·m)', color=AZULES[2], fontsize=11, fontweight='bold')
+    ax3.set_xlim(0, 1)
+    ax3.set_ylim(0, 1)
+    ax3.text(0.5, 0.62, f'Mvu = {t["Mvu"].sum():.2f} t·m', ha='center', va='center', fontsize=12, fontweight='bold',
+             color=AZULES[0], bbox=dict(boxstyle='round,pad=0.45', fc='white', ec=AZULES[2], lw=1.6))
+    ax3.add_patch(FancyArrowPatch((0.2, 0.38), (0.8, 0.38), connectionstyle='arc3,rad=-0.9', arrowstyle='-|>',
+                                  mutation_scale=18, color=AZULES[2], lw=2.4))
+    fig.subplots_adjust(left=0.01, right=0.99, top=0.9, bottom=0.03)
+    return fig
+
+
 # ----------------------------------------------------------------------------
 # Exportar a Excel
 # ----------------------------------------------------------------------------
@@ -1262,7 +1323,7 @@ def exportar_excel(res, ruta):
     # Gráficas
     ws = hoja('Gráficas')
     fila = 1
-    figs = ([fig_estructura(p)] if 'geom' in p else []) + [fig_modal(res), fig_espectro(res), fig_fuerzas(res), fig_distorsiones(res)]
+    figs = ([fig_estructura(p)] if 'geom' in p else []) + [fig_modal(res), fig_espectro(res), fig_diagramas(res), fig_fuerzas(res), fig_distorsiones(res)]
     for fig in figs:
         buf = io.BytesIO()
         fig.savefig(buf, format='png')

@@ -560,7 +560,7 @@ def test_pdf_con_formulas_y_letras_griegas():
 
 def test_figuras_se_dibujan():
     r = correr(EJ3)
-    for f in (ame.fig_estructura(r['p']), ame.fig_modal(r), ame.fig_espectro(r), ame.fig_fuerzas(r),
+    for f in (ame.fig_estructura(r['p']), ame.fig_modal(r), ame.fig_espectro(r), ame.fig_fuerzas(r), ame.fig_diagramas(r),
               ame.fig_distorsiones(r)):
         buf = io.BytesIO()
         f.savefig(buf, format='png')

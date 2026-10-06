@@ -308,7 +308,7 @@ def memoria_pdf(res, destino, proyecto='', autor=''):
           P(f'Fu = F · {p["factor_Fu"]:g}/1000 (t) · Vu = ΣFu (acumulado desde arriba) · Mvu = h · Fu', 'formula'),
           _tabla(st, ['Nivel', 'h (m)', 'F (t)', 'Fu (t)', 'Vu (t)', 'Mvu (t·m)'],
                  [[t['nivel'][i], t['h'][i], t['F'][i], t['Fu'][i], t['Vu'][i], t['Mvu'][i]] for i in range(n)]),
-          P(f'Σ Mvu = {t["Mvu"].sum():.4f} t·m', 'nota'), Spacer(1, 4), _imagen(ame.fig_fuerzas(res), 16)]
+          P(f'Σ Mvu = {t["Mvu"].sum():.4f} t·m', 'nota'), Spacer(1, 4), _imagen(ame.fig_diagramas(res), 17)]
 
     # ------------------------------------------------------------------ 8. estático
     if 'tabla_est' in res:
