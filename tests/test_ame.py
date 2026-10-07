@@ -573,6 +573,13 @@ def test_modo_matrices_avisa_si_K_es_incoherente():
     assert any('definida positiva' in t for s_, t in neg['avisos'])
 
 
+def test_modo_matrices_detecta_K_y_M_al_reves():
+    al_reves = correr(dict(EJ6, K=EJ6['M'], M=EJ6['K']))
+    assert any('al revés' in t for s_, t in al_reves['avisos'] if s_ == 'alerta')
+    assert al_reves['T'][0] > 60                      # los periodos salen absurdos (hoja 19: 2.18 s)
+    assert not any('al revés' in t for _, t in correr(EJ6)['avisos'])
+
+
 def test_modo_matrices_con_formato_anterior_sigue_funcionando():
     r = ame.calcular(ame.preparar_datos(datos_hoja19()))
     assert r['T'][0] == pytest.approx(2.1790, abs=5e-5)

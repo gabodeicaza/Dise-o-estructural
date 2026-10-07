@@ -117,6 +117,10 @@ def avisos(res):
     # --- Matrices dadas a mano
     if p.get('manual'):
         K = p['K']
+        fuera = lambda A: np.abs(A - np.diag(np.diag(A))).max() > 0
+        if not fuera(K) and fuera(M):
+            add('alerta', 'K es diagonal y M no: parece que pegaste las matrices al revés (K en el cuadro de M y M en el '
+                          'de K). Los periodos saldrán enormes.')
         if np.abs(K - K.T).max() > 1e-6 * np.abs(K).max():
             add('alerta', 'K no es simétrica: revisa la captura de la matriz de rigidez.')
         if np.linalg.eigvalsh(0.5 * (K + K.T)).min() <= 0:
