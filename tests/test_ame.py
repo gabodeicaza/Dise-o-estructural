@@ -23,11 +23,11 @@ from ame_revision import combinar, irregularidades, rho_cqc, theta_pdelta  # noq
 from ame_secciones import parse_secciones  # noqa: E402
 
 EJ = ame.EJEMPLOS_MODELO
-EJ1, EJ2, EJ3, EJ4, EJ5 = list(EJ.values())
+EJ1, EJ2, EJ3, EJ4, EJ5, EJ6 = list(EJ.values())
 
 
 def correr(d):
-    return ame.calcular(ame.preparar_modelo(d))
+    return ame.calcular(ame.preparar(d))
 
 
 # ---------------------------------------------------------------- casos de las hojas
@@ -534,6 +534,59 @@ def test_deteccion_de_fuerte_irregularidad_en_elevacion():
     assert r2['revision']['estados']['SV']['limite'] == pytest.approx(0.03 * 0.33)
 
 
+# ---------------------------------------------------------------- modo "K y M dadas" (hoja 19)
+def test_modo_matrices_reproduce_la_hoja_19():
+    r = correr(EJ6)
+    p = r['p']
+    assert p['manual'] and p['estado'] == 'Ocupación inmediata' and r['Qs'] == pytest.approx([1.0])
+    assert r['T'] == pytest.approx([2.1790, 0.9939, 0.5735, 0.5020], abs=5e-5)
+    assert r['Sa_modal'][:, 0] == pytest.approx([210.02, 476.19, 476.19, 476.19], abs=0.01)
+    assert r['F_final'] / 1000 == pytest.approx([608.39, 763.3, 426.32, 601.01], abs=0.02)
+    assert r['tabla_din']['Vu'] == pytest.approx([661.11, 1130.1, 1969.7, 2638.9], abs=0.05)
+    assert r['tabla_din']['Mvu'].sum() == pytest.approx(31999, abs=1)
+
+
+def test_modo_matrices_pesos_y_unidades():
+    r = correr(EJ6)
+    assert r['p']['cargas'] == pytest.approx(np.array([3, 3, 1.5, 1.5]) * 981)     # W = m·g (t)
+    kg = dict(EJ6, unidades='kg, cm',
+              K='\n'.join(' '.join(str(x * 1000) for x in f) for f in
+                          [[300, -150, 0, 0], [-150, 225, -75, 0], [0, -75, 150, -75], [0, 0, -75, 75]]),
+              M='3000 3000 1500 1500')  # M como vector de masas
+    assert correr(kg)['F_final'] == pytest.approx(r['F_final'])
+    r2 = correr(dict(EJ6, pesos='100 100 100 100'))
+    assert r2['p']['cargas'] == pytest.approx([100] * 4) and r2['V_est'] != pytest.approx(r['V_est'])
+
+
+@pytest.mark.parametrize('cambio, texto', [
+    (dict(alturas='5 5 5'), 'Hay 3 alturas'), (dict(alturas='5 5 5 -1'), 'mayores que cero'),
+    (dict(pesos='1 2'), 'Hay 2 pesos'), (dict(K='1 2\n3 4'), 'M debe ser'), (dict(K='1 2 3\n4 5 6'), 'cuadrada')])
+def test_modo_matrices_errores_de_captura(cambio, texto):
+    with pytest.raises(ValueError, match=texto):
+        ame.preparar(dict(EJ6, **cambio))
+
+
+def test_modo_matrices_avisa_si_K_es_incoherente():
+    sim = correr(dict(EJ6, K='300 -150 0 0\n-100 225 -75 0\n0 -75 150 -75\n0 0 -75 75'))
+    assert any('K no es simétrica' in t for s_, t in sim['avisos'] if s_ == 'alerta')
+    neg = correr(dict(EJ6, K='-300 150 0 0\n150 -225 75 0\n0 75 -150 75\n0 0 75 -75'))
+    assert any('definida positiva' in t for s_, t in neg['avisos'])
+
+
+def test_modo_matrices_con_formato_anterior_sigue_funcionando():
+    r = ame.calcular(ame.preparar_datos(datos_hoja19()))
+    assert r['T'][0] == pytest.approx(2.1790, abs=5e-5)
+
+
+def test_modo_matrices_exporta_excel_y_pdf():
+    r = correr(EJ6)
+    buf = io.BytesIO()
+    ame.exportar_excel(r, buf)
+    pdf = io.BytesIO()
+    ame_pdf.memoria_pdf(r, pdf, proyecto='K y M', autor='Pruebas')
+    assert buf.getvalue()[:2] == b'PK' and pdf.getvalue().startswith(b'%PDF')
+
+
 # ---------------------------------------------------------------- exportación
 def test_excel_y_pdf_se_generan():
     from openpyxl import load_workbook
@@ -588,7 +641,10 @@ def test_pagina_web_corre_con_todos_los_ejemplos():
         at.sidebar.button[0].click()
         at.run()
         assert not at.exception, nombre
-    # controles nuevos
+    # controles nuevos (sobre un ejemplo por secciones: con matrices algunos controles se deshabilitan)
+    at.sidebar.selectbox(key='ejemplo').select(list(EJ)[1])
+    at.sidebar.button[0].click()
+    at.run()
     at.sidebar.selectbox(key='combinacion').select('CQC').run()
     at.sidebar.selectbox(key='estado').select('Limitación de daños').run()
     at.sidebar.radio(key='direccion').set_value('Y').run()
@@ -597,6 +653,13 @@ def test_pagina_web_corre_con_todos_los_ejemplos():
     # objetivo de diseño: grupo A / base -> ocupación inmediata; infrecuente exige su propio espectro
     at.sidebar.selectbox(key='subgrupo').select('A1').run()
     assert not at.exception and not any('Revisa los datos' in e.value for e in at.error)
+    # modo matrices: se puede alternar sin perder los datos de secciones
+    at.sidebar.selectbox(key='ejemplo').select(list(EJ)[5])
+    at.sidebar.button[0].click()
+    at.run()
+    assert not at.exception and at.radio(key='modo').value.startswith('Matrices')
+    at.radio(key='modo').set_value('Por secciones y cargas').run()
+    assert not at.exception and at.text_input(key='crujias').value
     at.sidebar.selectbox(key='intensidad').select('Infrecuente').run()
     assert at.error and 'espectro SASID' in at.error[0].value and not at.exception
     for k, v in dict(a0='300', c='1300', Ta='0.8', Tb='1.7', k='0.445', Ts='1.0').items():
@@ -604,7 +667,7 @@ def test_pagina_web_corre_con_todos_los_ejemplos():
     at.run()
     assert not at.exception and not any('Revisa los datos' in e.value for e in at.error)
     at.sidebar.selectbox(key='intensidad').select('Base de diseño').run()
-    assert at.sidebar.text_input(key='a0').value == '224'        # el espectro base se conservó
+    assert at.sidebar.text_input(key='a0').value == '80'         # el espectro base (el del ejemplo 6 cargado antes) se conservó
     at.sidebar.multiselect(key='irreg').set_value(['5.3.2']).run()
     at.sidebar.text_input(key='b_planta').set_value('12').run()
     at.sidebar.selectbox(key='zona').select('III').run()

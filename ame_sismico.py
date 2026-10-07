@@ -76,7 +76,12 @@ def parse_num(texto, nombre):
 
 
 def preparar_datos(d):
-    """Convierte el diccionario de textos (GUI/JSON) a datos numéricos validados."""
+    """K y M escritas a mano (GUI/JSON) -> datos numéricos validados.
+
+    Modo nuevo (hay 'subgrupo' o 'intensidad'): además de K y M se dan las alturas de entrepiso 'alturas' (m, de abajo
+    hacia arriba) y, opcionalmente, los pesos 'pesos' (t); si faltan, W = m·g. 'unidades': 'kg, cm' (por defecto) o 't, cm'.
+    Modo anterior: 'grupo', 'sismo' y 'niveles' (una fila por nivel: h, carga, longitud).
+    """
     K = parse_matriz(d['K'], 'K')
     if K.shape[0] != K.shape[1]:
         raise ValueError(f'K debe ser cuadrada (es {K.shape[0]}x{K.shape[1]}).')
@@ -88,29 +93,57 @@ def preparar_datos(d):
         M = np.diag(M.ravel())
     else:
         raise ValueError(f'M debe ser {n}x{n} o un vector de {n} masas (es {M.shape[0]}x{M.shape[1]}).')
+    factor = 1000.0 if str(d.get('unidades', '')).strip().lower().startswith('t') else 1.0  # t -> kg
+    K, M = K * factor, M * factor
 
-    niv = parse_filas(d['niveles'])
-    if len(niv) != n:
-        raise ValueError(f'En "Niveles" hay {len(niv)} filas y K es de {n} grados de libertad.')
-    alturas = np.array([f[0] for f in niv])
-    if all(len(f) >= 3 for f in niv):
-        cargas = np.array([f[1] for f in niv])
-        dist_x = np.array([f[2] for f in niv])
+    if str(d.get('alturas', '')).strip():
+        alturas = parse_vector(d['alturas'], 'Alturas de entrepiso')
+        if len(alturas) != n:
+            raise ValueError(f'Hay {len(alturas)} alturas y K es de {n} grados de libertad.')
+        if (alturas <= 0).any():
+            raise ValueError('Las alturas de entrepiso deben ser mayores que cero.')
+        if str(d.get('pesos', '')).strip():
+            W = parse_vector(d['pesos'], 'Pesos por nivel')
+            if len(W) != n:
+                raise ValueError(f'Hay {len(W)} pesos y K es de {n} grados de libertad.')
+        else:
+            W = np.diag(M) * G / 1000  # peso (t) a partir de la masa (kg·s²/cm)
+        cargas, dist_x = W, np.ones(n)
     else:
-        cargas = dist_x = None  # sin estático
+        niv = parse_filas(d['niveles'])
+        if len(niv) != n:
+            raise ValueError(f'En "Niveles" hay {len(niv)} filas y K es de {n} grados de libertad.')
+        alturas = np.array([f[0] for f in niv])
+        if all(len(f) >= 3 for f in niv):
+            cargas = np.array([f[1] for f in niv])
+            dist_x = np.array([f[2] for f in niv])
+        else:
+            cargas = dist_x = None  # sin estático
 
-    grupo = d['grupo'].strip().upper()[:1]
-    sismo = d['sismo'].strip().upper()[:1]
-    if grupo not in ('A', 'B'):
-        raise ValueError('El grupo de estructura debe ser A o B.')
-    if grupo == 'A' and sismo not in ('B', 'I'):
-        raise ValueError('Para el grupo A indica el sismo: B (base) o I (infrecuente).')
-
-    p = dict(M=M, K=K, n=n, alturas=alturas, cargas=cargas, dist_x=dist_x,
-             grupo=grupo, sismo=sismo, **_params_espectro(d))
-    if cargas is not None:  # el estático usa el peso Wi = carga * longitud
-        p['cargas'], p['dist_x'] = cargas * dist_x, np.ones(n)
+    if d.get('subgrupo') or d.get('intensidad'):
+        mat = d.get('material') or 'Concreto'
+        obj = _objetivo_de(d)
+        p = dict(M=M, K=K, n=n, alturas=alturas, cargas=cargas, dist_x=dist_x, grupo=obj['grupo'], sismo=obj['sismo'],
+                 subgrupo=obj['subgrupo'], intensidad=obj['intensidad'], objetivo=obj['objetivo'], material=mat,
+                 R_legacy=False, manual=True, **_params_norma(d, mat),
+                 **_params_espectro(d, obj['estado_auto'], mat, obj['intensidad']))
+    else:
+        grupo = d['grupo'].strip().upper()[:1]
+        sismo = d['sismo'].strip().upper()[:1]
+        if grupo not in ('A', 'B'):
+            raise ValueError('El grupo de estructura debe ser A o B.')
+        if grupo == 'A' and sismo not in ('B', 'I'):
+            raise ValueError('Para el grupo A indica el sismo: B (base) o I (infrecuente).')
+        p = dict(M=M, K=K, n=n, alturas=alturas, cargas=cargas, dist_x=dist_x,
+                 grupo=grupo, sismo=sismo, **_params_espectro(d))
+        if cargas is not None:  # el estático usa el peso Wi = carga * longitud
+            p['cargas'], p['dist_x'] = cargas * dist_x, np.ones(n)
     return p
+
+
+def preparar(d):
+    """Arma el modelo según el modo del proyecto: 'matrices' (K y M dadas) o secciones y cargas."""
+    return preparar_datos(d) if d.get('modo') == 'matrices' else preparar_modelo(d)
 
 
 def _num_opc(d, clave, defecto):
@@ -1385,6 +1418,11 @@ EJEMPLOS_MODELO = {
                  dict(h='3.5', ejes='todos', seccion='H:25x1.2x35x0.9', artic='', viga='H:20x1x40x0.8', cargas='2.5', W='')],
         E='', fc='', tipo='Grupo B', Q='3', k1='1.0', a0='224', c='975', Ta='0.8', Tb='1.7', k='0.445',
         Ts='1.0', factor_Fu='1.1', mult_V='1', zeta='0.03'),
+    'Ejemplo 6 (hoja 19: K y M dadas, ocupación inmediata)': dict(
+        modo='matrices', unidades='t, cm', alturas='5 5 5 5', pesos='',
+        K='300 -150 0 0\n-150 225 -75 0\n0 -75 150 -75\n0 0 -75 75', M='3 0 0 0\n0 3 0 0\n0 0 1.5 0\n0 0 0 1.5',
+        subgrupo='A2', intensidad='Base de diseño', material='Concreto', Q='2', k1='0.8',
+        a0='80', c='500', Ta='0.4', Tb='1.6', k='0.605', Ts='0.53', factor_Fu='1.1', mult_V='1'),
 }
 
 
@@ -1398,7 +1436,9 @@ def main():
     salida = Path(args[args.index('-o') + 1]) if '-o' in args else entrada.with_suffix('.xlsx')
     datos = json.loads(entrada.read_text(encoding='utf-8'))
     datos = convertir_legacy(datos)
-    if 'crujias' in datos:
+    if datos.get('modo') == 'matrices':
+        p = preparar_datos(datos)
+    elif 'crujias' in datos:
         p = preparar_modelo(datos)
     elif isinstance(datos.get('niveles'), list):
         p = preparar_estructura(datos)

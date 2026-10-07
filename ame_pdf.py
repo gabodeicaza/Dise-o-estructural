@@ -158,7 +158,7 @@ def memoria_pdf(res, destino, proyecto='', autor=''):
 
     # ------------------------------------------------------------------ 1. datos
     E += [P('1. Datos de entrada', 'h1')]
-    datos = [['Material', p.get('material', 'Concreto')], ['Módulo de elasticidad E', f'{p.get("E", 0):,.0f} kg/cm²'],
+    datos = [['Material', p.get('material', 'Concreto')], ['Módulo de elasticidad E', f'{p["E"]:,.0f} kg/cm²' if 'E' in p else 'No aplica (K dada)'],
              ['Grupo / subgrupo', f'{p["grupo"]} / {p.get("subgrupo") or p["grupo"]}'],
              ['Intensidad sísmica', p.get('intensidad', 'Base de diseño')],
              ['Estado límite de diseño', p['estado'] + (f' (Ks = {p["Ks"]:g})' if res['clave'] == 'DL' else '')],
@@ -169,11 +169,18 @@ def memoria_pdf(res, destino, proyecto='', autor=''):
              ['Rigidez de vigas', 'Flexibles (marco plano)' if p.get('vigas') == 'flexibles' else 'Rígidas (marco de cortante)'],
              ['Combinación modal', p['combinacion'] + f' (ζ = {p["zeta"]:g})'],
              ['Factor Fu (FC)', f'{p["factor_Fu"]:g}']]
+    if p.get('manual'):
+        datos = [r for r in datos if r[0] not in ('Dirección del sismo', 'Rigidez de vigas')] + [['Estructura', 'Matrices K y M dadas']]
     E.append(_tabla(st, ['Parámetro', 'Valor'], [[a, Paragraph(b, st['base']) if len(b) > 40 else b] for a, b in datos],
                     anchos=[5.5 * cm, Ancho - 5.5 * cm], fuente=8.5))
 
     # ------------------------------------------------------------------ 2. estructura
     E += [P('2. Descripción de la estructura', 'h1')]
+    if p.get('manual'):
+        E += [P('La estructura se definió con las matrices K y M (sin geometría). Los pesos salen de las masas '
+                '(W = m·g) salvo que se hayan dado.', 'nota'),
+              _tabla(st, ['Nivel', 'h (m)', 'W (t)', 'm (kg·s²/cm)'],
+                     [[i + 1, float(p['alturas'][i]), float(p['cargas'][i]), float(p['M'][i, i])] for i in range(n)], dec=3)]
     if 'geom' in p:
         E.append(_imagen(ame.fig_estructura(p), 17))
     if 'info' in p:

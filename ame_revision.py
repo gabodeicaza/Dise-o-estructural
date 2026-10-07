@@ -114,6 +114,16 @@ def avisos(res):
         add('aviso', f'El primer modo solo aporta {100 * m_ef:.0f}% de la masa efectiva: la estructura es irregular '
                      'o los modos superiores importan.')
 
+    # --- Matrices dadas a mano
+    if p.get('manual'):
+        K = p['K']
+        if np.abs(K - K.T).max() > 1e-6 * np.abs(K).max():
+            add('alerta', 'K no es simétrica: revisa la captura de la matriz de rigidez.')
+        if np.linalg.eigvalsh(0.5 * (K + K.T)).min() <= 0:
+            add('alerta', 'K no es definida positiva: la estructura sería inestable. Revisa signos y valores.')
+        if np.abs(M - np.diag(np.diag(M))).max() > 0:
+            add('info', 'M no es diagonal: se usa tal cual (masas acopladas).')
+
     # --- Geometría y secciones
     h = p['alturas']
     for i, hi in enumerate(h, 1):

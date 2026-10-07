@@ -30,12 +30,17 @@ AYUDA = {'h': 'Altura del entrepiso en metros.',
 SUBGRUPOS = {'B2': 'B2 · riesgo I (ASCE 7)', 'B1': 'B1 · riesgo II', 'A2': 'A2 · riesgo III', 'A1': 'A1 · riesgo IV'}
 VIGAS = ['Rígidas (marco de cortante)', 'Flexibles (marco plano)']
 CLASES = ["Clase 1 (14000·√f'c)", "Clase 2 (8000·√f'c)"]
+MODOS = ['Por secciones y cargas', 'Matrices K y M (ya calculadas)']
+UNIDADES = ['kg, cm', 't, cm']
+CLAVES_MANUAL = ['K_txt', 'M_txt', 'alturas_txt', 'pesos_txt']
+SOLO_SECCIONES = ('crujias', 'E', 'fc', 'clase', 'vigas', 'direccion')  # no aplican al modo de matrices
 ESPECTRO = ['a0', 'c', 'Ta', 'Tb', 'k', 'Ts']
 DEFECTOS = dict(crujias='', subgrupo='B1', intensidad='Base de diseño', direccion='X', estado='Automático', Ks='0.25',
                 Q='4', k1='1.0', combinacion='SRSS', zeta='', material='Concreto', E='', fc='', clase=CLASES[0],
                 vigas=VIGAS[0], factor_Fu='1.1', mult_V='1', lim_dl='0.004', lim_sv='0.03', lim_oi='0.005',
                 irreg=[], fuerte_torsion=False, fuerte_elev=False, zona='', regularidad='Regular', b_planta='',
-                R1_otros=True, proyecto='', autor='', **{k: '' for k in ESPECTRO})
+                R1_otros=True, proyecto='', autor='', modo=MODOS[0], K_txt='', M_txt='', unidades=UNIDADES[0],
+                alturas_txt='', pesos_txt='', **{k: '' for k in ESPECTRO})
 CAMPOS = list(DEFECTOS)
 EJEMPLOS = ame.EJEMPLOS_MODELO
 
@@ -65,14 +70,22 @@ def df_de(niveles):
 def cargar(d):
     """Pone un proyecto (ejemplo o archivo) en el estado de la página."""
     d = ame.convertir_legacy(d)
-    if not isinstance(d.get('niveles'), list) or 'crujias' not in d:
+    matrices = d.get('modo') == 'matrices'
+    if not matrices and (not isinstance(d.get('niveles'), list) or 'crujias' not in d):
         raise ValueError('Formato de proyecto no reconocido.')
     d = dict(d)
+    d['modo'] = MODOS[1] if matrices else MODOS[0]
+    d['K_txt'], d['M_txt'] = d.get('K', ''), d.get('M', '')
+    d['alturas_txt'], d['pesos_txt'] = d.get('alturas', ''), d.get('pesos', '')
+    if d.get('unidades') not in UNIDADES:
+        d['unidades'] = UNIDADES[0]
     if 'subgrupo' not in d:  # proyectos anteriores: "tipo" = Grupo B / Grupo A - sismo base / infrecuente
         grupo, sismo = ame.grupo_sismo(d.get('tipo', 'Grupo B'))
         d['subgrupo'] = grupo + '1'
         d.setdefault('intensidad', 'Infrecuente' if sismo == 'I' else 'Base de diseño')
     for k in CAMPOS:
+        if matrices and k in SOLO_SECCIONES and k not in d:
+            continue  # un ejemplo con K y M no pisa los datos de secciones que ya capturaste
         st.session_state[k] = d.get(k, DEFECTOS[k])
     st.session_state['estado'] = d.get('estado') if d.get('estado') in ame.ESTADOS else 'Automático'
     esp = {k: dict(v) for k, v in (d.get('espectros') or {}).items()}
@@ -82,7 +95,8 @@ def cargar(d):
     st.session_state['_int_prev'] = st.session_state['intensidad']
     for k in ESPECTRO:
         st.session_state[k] = esp.get(st.session_state['intensidad'], {}).get(k, '')
-    st.session_state['df'] = df_de(d['niveles'])
+    if isinstance(d.get('niveles'), list):
+        st.session_state['df'] = df_de(d['niveles'])
     st.session_state['ver'] = st.session_state.get('ver', 0) + 1
 
 
@@ -98,6 +112,7 @@ def cambiar_intensidad():
 
 if 'df' not in st.session_state:
     cargar(next(iter(EJEMPLOS.values())))
+manual = st.session_state.get('modo') == MODOS[1]
 
 # ------------------------------------------------------------------ barra lateral
 with st.sidebar:
@@ -134,7 +149,8 @@ with st.sidebar:
     st.text_input('k1', key='k1')
     st.caption('k1: 0.8 con menos de 3 crujías resistentes · 1.0 con 3 o más · 1.25 en sistemas duales.')
     st.radio('Dirección del sismo', ['X', 'Y'], key='direccion', horizontal=True,
-             help='En una sección b x h, h está en la dirección X y b en la Y. Con Y se usa la inercia respecto al otro eje.')
+             help='En una sección b x h, h está en la dirección X y b en la Y. Con Y se usa la inercia respecto al otro eje.',
+             disabled=manual)
 
     st.markdown(f'### Espectro SASID · {st.session_state["intensidad"]}')
     c1, c2 = st.columns(2)
@@ -147,17 +163,17 @@ with st.sidebar:
     st.selectbox('Combinación modal', list(COMBINACIONES), key='combinacion',
                  help='SRSS: raíz de la suma de cuadrados. CQC: considera la correlación entre modos cercanos. '
                       'Suma absoluta: cota superior.')
-    st.selectbox('Vigas', VIGAS, key='vigas',
+    st.selectbox('Vigas', VIGAS, key='vigas', disabled=manual,
                  help='Rígidas: modelo de cortante. Flexibles: marco plano con rigidez de columnas y vigas.')
 
     st.markdown('### Material')
     st.selectbox('Material', list(ame.MATERIALES), key='material')
     c1, c2 = st.columns(2)
-    c1.text_input('E (kg/cm²)', key='E',
+    c1.text_input('E (kg/cm²)', key='E', disabled=manual,
                   help="Si lo dejas vacío: concreto 14000·√f'c (u 8000·√f'c), acero 2,040,000.")
     concreto = st.session_state['material'] == 'Concreto'
-    c2.text_input("f'c (kg/cm²)", key='fc', disabled=not concreto)
-    st.selectbox('Clase del concreto', CLASES, key='clase', disabled=not concreto)
+    c2.text_input("f'c (kg/cm²)", key='fc', disabled=(not concreto) or manual)
+    st.selectbox('Clase del concreto', CLASES, key='clase', disabled=(not concreto) or manual)
     c1, c2 = st.columns(2)
     c1.text_input('Factor Fu (FC)', key='factor_Fu')
     c2.text_input('V estático ×', key='mult_V')
@@ -191,20 +207,43 @@ with st.sidebar:
     c3.text_input('Ocup.', key='lim_oi', help='Vacío = sin límite')
 
 # ------------------------------------------------------------------ estructura
-st.markdown('### Estructura (niveles de abajo hacia arriba)')
-st.text_input('Crujías (m), de izquierda a derecha', key='crujias',
-              help='Anchos de cada crujía separados por espacio: "4 5" define 2 crujías y 3 ejes (1, 2 y 3).')
-flexibles = st.session_state['vigas'].startswith('Flex')
-conf = {k: st.column_config.TextColumn(ETIQ[k], help=AYUDA[k]) for k in COLS}
-if not flexibles:
-    conf['viga'] = None  # oculta la columna
-edit = st.data_editor(st.session_state['df'], key=f'niv_{st.session_state["ver"]}', num_rows='dynamic',
-                      width='stretch', column_config=conf)
-st.caption('Una fila por nivel (la primera es la base; agrega filas con el + de la tabla). Las columnas se ubican '
-           'por eje: si un nivel no tiene columna en algún eje, no lo pongas en "Columnas en ejes". '
-           'Pasa el cursor sobre los encabezados para ver ejemplos de sintaxis.')
+st.radio('¿Cómo defines la estructura?', MODOS, key='modo', horizontal=True,
+         help='Por secciones y cargas el programa arma K y M. Si el ejercicio ya te da K y M, usa las matrices.')
+manual = st.session_state['modo'] == MODOS[1]
 
-datos = {k: st.session_state[k] for k in CAMPOS if k not in ESPECTRO}
+with st.expander('Matrices K y M (ya calculadas)', expanded=manual):
+    c1, c2 = st.columns(2)
+    c1.text_area('Matriz K (pega desde Excel o escribe)', key='K_txt', height=170,
+                 help='Filas en renglones; columnas separadas por espacios, tabulaciones o comas. También acepta [a b; c d].')
+    c2.text_area('Matriz M (completa o solo la diagonal)', key='M_txt', height=170,
+                 help='Puedes pegar la matriz completa o solo las masas: "3 3 1.5 1.5".')
+    c1, c2, c3 = st.columns([1, 2, 2])
+    c1.radio('Unidades de K y M', UNIDADES, key='unidades',
+             help='t, cm: K en t/cm y M en t·s²/cm. kg, cm: K en kg/cm y M en kg·s²/cm.')
+    c2.text_input('Altura de cada entrepiso (m), de abajo hacia arriba', key='alturas_txt',
+                  help='Por ejemplo "5 5 5 5". Se usa para distorsiones, momentos de volteo y el método estático.')
+    c3.text_input('Pesos por nivel (t), opcional', key='pesos_txt',
+                  help='Si lo dejas vacío se calcula W = m·g con la diagonal de M.')
+    st.caption('Con matrices no hace falta dar secciones ni cargas: los pesos salen de las masas. '
+               'El orden de los niveles es de abajo hacia arriba, como en K y M.')
+
+with st.expander('Estructura por secciones y cargas (niveles de abajo hacia arriba)', expanded=not manual):
+    st.text_input('Crujías (m), de izquierda a derecha', key='crujias',
+                  help='Anchos de cada crujía separados por espacio: "4 5" define 2 crujías y 3 ejes (1, 2 y 3).')
+    flexibles = st.session_state['vigas'].startswith('Flex')
+    conf = {k: st.column_config.TextColumn(ETIQ[k], help=AYUDA[k]) for k in COLS}
+    if not flexibles:
+        conf['viga'] = None  # oculta la columna
+    edit = st.data_editor(st.session_state['df'], key=f'niv_{st.session_state["ver"]}', num_rows='dynamic',
+                          width='stretch', column_config=conf)
+    st.caption('Una fila por nivel (la primera es la base; agrega filas con el + de la tabla). Las columnas se ubican '
+               'por eje: si un nivel no tiene columna en algún eje, no lo pongas en "Columnas en ejes". '
+               'Pasa el cursor sobre los encabezados para ver ejemplos de sintaxis.')
+
+datos = {k: st.session_state[k] for k in CAMPOS if k not in ESPECTRO and k not in CLAVES_MANUAL}
+datos['modo'] = 'matrices' if manual else 'secciones'
+datos.update(K=st.session_state['K_txt'], M=st.session_state['M_txt'], alturas=st.session_state['alturas_txt'],
+             pesos=st.session_state['pesos_txt'])
 datos['vigas'] = 'flexibles' if flexibles else 'rigidas'
 esp = {k: dict(v) for k, v in st.session_state['_esp'].items()}
 esp[st.session_state['intensidad']] = {k: st.session_state[k] for k in ESPECTRO}
@@ -214,14 +253,18 @@ datos['niveles'] = [{k: ('' if v is None or (isinstance(v, float) and np.isnan(v
 firma = hashlib.md5(json.dumps(datos, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
 
 try:
-    modelo = ame.preparar_modelo(datos)
+    modelo = ame.preparar(datos)
 except ValueError as e:
     st.error(f'Revisa los datos: {e}')
     st.stop()
 
-with st.expander('Vista previa de la estructura', expanded=True):
-    st.pyplot(ame.fig_estructura(modelo))
-    st.caption('Revisa que ejes, secciones, articulaciones, vigas y cargas sean los que esperas antes de leer los resultados.')
+if manual:
+    st.info('Con matrices no hay geometría que dibujar: revisa K, M, las alturas y los pesos derivados en las pestañas '
+            'de resultados.')
+else:
+    with st.expander('Vista previa de la estructura', expanded=True):
+        st.pyplot(ame.fig_estructura(modelo))
+        st.caption('Revisa que ejes, secciones, articulaciones, vigas y cargas sean los que esperas antes de leer los resultados.')
 
 try:
     res = ame.calcular(modelo)
