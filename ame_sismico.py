@@ -127,6 +127,9 @@ def preparar_datos(d):
                  subgrupo=obj['subgrupo'], intensidad=obj['intensidad'], objetivo=obj['objetivo'], material=mat,
                  R_legacy=False, manual=True, **_params_norma(d, mat),
                  **_params_espectro(d, obj['estado_auto'], mat, obj['intensidad']))
+        T_med = _periodo_medido(d)
+        if T_med:
+            _ajustar_periodo(p, T_med)
     else:
         grupo = d['grupo'].strip().upper()[:1]
         sismo = d['sismo'].strip().upper()[:1]
@@ -158,13 +161,38 @@ def _spec_dict(d, intensidad):
     esp = d.get('espectros')
     if not esp:
         return d
-    if intensidad not in esp:
-        raise ValueError(f'Captura el espectro SASID de la intensidad "{intensidad}" (faltan: a0, c, Ta, Tb, k, Ts).')
-    src = dict(d, **esp[intensidad])
+    fuente = intensidad
+    if fuente not in esp and ntc.espectro_fuente(intensidad) in esp:
+        fuente = ntc.espectro_fuente(intensidad)  # frecuente y ocasional salen del espectro de base de diseño × Ks
+    if fuente not in esp:
+        nombre = ntc.espectro_fuente(intensidad) if intensidad in ('Frecuente', 'Ocasional') else intensidad
+        extra = ' (de él salen la intensidad frecuente y la ocasional)' if nombre != intensidad else ''
+        raise ValueError(f'Captura el espectro SASID de la intensidad "{nombre}"{extra} (faltan: a0, c, Ta, Tb, k, Ts).')
+    src = dict(d, **esp[fuente])
     faltan = [k for k in ('a0', 'c', 'Ta', 'Tb', 'k', 'Ts') if not str(src.get(k, '')).strip()]
     if faltan:
         raise ValueError(f'Captura el espectro SASID de la intensidad "{intensidad}" (faltan: {", ".join(faltan)}).')
     return src
+
+
+FACTOR_ESFUERZO = {'kg/cm²': 1.0, 't/cm²': 1000.0, 'MPa': 10.19716, 't/m²': 0.1, 'GPa': 10197.16}  # a kg/cm²
+
+
+def _a_kgcm2(valor, unidad, nombre):
+    unidad = unidad or 'kg/cm²'
+    if unidad not in FACTOR_ESFUERZO:
+        raise ValueError(f'Unidad no válida para {nombre}: {unidad}. Usa {", ".join(FACTOR_ESFUERZO)}.')
+    return valor * FACTOR_ESFUERZO[unidad]
+
+
+def _factor_espectro(d):
+    """Las ordenadas a0 y c se capturan en cm/s² (por defecto) o en g."""
+    u = str(d.get('unidad_espectro') or 'cm/s²').strip().lower()
+    if u.startswith('g'):
+        return G
+    if not u.startswith('cm'):
+        raise ValueError('Las unidades del espectro deben ser cm/s² o g.')
+    return 1.0
 
 
 def _params_espectro(d, estado_auto=None, material='Concreto', intensidad='Base de diseño'):
@@ -178,13 +206,18 @@ def _params_espectro(d, estado_auto=None, material='Concreto', intensidad='Base 
     zeta_defecto = ntc.ZETA_MATERIAL.get(material, 0.05)
     zeta = _num_opc(d, 'zeta', zeta_defecto)
     sp = _spec_dict(d, intensidad)
-    return dict(Q=parse_vector(d['Q'], 'Q'),
-                k1=parse_num(d['k1'], 'k1'), a0=parse_num(sp['a0'], 'a0'), c=parse_num(sp['c'], 'c'),
+    fu = _factor_espectro(d)
+    ks_base = _num_opc(d, 'Ks', 0.25) or 0.25
+    sa_txt = str(d.get('Sa_modos') or '').strip()
+    return dict(Q=parse_vector(d['Q'], 'Q'), unidad_espectro='g' if fu == G else 'cm/s²',
+                Sa_manual=parse_vector(sa_txt, 'Ordenadas Sa por modo') * fu if sa_txt else None,
+                k1=parse_num(d['k1'], 'k1'), a0=parse_num(sp['a0'], 'a0') * fu, c=parse_num(sp['c'], 'c') * fu,
                 Ta=parse_num(sp['Ta'], 'Ta'), Tb=parse_num(sp['Tb'], 'Tb'), k=parse_num(sp['k'], 'k'),
                 Ts=parse_num(sp['Ts'], 'Ts'),
                 factor_Fu=parse_num(d.get('factor_Fu', '1.1') or '1.1', 'Factor Fu'),
                 mult_V=parse_num(d.get('mult_V', '1') or '1', 'Multiplicador V estático'),
-                estado=estado, Ks=_num_opc(d, 'Ks', 0.25) or 0.25, combinacion=comb,
+                estado=estado, Ks=ks_base * (ntc.FACTOR_KS_OCASIONAL if intensidad == 'Ocasional' else 1.0), Ks_base=ks_base,
+                combinacion=comb,
                 zeta=zeta if zeta is not None else zeta_defecto,
                 lim_dl=_num_opc(d, 'lim_dl', 0.004), lim_sv=_num_opc(d, 'lim_sv', 0.03),
                 lim_oi=_num_opc(d, 'lim_oi', 0.005))
@@ -193,7 +226,8 @@ def _params_espectro(d, estado_auto=None, material='Concreto', intensidad='Base 
 NORMA_DEFECTO = dict(irreg=[], fuerte_torsion=False, fuerte_elev=False, gamma_c=1.0,
                      gamma_c_txt='Estructura regular: γc = 1.0.', b_planta=None, zona='', regular=True,
                      R_unitaria=False, R1_otros=True, intensidad='Base de diseño', subgrupo=None, objetivo=None,
-                     material='Concreto', R_legacy=True)
+                     material='Concreto', R_legacy=True, criterio_est='apuntes', R_dist='plato', e_s=None,
+                     modos_modo='todos', modos_n=None, Sa_manual=None, unidad_espectro='cm/s²', norm_modal='primero')
 
 
 def _flag(v):
@@ -211,13 +245,85 @@ def _objetivo_de(d):
     else:
         grupo, _ = grupo_sismo(tipo)
         sub = grupo
-    intensidad = d.get('intensidad') or ('Infrecuente' if 'infrec' in tipo.lower() else 'Base de diseño')
+    intensidad = ntc.normalizar_intensidad(d.get('intensidad') or ('Infrecuente' if 'infrec' in tipo.lower() else 'Base de diseño'))
     if intensidad not in ntc.INTENSIDADES:
         raise ValueError(f'Intensidad sísmica no válida: {intensidad}.')
     objetivo = ntc.objetivo_diseno(grupo, intensidad)
     nombre = {v: k for k, v in CLAVE_ESTADO.items()}[objetivo['clave']]
-    sismo = {'Frecuente': 'F', 'Base de diseño': 'B', 'Infrecuente': 'I'}[intensidad]
+    sismo = {'Frecuente': 'F', 'Ocasional': 'O', 'Base de diseño': 'B', 'Infrecuente': 'I'}[intensidad]
     return dict(grupo=grupo, subgrupo=sub, intensidad=intensidad, sismo=sismo, objetivo=objetivo, estado_auto=nombre)
+
+
+def _norm_modal(texto):
+    t = str(texto or '').lower()
+    if 'últim' in t or 'ultim' in t or 'azotea' in t:
+        return 'ultimo'
+    if 'máx' in t or 'max' in t:
+        return 'maximo'
+    if 'masa' in t:
+        return 'masa'
+    return 'primero'
+
+
+def _normalizar_modos(p, fi):
+    """Normaliza los modos: primer nivel = 1 (apuntes), azotea = 1, valor máximo = 1 o masa modal unitaria."""
+    modo = p.get('norm_modal', 'primero')
+    n, j = fi.shape[0], np.arange(fi.shape[1])
+    if modo == 'ultimo':
+        div = fi[-1, :]
+    elif modo == 'maximo':
+        div = fi[np.argmax(np.abs(fi), axis=0), j]
+    elif modo == 'masa':
+        div = np.sqrt(np.einsum('ij,ik,kj->j', fi, p['M'], fi)) * np.where(fi[0, :] < 0, -1.0, 1.0)
+    else:
+        div = fi[0, :]
+    return fi / np.where(np.abs(div) < 1e-12, 1.0, div)
+
+
+def _volteo_entrepiso(Fu_arriba, alturas):
+    """Momento de volteo en la base de cada entrepiso (t·m), de arriba hacia abajo: Σ Fu_j·(z_j − z_base)."""
+    zs = np.concatenate([[0.0], np.cumsum(alturas)])
+    Fu = np.asarray(Fu_arriba, float)[::-1]
+    Mv = np.array([np.sum(Fu[i:] * (zs[i + 1:] - zs[i])) for i in range(len(Fu))])
+    return Mv[::-1]
+
+
+def apoyo_txt(c):
+    """Texto del apoyo de una columna (para tablas)."""
+    base = 'Rodillo' if c.get('rodillo') else ('Articulado' if c['artic'] else 'Empotrado')
+    return base + (' · articulada arriba' if c.get('artic_sup') else '')
+
+
+def _periodo_medido(d):
+    """Periodo medido opcional (s). Si se escribe, debe ser positivo."""
+    T = _num_opc(d, 'T_medido', None)
+    if T is not None and T <= 0:
+        raise ValueError('El periodo medido debe ser mayor que cero.')
+    return T
+
+
+def _ajustar_periodo(p, T_med):
+    """Escala masas y pesos para que el periodo fundamental sea el medido (T ∝ √m). Los pesos dados son solo la
+    distribución relativa entre niveles."""
+    if T_med <= 0:
+        raise ValueError('El periodo medido debe ser mayor que cero.')
+    lam = np.linalg.eigvals(np.linalg.solve(p['M'], p['K'])).real
+    if lam.min() <= 0:
+        raise ValueError('No se puede ajustar al periodo medido: la estructura es inestable (revisa apoyos y articulaciones).')
+    T1 = float(2 * np.pi / np.sqrt(lam.min()))
+    f = (T_med / T1) ** 2
+    p['M'] = p['M'] * f
+    if p['cargas'] is not None:
+        p['cargas'] = p['cargas'] * f
+    for r in p.get('info', []):
+        r['W'] *= f
+        r['m'] *= f
+    for l in p.get('geom', {}).get('niveles', []):
+        l['W'] *= f
+        l['w_bays'] = None
+    p['ajuste_periodo'] = dict(T_medido=T_med, T_calculado=T1, factor=float(f), m_total=float(np.trace(p['M'])),
+                               W_total=float(np.sum(p['cargas'])) if p['cargas'] is not None else None)
+    return p
 
 
 def _params_norma(d, material):
@@ -232,7 +338,16 @@ def _params_norma(d, material):
         raise ValueError('La zona geotécnica debe ser I, II o III.')
     r1 = d.get('R1_otros', True)
     r1 = True if r1 == '' else _flag(r1)
+    crit = str(d.get('criterio_estatico') or '').lower()
+    criterio_est = 'maximo' if ('máx' in crit or 'max' in crit or 'matlab' in crit) else 'apuntes'
+    rd = str(d.get('R_dist') or '').lower()
+    modos = str(d.get('modos') or '').lower()
+    modos_modo = 'primeros' if 'primeros' in modos else ('apuntes' if 'apuntes' in modos or '95' in modos else 'todos')
+    nm_ = _num_opc(d, 'modos_n', None)
     return dict(irreg=sorted(set(irreg)), fuerte_torsion=ft, fuerte_elev=fe, gamma_c=gc, gamma_c_txt=txt,
+                criterio_est=criterio_est, R_dist='T1' if ('fund' in rd or rd == 't1') else 'plato',
+                e_s=_num_opc(d, 'e_s', None), modos_modo=modos_modo, modos_n=int(nm_) if nm_ else None,
+                norm_modal=_norm_modal(d.get('norm_modal')),
                 b_planta=_num_opc(d, 'b_planta', None), zona=zona,
                 regular=str(d.get('regularidad') or 'Regular').lower().startswith('reg'),
                 R_unitaria=(material != 'Concreto') and r1, R1_otros=r1)
@@ -330,15 +445,34 @@ def _modulo_E(d):
     """E (kg/cm²) según el material: valor dado, f'c del concreto (clase 1 o 2) o 2,040,000 del acero."""
     mat = d.get('material') or 'Concreto'
     if str(d.get('E', '')).strip():
-        return parse_num(d['E'], 'E')
+        return _a_kgcm2(parse_num(d['E'], 'E'), d.get('unidad_E'), 'E')
     if mat == 'Acero':
         return 2_040_000.0
     if mat == 'Concreto':
         if not str(d.get('fc', '')).strip():
             raise ValueError("Indica E o f'c del concreto.")
         coef = 8000 if 'clase 2' in str(d.get('clase', '')).lower() else 14000
-        return coef * np.sqrt(parse_num(d['fc'], "f'c"))
-    raise ValueError(f'Indica el módulo de elasticidad E (kg/cm²) de la {mat.lower()}.')
+        return coef * np.sqrt(_a_kgcm2(parse_num(d['fc'], "f'c"), d.get('unidad_fc'), "f'c"))
+    raise ValueError(f'Indica el módulo de elasticidad E de la {mat.lower()}.')
+
+
+def _escalar_texto(texto, factor, nombre):
+    """Convierte las dimensiones de una sección escrita en metros a centímetros (factor = 100)."""
+    if factor == 1.0:
+        return texto
+    if re.search(r'(?i)\bi:', str(texto)):
+        raise ValueError(f'{nombre}: las propiedades I:/A: deben darse en cm⁴ y cm², no en metros.')
+    return re.sub(r'(?<![@\d.])\d+(?:\.\d+)?', lambda m: f'{float(m.group()) * factor:g}', str(texto))
+
+
+def _E_nivel(r, d, E, nom):
+    """E de las columnas de un nivel: campo 'E_col' (en la unidad de E, o la palabra 'acero'); vacío = E general."""
+    txt = str(r.get('E_col', '')).strip()
+    if not txt:
+        return E
+    if txt.lower().startswith('acero'):
+        return 2_040_000.0
+    return _a_kgcm2(parse_num(txt, f'{nom} - E de columnas'), d.get('unidad_E'), f'{nom} - E de columnas')
 
 
 def preparar_modelo(d):
@@ -352,9 +486,14 @@ def preparar_modelo(d):
         ejes    ejes con columna: "todos" (por defecto), "1 3", "1-3"
         seccion una sola sección para todas las columnas o una por columna (ver ame_secciones)
         artic   ejes con base articulada (opcional): "2"
+        rod     ejes con apoyo de rodillos en la base (solo nivel 1): no transmiten cortante, rigidez lateral = 0
+        art_sup ejes con la columna articulada en su parte superior (opcional)
         viga    sección de la viga de ese piso (solo con vigas flexibles): "30x60"
         cargas  carga por crujía (t/m): un valor para todas o uno por crujía, p. ej. "4.7 3.2"
+        E_col   E de las columnas de ese nivel (en la unidad de E; o 'acero'); vacío = el E general (que usan las vigas)
         W       peso del nivel (t), opcional: sustituye a la carga
+    d['T_medido']: periodo fundamental medido (s), opcional. Los pesos pasan a ser solo la distribución relativa entre
+        niveles (si se omiten, todos iguales) y se escalan para que T1 sea el medido: así se obtiene el peso total.
     """
     bays = parse_vector(d['crujias'], 'Crujías')
     if (bays <= 0).any():
@@ -371,6 +510,10 @@ def preparar_modelo(d):
     if n < 1:
         raise ValueError('Agrega al menos un nivel.')
     E = _modulo_E(d)
+    T_med = _periodo_medido(d)
+    esc_sec = {'cm': 1.0, 'm': 100.0}.get(str(d.get('unidad_seccion') or 'cm').strip().lower())
+    if esc_sec is None:
+        raise ValueError('Las unidades de las secciones deben ser cm o m.')
 
     filas, detalle, geom_niv, ks, m, W, alturas = [], [], [], [], [], [], []
     for i, r in enumerate(niv, 1):
@@ -379,37 +522,51 @@ def preparar_modelo(d):
         if h <= 0:
             raise ValueError(f'{nom}: la altura debe ser mayor que cero.')
         ejes = parse_ejes(r.get('ejes', ''), nejes, f'{nom} - ejes', range(1, nejes + 1))
-        secs = parse_secciones(r.get('seccion', ''), f'{nom} - sección')
+        secs = parse_secciones(_escalar_texto(r.get('seccion', ''), esc_sec, f'{nom} - sección'), f'{nom} - sección')
         if len(secs) == 1:
             secs = secs * len(ejes)
         elif len(secs) != len(ejes):
             raise ValueError(f'{nom}: tiene {len(ejes)} columna(s) (ejes {", ".join(map(str, ejes))}) y escribiste '
                              f'{len(secs)} secciones. Escribe una sola o una por columna.')
         artic = parse_ejes(r.get('artic', ''), nejes, f'{nom} - articuladas', [])
-        fuera = [e for e in artic if e not in ejes]
-        if fuera:
-            raise ValueError(f'{nom}: el eje {fuera[0]} está marcado como articulado pero no tiene columna en ese nivel.')
+        rod = parse_ejes(r.get('rod', ''), nejes, f'{nom} - rodillos', [])
+        art_sup = parse_ejes(r.get('art_sup', ''), nejes, f'{nom} - articuladas arriba', [])
+        if rod and i != 1:
+            raise ValueError(f'{nom}: los apoyos de rodillos solo aplican en la base (nivel 1).')
+        for lista, et in ((artic, 'articulado'), (rod, 'con rodillos'), (art_sup, 'articulado arriba')):
+            fuera = [e for e in lista if e not in ejes]
+            if fuera:
+                raise ValueError(f'{nom}: el eje {fuera[0]} está marcado como {et} pero no tiene columna en ese nivel.')
+        doble = sorted(set(artic) & set(rod))
+        if doble:
+            raise ValueError(f'{nom}: el eje {doble[0]} está marcado como articulado y como rodillo; elige uno.')
 
         hcm = h * 100
+        E_n = _E_nivel(r, d, E, nom)
         cols, kn = [], 0.0
         for e, sec in zip(ejes, secs):
-            art = e in artic
+            art, roll, arriba = e in artic, e in rod, e in art_sup
             I = inercia(sec, direccion)
-            k = (3 if art else 12) * E * I / hcm ** 3
+            if roll or (art and arriba):  # sin restricción horizontal o articulada en ambos extremos: no resiste cortante
+                k = 0.0
+            else:
+                k = (3 if (art or arriba) else 12) * E_n * I / hcm ** 3
             kn += k
-            cols.append(dict(sec, nivel=i, eje=e, x=float(xs[e - 1]), artic=art, k=k, I=I,
+            cols.append(dict(sec, nivel=i, eje=e, x=float(xs[e - 1]), artic=art, artic_sup=arriba, rodillo=roll, k=k, I=I, E=E_n,
                              eq=ancho_en_direccion(sec, direccion)))
         detalle.append(cols)
 
         viga = dict(I=None, A=None, texto='', alto=30.0)
         if flexibles:
-            vs = parse_secciones(r.get('viga', ''), f'{nom} - viga')
+            vs = parse_secciones(_escalar_texto(r.get('viga', ''), esc_sec, f'{nom} - viga'), f'{nom} - viga')
             if len(vs) != 1:
                 raise ValueError(f'{nom} - viga: escribe una sola sección de viga (por ejemplo 30x60).')
             viga = dict(I=vs[0]['Ix'], A=vs[0]['A'], texto=vs[0]['texto'], alto=vs[0]['dx'])
 
         if str(r.get('W', '')).strip():
             Wi, w_bays = parse_num(r['W'], f'{nom} - W'), None
+        elif T_med and not str(r.get('cargas', '')).strip():
+            Wi, w_bays = 1.0, None  # peso relativo: se escala para igualar el periodo medido
         else:
             v = parse_vector(r.get('cargas', ''), f'{nom} - carga por crujía')
             if len(v) == 1:
@@ -420,15 +577,16 @@ def preparar_modelo(d):
             Wi, w_bays = float(v @ bays), v
         ks.append(kn); alturas.append(h); W.append(Wi); m.append(Wi * 1000 / G)
         textos = list(dict.fromkeys(c['texto'] for c in cols))
-        filas.append(dict(nivel=i, h=h, ncol=len(cols), nart=len(artic), seccion=', '.join(textos),
+        filas.append(dict(nivel=i, h=h, ncol=len(cols), nart=len(artic) + len(rod), seccion=', '.join(textos),
                           I=sum(c['I'] for c in cols), k=kn, W=Wi, m=Wi * 1000 / G,
                           viga=viga['texto'] if flexibles else ''))
         geom_niv.append(dict(h=h, W=Wi, w_bays=w_bays, cols=cols, viga=viga, viga_h=viga['alto'] if flexibles else 30.0))
 
     if flexibles:
         K = rigidez_marco(E, [x * 100 for x in alturas], xs * 100,
-                          [[dict(eje=c['eje'], A=c['A'], I=c['I'], artic=c['artic']) for c in cols] for cols in detalle],
-                          [dict(I=l['viga']['I'], A=l['viga']['A']) for l in geom_niv])
+                          [[dict(eje=c['eje'], A=c['A'], I=c['I'], E=c['E'], artic=c['artic'], artic_sup=c['artic_sup'],
+                            rodillo=c['rodillo']) for c in cols] for cols in detalle],
+                          [dict(I=l['viga']['I'], A=l['viga']['A'], E=E) for l in geom_niv])
     else:
         K = np.zeros((n, n))
         for i in range(n):
@@ -437,12 +595,13 @@ def preparar_modelo(d):
                 K[i, i + 1] = K[i + 1, i] = -ks[i + 1]
     mat = d.get('material') or 'Concreto'
     obj = _objetivo_de(d)
-    return dict(M=np.diag(m), K=K, n=n, alturas=np.array(alturas), cargas=np.array(W), dist_x=np.ones(n),
-                grupo=obj['grupo'], sismo=obj['sismo'], subgrupo=obj['subgrupo'], intensidad=obj['intensidad'],
-                objetivo=obj['objetivo'], E=E, info=filas, material=mat, direccion=direccion,
-                vigas='flexibles' if flexibles else 'rigidas', R_legacy=False,
-                geom=dict(bays=bays, xs=xs, niveles=geom_niv),
-                **_params_norma(d, mat), **_params_espectro(d, obj['estado_auto'], mat, obj['intensidad']))
+    modelo = dict(M=np.diag(m), K=K, n=n, alturas=np.array(alturas), cargas=np.array(W), dist_x=np.ones(n),
+                  grupo=obj['grupo'], sismo=obj['sismo'], subgrupo=obj['subgrupo'], intensidad=obj['intensidad'],
+                  objetivo=obj['objetivo'], E=E, info=filas, material=mat, direccion=direccion,
+                  vigas='flexibles' if flexibles else 'rigidas', R_legacy=False,
+                  geom=dict(bays=bays, xs=xs, niveles=geom_niv),
+                  **_params_norma(d, mat), **_params_espectro(d, obj['estado_auto'], mat, obj['intensidad']))
+    return _ajustar_periodo(modelo, T_med) if T_med else modelo
 
 
 def convertir_legacy(d):
@@ -488,6 +647,36 @@ def _R(p, Q, T):
     if p.get('R_unitaria'):
         return np.ones_like(T)
     return p['k1'] * _r0(Q) + _k2(T, p['Ta'])
+
+
+def _R_dist(p, Q, T1):
+    """R para amplificar los desplazamientos: la del plato (k2 = 0, como en las hojas) o la del periodo fundamental."""
+    return _R(p, Q, p['Ta'] if p.get('R_dist', 'plato') == 'plato' else T1)
+
+
+def _m_ef(p, fi):
+    """Masa efectiva modal como fracción de la masa total."""
+    M, n = p['M'], p['n']
+    return np.array([(fi[:, j] @ M @ np.ones(n)) ** 2 / (fi[:, j] @ M @ fi[:, j]) for j in range(n)]) / np.trace(M)
+
+
+def _n_modos(p, res):
+    """Modos que se combinan: todos, los primeros N o el criterio de los apuntes (95 % de masa o T ≥ 0.4 s, mínimo 3)."""
+    n = p['n']
+    modo = p.get('modos_modo', 'todos')
+    if modo == 'primeros':
+        return int(min(max(p.get('modos_n') or 1, 1), n))
+    if modo == 'apuntes':
+        acum = np.cumsum(_m_ef(p, res['fi']))
+        n95 = int(np.argmax(acum >= 0.95)) + 1 if acum[-1] >= 0.95 else n
+        return int(min(n, max(n95, int(np.sum(res['T'] >= 0.4)), min(3, n))))
+    return n
+
+
+def _comb(res, X):
+    """Combina las respuestas modales (columnas) solo con los modos considerados."""
+    p, m = res['p'], res['n_modos']
+    return combinar(X[:, :m], res['w'][:m], p['zeta'], p['combinacion'])
 
 
 def _k2(T, Ta):
@@ -577,20 +766,20 @@ def _revisiones(p, res):
             pq = p if clave == 'SV' else dict(p, Q=np.array([1.0]))
             Q = float(pq['Q'][0])
             curva, _ = espectro(pq, Q, 1.0, res['serie'], clave=clave)
-            R1 = float(_frp(p, clave) * _R(pq, Q, T[0]))  # R′ con el periodo fundamental (apuntes p. 12)
+            R1 = float(_frp(p, clave) * _R_dist(pq, Q, T[0]))  # R′ del plato (hojas) o del periodo fundamental
             amp = np.full(n, FC * Q * R1)  # desplazamientos × FC·Q·R′ (apuntes p. 13 y 15)
         Sa = _interp(T, res['serie'], curva)
         d = fi * (Sa * gam / lam)
-        deriva = combinar(derivas_modales(d * amp), w, zeta, comb)
+        deriva = _comb(res, derivas_modales(d * amp))
         estados[clave] = dict(nombre=nombre, limite=None if limite is None else limite * gc, limite_base=limite,
                               gamma_c=gc, Sa=Sa, amp=amp, d=d, deriva=deriva,
-                              deriva_el=combinar(derivas_modales(d), w, zeta, comb), dist=deriva / h_cm)
+                              deriva_el=_comb(res, derivas_modales(d)), dist=deriva / h_cm)
     rev = dict(estados=estados, theta=np.zeros(n), P=None, V=None, irreg_masa=[], irreg_rigidez=[],
                k_ef=np.zeros(n))
     W = p['cargas']
     if W is not None:
         sv = estados['SV']
-        F_t = combinar(K @ sv['d'], w, zeta, comb) / 1000
+        F_t = _comb(res, K @ sv['d']) / 1000
         V = np.cumsum(F_t[::-1])[::-1]
         rev['theta'], rev['P'] = theta_pdelta(W, sv['deriva_el'], V, h_cm)
         rev['V'] = V
@@ -621,11 +810,13 @@ def _normativa(p, res):
     fila('Estado de cálculo', p['estado'], '')
     fila('Amortiguamiento ζ', f'{p["zeta"]:g}', 'Concreto 0.05 · acero 0.03 (p. 14)')
     if clave == 'DL':
-        fila('Ks', f'{p["Ks"]:g}', 'Sa(BD)·Ks, sin factor de carga')
+        fila('Ks', f'{p["Ks_base"]:g}' + (f' × {ntc.FACTOR_KS_OCASIONAL:g} (sismo ocasional) = {p["Ks"]:g}'
+                                          if p['Ks'] != p['Ks_base'] else ''), 'Sa(BD)·Ks, sin factor de carga')
     else:
         r0 = _r0(Q0)
-        k2 = 0.0 if p['R_unitaria'] else float(_k2(T1, p['Ta']))
-        R_ = float(_R(pp, Q0, T1))
+        plato = p.get('R_dist', 'plato') == 'plato'
+        k2 = 0.0 if (p['R_unitaria'] or plato) else float(_k2(T1, p['Ta']))
+        R_ = float(_R_dist(pp, Q0, T1))
         frp = _frp(p, clave)
         q1 = float(_q_r(pp, Q0, T1, clave)[0][0])
         fila('Q', f'{Q0:g}', ntc.GUIA_Q.get(Q0, 'Q fuera de los valores usuales'))
@@ -634,8 +825,8 @@ def _normativa(p, res):
             fila('R = k1·R0 + k2', '1', 'R = 1 en materiales distintos del concreto (p. 11)')
         else:
             fila('R0', f'{r0:g}', '1.75 si Q < 3 · 2 si Q ≥ 3')
-            fila(f'k2 (T1 = {T1:.4f} s)', f'{k2:.4f}', 'k2 = 0.5·(1 − √(T/Ta)) ≥ 0')
-            fila('R = k1·R0 + k2', f'{R_:.4f}', 'Con el periodo fundamental (p. 12)')
+            fila('k2 ' + ('(plato)' if plato else f'(T1 = {T1:.4f} s)'), f'{k2:.4f}', 'k2 = 0.5·(1 − √(T/Ta)) ≥ 0')
+            fila('R = k1·R0 + k2', f'{R_:.4f}', 'Del plato, como en las hojas' if plato else 'Con el periodo fundamental (p. 12)')
         fila("R′ = " + ('0.75·R' if frp != 1 else 'R'), f'{frp * R_:.4f}', 'OI: 0.75R · SV: R (p. 10)')
         fila("Q′ (T1)", f'{q1:.4f}', 'Q′ = 1 + (Q − 1)·√(p/k)…')
         fila("Q′·R′ (T1)", f'{q1 * frp * R_:.4f}', 'Reduce las ordenadas del espectro')
@@ -652,25 +843,124 @@ def _normativa(p, res):
                            cumple=res['V_din'] >= v_min * (1 - 1e-9), factor=max(1.0, v_min / res['V_din']))
     # --- cimentación: elementos mecánicos × 0.65·R′ (p. 9, inciso 3)
     if clave != 'DL':
-        R1 = float(_frp(p, clave) * _R(pp, Q0, T1))
+        R1 = float(_frp(p, clave) * _R_dist(pp, Q0, T1))
         f_c = ntc.FACTOR_CIMENTACION * R1
         out['cimentacion'] = dict(R_prima=R1, factor=f_c, V=f_c * res['V_din'], M=f_c * float(res['tabla_din']['Mvu'].sum()))
-    # --- torsión accidental (p. 9)
+    # --- torsión accidental y de diseño (p. 9): e = f·e_s ± e_a  (f = 1.0 dinámico, 1.5 estático)
     if p['b_planta']:
         e_a = ntc.excentricidad_accidental(n, p['b_planta'])
         Fu_arriba = res['tabla_din']['Fu']  # de arriba hacia abajo
-        out['torsion'] = dict(b=p['b_planta'], e_a=e_a, Mt=e_a * Fu_arriba[::-1], Fu=Fu_arriba[::-1])
+        tor = dict(b=p['b_planta'], e_a=e_a, Mt=e_a * Fu_arriba[::-1], Fu=Fu_arriba[::-1])
+        if p.get('e_s') is not None:
+            es = p['e_s']
+            tor.update(e_s=es, e1_din=1.0 * es + e_a, e2_din=es - e_a, Mt1_din=(es + e_a) * Fu_arriba[::-1],
+                       Mt2_din=(es - e_a) * Fu_arriba[::-1])
+            if 'tabla_est' in res:
+                Fe = res['tabla_est']['Fu'][::-1]
+                tor.update(e1_est=1.5 * es + e_a, e2_est=es - e_a, Mt1_est=(1.5 * es + e_a) * Fe, Mt2_est=(es - e_a) * Fe)
+        out['torsion'] = tor
     # --- aplicabilidad del método estático (p. 20)
     H = float(np.sum(p['alturas']))
     lim = ntc.altura_maxima_estatico(p['zona'], p['regular']) if p['zona'] else None
     out['estatico'] = dict(H=H, limite=lim, zona=p['zona'], regular=p['regular'],
                            aplica=p['grupo'] == 'B' and (lim is None or H <= lim))
     # --- participación modal (p. 15): más de 3 modos, 95 % de masa efectiva o todos los modos con T ≥ 0.4 s
-    M, fi = p['M'], res['fi']
-    m_ef = np.array([(fi[:, j] @ M @ np.ones(n)) ** 2 / (fi[:, j] @ M @ fi[:, j]) for j in range(n)]) / np.trace(M)
+    m_ef = _m_ef(p, res['fi'])
     acum = np.cumsum(m_ef)
     out['modos'] = dict(m_ef=m_ef, acum=acum, n95=int(np.argmax(acum >= 0.95)) + 1 if acum[-1] >= 0.95 else n,
-                        n_T04=int(np.sum(T >= 0.4)))
+                        n_T04=int(np.sum(T >= 0.4)), n_usados=res['n_modos'], acum_usados=float(acum[res['n_modos'] - 1]))
+    return out
+
+
+def _estatico(p, res):
+    """Método estático de análisis sísmico (apuntes p. 20-21).
+
+    Fi = C · (Wi·hi / Σ Wi·hi) · ΣWi, con C = máx { c/(Q′R′) en el plato ; a0/(Q′R′) en T = 0 }.
+    En el plato k2 = 0 y Q′ = 1 + (Q − 1)·√(1/k); en T = 0, k2 = 0.5 y Q′ = 1.
+    Distorsiones: desplazamientos de K⁻¹·Fi × FC·Q·R′ del plato (limitación de daños: sin FC ni Q·R′).
+    """
+    n, clave = p['n'], res['clave']
+    FC = 1.0 if clave == 'DL' else p['factor_Fu']
+    h = res['alturas_acum'][::-1]  # de arriba hacia abajo
+    W = np.asarray(p['cargas'] * p['dist_x'], float)[::-1]
+    hW = h * W
+    c_g, a0_g = p['c'] / G, p['a0'] / G
+    Q = float(p['Q'][0]) if clave == 'SV' else 1.0
+    frp = 1.0 if clave == 'DL' else _frp(p, clave)
+    q_pl = 1.0 if clave == 'DL' else 1 + (Q - 1) * np.sqrt(1 / p['k'])
+    R_pl = 1.0 if (clave == 'DL' or p['R_unitaria']) else p['k1'] * _r0(Q)           # k2 = 0 en el plato
+    R_0 = 1.0 if (clave == 'DL' or p['R_unitaria']) else p['k1'] * _r0(Q) + 0.5      # k2 = 0.5 en T = 0
+    if clave == 'DL':  # espectro elástico por Ks, sin Q′ ni R′
+        C_pl, C_0 = c_g * p['Ks'], a0_g * p['Ks']
+    else:
+        C_pl, C_0 = c_g / (q_pl * frp * R_pl), a0_g / (frp * R_0)
+    if p.get('criterio_est') == 'maximo':
+        C, gob = float(res['curvas_g'][0].max()), 'máximo del espectro de diseño (como el código de MATLAB)'
+    else:
+        C, gob = max(C_pl, C_0), ('el plato' if C_pl >= C_0 else 'el inicio del espectro (T = 0)')
+    a_min_g = res['a_min_g'] or 0.0
+    if C < a_min_g:
+        C, gob = a_min_g, 'el cortante basal mínimo (a_min)'
+    Fi = C * hW / hW.sum() * W.sum()
+    Fu = Fi * FC
+    Vu = np.cumsum(Fu)
+    Mvu = Fu * h
+
+    u = np.linalg.solve(p['K'], Fi[::-1] * 1000)  # cm, de abajo hacia arriba (Fi en t -> kg)
+    deriva = np.diff(np.concatenate([[0.0], u]))
+    amp = 1.0 if clave == 'DL' else FC * Q * frp * R_pl
+    dist = deriva * amp / (p['alturas'] * 100)
+    lim_base = {'DL': p['lim_dl'], 'SV': p['lim_sv'], 'OI': p['lim_oi']}[clave]
+    gc = 1.0 if clave == 'DL' else p['gamma_c']
+    return dict(tabla=dict(nivel=np.arange(n, 0, -1), h=h, Wi=W, hWi=hW, Fi=Fi, Fu=Fu, Vu=Vu, Mvu=Mvu,
+                           Mv=_volteo_entrepiso(Fu, p['alturas'])),
+                C=C, C_pl=C_pl, C_0=C_0, gobierna=gob, criterio=p.get('criterio_est', 'apuntes'), Q=Q, FC=FC,
+                q_pl=q_pl, R_pl=R_pl, R_0=R_0, frp=frp, Rp_pl=frp * R_pl, Rp_0=frp * R_0, W_T=float(W.sum()),
+                V_est=float(Vu[-1]), u=u, deriva=deriva, amp=amp, dist=dist,
+                limite=None if lim_base is None else lim_base * gc, limite_base=lim_base, gamma_c=gc)
+
+
+def _completar_estatico(p, res):
+    """Compara con el dinámico y escala las fuerzas dinámicas (factor = V estático / V dinámico, si es mayor que 1)."""
+    est = res['estatico']
+    est['dist_din'] = res['revision']['estados'][res['clave']]['dist']
+    f = max(1.0, res['factor_escala'])
+    t = res['tabla_din']
+    res['factor_aplicado'] = f
+    res['tabla_din_esc'] = dict(nivel=t['nivel'], h=t['h'], F=t['F'] * f, Fu=t['Fu'] * f, Vu=t['Vu'] * f, Mvu=t['Mvu'] * f,
+                                Mv=t['Mv'] * f)
+
+
+def _elastico(p, res):
+    """Análisis elástico: el espectro SIN reducir (Q′ = 1, R′ = 1), el "espectro transparente" de los apuntes (p. 11).
+
+    Se hace con el mismo modelo, la misma combinación modal y los mismos modos que el análisis de diseño, y se compara
+    con él. Las fuerzas elásticas son las que resistiría una estructura que no se reduce por ductilidad ni sobrerresistencia."""
+    n, K = p['n'], p['K']
+    T, fi, lam, gam, serie = res['T'], res['fi'], res['lam'], res['gam'], res['serie']
+    FC = p['factor_Fu']
+    curva = espectro(dict(p, Ks=1.0), 1.0, 1.0, serie, dl=True)[0]  # Sa sin reducir (cm/s²)
+    Sa = _interp(T, serie, curva)
+    d = fi * (Sa * gam / lam)
+    F = K @ d
+    F_final = _comb(res, F)
+    h = res['alturas_acum'][::-1]
+    F_t = F_final[::-1] / 1000
+    Fu = F_t * FC
+    Vu = np.cumsum(Fu)
+    deriva = _comb(res, derivas_modales(d))
+    out = dict(curva=curva, Sa=Sa, d=d, F=F, F_final=F_final, d_comb=_comb(res, d),
+               tabla=dict(nivel=np.arange(n, 0, -1), h=h, F=F_t, Fu=Fu, Vu=Vu, Mvu=h * Fu,
+                          Mv=_volteo_entrepiso(Fu, p['alturas'])), V_el=float(Vu[-1]),
+               deriva=deriva, dist=deriva / (p['alturas'] * 100))
+    if p['cargas'] is not None:  # estático elástico: C = máx(c, a0) sin reducir
+        W = np.asarray(p['cargas'] * p['dist_x'], float)[::-1]
+        hW = h * W
+        C = max(p['c'], p['a0']) / G
+        Fi = C * hW / hW.sum() * W.sum()
+        Fe = Fi * FC
+        out['est'] = dict(C=C, tabla=dict(nivel=np.arange(n, 0, -1), h=h, Wi=W, hWi=hW, Fi=Fi, Fu=Fe, Vu=np.cumsum(Fe),
+                                         Mvu=Fe * h, Mv=_volteo_entrepiso(Fe, p['alturas'])), V_est=float(np.sum(Fe)))
     return out
 
 
@@ -686,13 +976,17 @@ def calcular(p):
     lam, fi = lam.real, fi.real
     o = np.argsort(lam)
     lam, fi = lam[o], fi[:, o]
-    fi = fi / fi[0, :]
+    if not p.get('manual') and lam.min() <= 1e-9 * np.abs(lam).max():
+        raise ValueError('La estructura es inestable: algún nivel no tiene rigidez lateral (revisa articulaciones, '
+                         'rodillos y columnas).')
+    fi = _normalizar_modos(p, fi)
     w = np.sqrt(lam)
     f = w / (2 * np.pi)
     T = 1 / f
     uno = np.ones(n)
     gam = np.array([(fi[:, j] @ M @ uno) / (fi[:, j] @ M @ fi[:, j]) for j in range(n)])
     res.update(A=A, lam=lam, fi=fi, w=w, f=f, T=T, gam=gam, alturas_acum=np.cumsum(p['alturas']))
+    res['n_modos'] = _n_modos(p, res)
 
     # --- Espectro de diseño según el estado límite (dinámico: cm/s^2) ---
     clave = CLAVE_ESTADO[p['estado']]
@@ -707,6 +1001,10 @@ def calcular(p):
         curvas[i], a_min = espectro(pp, q, 1.0, serie, dl=clave == 'DL', clave=clave)
         curvas_g[i], a_min_g = espectro(pp, q, 1 / G, serie, dl=clave == 'DL', clave=clave)
         Sa_modal[:, i] = _interp(T, serie, curvas[i])
+    if p.get('Sa_manual') is not None:  # ordenadas Sa/(Q′R′) dadas por modo (p. ej. las de la hoja)
+        if len(p['Sa_manual']) != n:
+            raise ValueError(f'Hay {len(p["Sa_manual"])} ordenadas Sa por modo y la estructura tiene {n} modos.')
+        Sa_modal[:, 0] = p['Sa_manual']
     res.update(serie=serie, curvas=curvas, curvas_g=curvas_g, Sa_modal=Sa_modal, a_min=a_min, a_min_g=a_min_g,
                Qs=Qs, clave=clave)
 
@@ -716,8 +1014,8 @@ def calcular(p):
     for j in range(n):
         d[:, j] = fi[:, j] * (Sa_modal[j, 0] * gam[j] / lam[j])
         F[:, j] = K @ d[:, j]
-    F_final = combinar(F, w, p['zeta'], p['combinacion'])
-    res.update(d=d, F=F, F_final=F_final, d_comb=combinar(d, w, p['zeta'], p['combinacion']))
+    F_final = _comb(res, F)
+    res.update(d=d, F=F, F_final=F_final, d_comb=_comb(res, d))
 
     # --- Tabla de fuerzas por nivel (dinámico) ---
     h_desc = res['alturas_acum'][::-1]
@@ -726,7 +1024,8 @@ def calcular(p):
     Fu = F_desc * FC
     Vu = np.cumsum(Fu)
     Mvu = h_desc * Fu
-    res['tabla_din'] = dict(nivel=np.arange(n, 0, -1), h=h_desc, F=F_desc, Fu=Fu, Vu=Vu, Mvu=Mvu)
+    res['tabla_din'] = dict(nivel=np.arange(n, 0, -1), h=h_desc, F=F_desc, Fu=Fu, Vu=Vu, Mvu=Mvu,
+                            Mv=_volteo_entrepiso(Fu, p['alturas']))
     res['V_din'] = Vu[-1]
 
     # --- R' y QR' por modo ---
@@ -739,22 +1038,17 @@ def calcular(p):
     res['QR'] = filas
     res['modo_Tmax'] = int(np.argmax(T)) + 1
 
-    # --- Estático ---
+    # --- Estático (apuntes p. 20-21) ---
     if p['cargas'] is not None:
-        h_inv = res['alturas_acum'][::-1]
-        Wi = (p['cargas'] * p['dist_x'])[::-1]
-        hWi = h_inv * Wi
-        Fmax = float(curvas_g[0].max())
-        Fi = Fmax * (h_inv * Wi / hWi.sum()) * Wi.sum()
-        Fi11 = Fi * FC
-        Vacum = np.cumsum(Fi11)
-        Mvu_e = Fi11 * h_inv
-        res['tabla_est'] = dict(nivel=np.arange(n, 0, -1), h=h_inv, Wi=Wi, hWi=hWi, Fi=Fi,
-                                Fu=Fi11, Vu=Vacum, Mvu=Mvu_e)
-        res['Fmax_est'] = Fmax
-        res['V_est'] = Vacum[-1]
-        res['factor_escala'] = Vacum[-1] * p['mult_V'] / res['V_din']
+        res['estatico'] = est = _estatico(p, res)
+        res['tabla_est'] = est['tabla']
+        res['Fmax_est'] = est['C']
+        res['V_est'] = est['V_est']
+        res['factor_escala'] = est['V_est'] * p['mult_V'] / res['V_din']
     res['revision'] = _revisiones(p, res)
+    if 'estatico' in res:
+        _completar_estatico(p, res)
+    res['elastico'] = _elastico(p, res)
     res['normativa'] = _normativa(p, res)
     res['avisos'] = _avisos(res)
     return res
@@ -770,6 +1064,85 @@ def _tabla_txt(headers, filas, fmt='{:>14.6f}'):
         out += ''.join(f'{v:>{w}d}' if isinstance(v, (int, np.integer)) else
                        f'{v:>{w}}' if isinstance(v, str) else f'{v:>{w}.5f}' for v in fila) + '\n'
     return out
+
+
+def tabla_derivacion_estatica(res):
+    """Derivación del coeficiente sísmico estático (apuntes p. 20): (encabezados, filas)."""
+    e, p = res['estatico'], res['p']
+    c_g, a0_g = p['c'] / G, p['a0'] / G
+    enc = ['Concepto', 'Plato (T ≥ Ta)', 'Inicio (T = 0)']
+    if res['clave'] == 'DL':
+        return enc, [['Ordenada elástica Sa (g)', c_g, a0_g], ['Ks', p['Ks'], p['Ks']],
+                     ['C = Sa·Ks (g)', e['C_pl'], e['C_0']]]
+    return enc, [['Q′', float(e['q_pl']), 1.0], ['k2', 0.0, 0.5], ['R = k1·R0 + k2', float(e['R_pl']), float(e['R_0'])],
+                 ["R′", float(e['Rp_pl']), float(e['Rp_0'])],
+                 ["Q′·R′", float(e['q_pl'] * e['Rp_pl']), float(e['Rp_0'])],
+                 ['Ordenada Sa (g)', c_g, a0_g], ["C = Sa / (Q′·R′) (g)", float(e['C_pl']), float(e['C_0'])]]
+
+
+def tabla_comparacion_metodos(res):
+    """Cortante basal, volteo y coeficiente de cada análisis: (encabezados, filas)."""
+    p, el = res['p'], res['elastico']
+    W_T = float(np.sum(p['cargas'])) if p['cargas'] is not None else None
+    t = res['tabla_din']
+
+    def fila(nombre, V, M, obs=''):
+        return [nombre, float(V), float(M), (float(V) / W_T if W_T else np.nan), obs]
+
+    filas = [fila('Dinámico (modal espectral, diseño)', res['V_din'], t['Mvu'].sum(),
+                  f'{res["n_modos"]} de {p["n"]} modos · {p["combinacion"]}')]
+    if 'tabla_est' in res:
+        filas.append(fila('Estático (apuntes)', res['V_est'], res['tabla_est']['Mvu'].sum(),
+                          f'C = {res["Fmax_est"]:.4f} g'))
+        f = res['factor_aplicado']
+        filas.append(fila(f'Dinámico escalado (× {f:.3f})', res['V_din'] * f, t['Mvu'].sum() * f,
+                          'el que se usa para diseñar' if f > 1 else 'sin escalar (el dinámico ya cumple)'))
+    filas.append(fila('Elástico dinámico (sin reducir)', el['V_el'], el['tabla']['Mvu'].sum(), 'Q′ = 1, R′ = 1'))
+    if 'est' in el:
+        filas.append(fila('Elástico estático (sin reducir)', el['est']['V_est'], el['est']['tabla']['Mvu'].sum(),
+                          f'C = {el["est"]["C"]:.4f} g'))
+    return ['Análisis', 'V base (t)', 'Σ Mvu (t·m)', 'V/W (g)', 'Observación'], filas
+
+
+def tabla_niveles_metodos(res):
+    """Fu y Vu por nivel de cada análisis (arriba hacia abajo): (encabezados, filas)."""
+    p, n, el = res['p'], res['p']['n'], res['elastico']
+    t = res['tabla_din']
+    cols = [('Fu dinámico', t['Fu']), ('Vu dinámico', t['Vu'])]
+    if 'tabla_est' in res:
+        te = res['tabla_est']
+        cols += [('Fu estático', te['Fu']), ('Vu estático', te['Vu']), ('Fu dinámico escalado', res['tabla_din_esc']['Fu']),
+                 ('Vu dinámico escalado', res['tabla_din_esc']['Vu'])]
+    cols += [('Fu elástico', el['tabla']['Fu']), ('Vu elástico', el['tabla']['Vu'])]
+    enc = ['Nivel', 'h (m)'] + [c[0] for c in cols]
+    filas = [[int(t['nivel'][i]), float(t['h'][i])] + [float(c[1][i]) for c in cols] for i in range(n)]
+    return enc, filas
+
+
+def tabla_elastico_comparacion(res):
+    """Fuerza y distorsión de diseño contra elásticas, por nivel (arriba hacia abajo): (encabezados, filas)."""
+    p, n, el = res['p'], res['p']['n'], res['elastico']
+    t = res['tabla_din']
+    dis_d = res['revision']['estados'][res['clave']]['dist'][::-1]
+    el_d = el['dist'][::-1]
+    enc = ['Nivel', 'h (m)', 'F diseño (t)', 'F elástica (t)', 'F el. / F dis.', 'γ diseño', 'γ elástica', 'γ el. / γ dis.']
+    filas = [[int(t['nivel'][i]), float(t['h'][i]), float(t['F'][i]), float(el['tabla']['F'][i]),
+              float(el['tabla']['F'][i] / t['F'][i]), float(dis_d[i]), float(el_d[i]),
+              float(el_d[i] / dis_d[i]) if dis_d[i] else np.nan] for i in range(n)]
+    return enc, filas
+
+
+def tabla_distorsiones_estatico(res):
+    """Distorsión estática y dinámica del estado de cálculo por nivel (arriba hacia abajo): (encabezados, filas)."""
+    e, p, n = res['estatico'], res['p'], res['p']['n']
+    enc = ['Nivel', 'h (m)', 'γ estático', 'γ dinámico', 'Límite', 'Cumple (est. / din.)']
+    filas = []
+    for i in range(n - 1, -1, -1):
+        lim = e['limite']
+        cumple = '-' if lim is None else ('Sí' if e['dist'][i] <= lim else 'NO') + ' / ' + ('Sí' if e['dist_din'][i] <= lim else 'NO')
+        filas.append([i + 1, float(p['alturas'][i]), float(e['dist'][i]), float(e['dist_din'][i]),
+                      lim if lim is not None else 'sin definir', cumple])
+    return enc, filas
 
 
 def tabla_distorsiones(res):
@@ -834,6 +1207,30 @@ def texto_normativa(res):
     return s
 
 
+def texto_elastico(res):
+    """Análisis elástico (sin reducir) y comparación de métodos, en texto."""
+    el, p, n = res['elastico'], res['p'], res['p']['n']
+    s = ['\n=== ANÁLISIS ELÁSTICO (sin reducir: Q′ = 1, R′ = 1) ===',
+         f'Se combinan {res["n_modos"]} de {n} modos con {p["combinacion"]}.']
+    s.append(_tabla_txt(['Modo', 'T(s)', 'Sa elást.', 'Sa diseño', 'Sa el./Sa dis.'],
+                        [[j + 1, res['T'][j], el['Sa'][j], res['Sa_modal'][j, 0], el['Sa'][j] / res['Sa_modal'][j, 0]]
+                         for j in range(n)]))
+    t = el['tabla']
+    s.append(_tabla_txt(['Nivel', 'h(m)', 'F(t)', 'Fu(t)', 'Vu(t)', 'Mvu(t-m)'],
+                        zip(t['nivel'], t['h'], t['F'], t['Fu'], t['Vu'], t['Mvu'])))
+    s.append(f'V elástico = {el["V_el"]:.4f} t · V de diseño = {res["V_din"]:.4f} t · '
+             f'V elástico / V diseño = {el["V_el"] / res["V_din"]:.3f}')
+    enc, filas = tabla_elastico_comparacion(res)
+    s.append('\nFuerza y distorsión elásticas contra las de diseño:')
+    s.append(_tabla_txt(enc, filas))
+    enc, filas = tabla_comparacion_metodos(res)
+    s.append('=== COMPARACIÓN DE MÉTODOS ===')
+    s.append(f'{enc[0]:<38}{enc[1]:>12}{enc[2]:>14}{enc[3]:>10}   {enc[4]}')
+    for nombre, V, M, c, obs in filas:
+        s.append(f'{nombre:<38}{V:>12.3f}{M:>14.2f}{c:>10.4f}   {obs}')
+    return s
+
+
 def reporte_texto(res):
     p, n = res['p'], res['p']['n']
     np.set_printoptions(linewidth=200, suppress=True, precision=5)
@@ -884,19 +1281,30 @@ def reporte_texto(res):
                         zip(t['nivel'], t['h'], t['F'], t['Fu'], t['Vu'], t['Mvu'])))
     s.append(f'Σ Mvu = {t["Mvu"].sum():.6f} t-m')
     if 'tabla_est' in res:
-        e = res['tabla_est']
-        s.append('\n=== ESPECTRO DE DISEÑO ESTÁTICO ===')
+        e, se = res['tabla_est'], res['estatico']
+        s.append('\n=== MÉTODO ESTÁTICO (apuntes p. 20-21) ===')
+        s.append('Fi = C · (Wi·hi / Σ Wi·hi) · ΣWi,  C = máx { c/(Q′R′) en el plato ; a0/(Q′R′) en T = 0 }\n')
+        enc, filas = tabla_derivacion_estatica(res)
+        s.append(_tabla_txt(enc, filas))
+        s.append(f'C = {se["C"]:.6f} g · gobierna: {se["gobierna"]}')
         s.append(_tabla_txt(['Nivel', 'h(m)', 'Wi(t)', 'Wihi(t-m)', 'Fi(t)', 'Fu(t)', 'Vu(t)', 'Mvu(t-m)'],
                             zip(e['nivel'], e['h'], e['Wi'], e['hWi'], e['Fi'], e['Fu'], e['Vu'], e['Mvu'])))
         s.append(f'ΣWi = {e["Wi"].sum():.6f}   ΣWihi = {e["hWi"].sum():.6f}   ΣMvu = {e["Mvu"].sum():.6f}')
-        s.append(f'\nValor máximo del espectro estático = {res["Fmax_est"]:.8f} g')
+        s.append(f'Comprobación: ΣFi = C·ΣWi = {se["C"]:.6f}·{se["W_T"]:.4f} = {se["C"] * se["W_T"]:.6f} t '
+                 f'(= {e["Fi"].sum():.6f})')
         s.append(f'V estático  = {res["V_est"]:.6f} t' + (f'  (× {p["mult_V"]:g} = {res["V_est"] * p["mult_V"]:.6f})'
                                                        if p['mult_V'] != 1 else ''))
         s.append(f'V dinámico  = {res["V_din"]:.6f} t')
         s.append(f'FACTOR DE ESCALA = {res["factor_escala"]:.6f}'
                  + ('   (V dinámico ya cumple, factor < 1)' if res['factor_escala'] < 1 else ''))
+        enc, filas = tabla_distorsiones_estatico(res)
+        s.append(f'\nDistorsiones del método estático ({p["estado"]}; desplazamientos × '
+                 + ('1' if res['clave'] == 'DL' else f'FC·Q·R′ = {se["amp"]:.4f}') + '):')
+        s.append(_tabla_txt(enc[:-1], [f[:-1] for f in filas]))
+        s.append('Cumple (estático / dinámico): ' + '; '.join(f'N{f[0]}: {f[-1]}' for f in filas))
     else:
-        s.append('\n(Sin cargas/longitudes: no se calculó el espectro estático ni el factor de escala.)')
+        s.append('\n(Sin cargas/longitudes: no se calculó el método estático ni el factor de escala.)')
+    s.extend(texto_elastico(res))
     s.extend(texto_normativa(res))
     rev = res['revision']
     s.append('\n=== REVISIÓN DE DISTORSIONES (γ = deriva / altura de entrepiso) ===')
@@ -1000,7 +1408,12 @@ def fig_estructura(p):
                                    ec=AZULES[0], lw=0.8, zorder=4))
             ax.text(c['x'] + w / 2 + 0.1, (z0 + z1) / 2, c['texto'], fontsize=7.5, color=AZULES[0], va='center',
                     zorder=6)
-            if c['artic']:
+            if c.get('rodillo'):  # apoyo de rodillos: triángulo sobre dos ruedas
+                ax.add_patch(Polygon([(c['x'], 0), (c['x'] - 0.25, -0.32), (c['x'] + 0.25, -0.32)],
+                                     fc='white', ec=AZULES[0], lw=1, zorder=5))
+                for dx_ in (-0.13, 0.13):
+                    ax.add_patch(Circle((c['x'] + dx_, -0.42), 0.085, fc='white', ec=AZULES[0], lw=1, zorder=5))
+            elif c['artic']:
                 if i == 0:
                     ax.add_patch(Polygon([(c['x'], 0), (c['x'] - 0.25, -0.42), (c['x'] + 0.25, -0.42)],
                                          fc='white', ec=AZULES[0], lw=1, zorder=5))
@@ -1008,6 +1421,8 @@ def fig_estructura(p):
                     ax.add_patch(Circle((c['x'], z0), 0.13, fc='white', ec=AZULES[0], lw=1, zorder=6))
             elif i == 0:
                 ax.add_patch(Rectangle((c['x'] - w / 2 - 0.1, -0.12), w + 0.2, 0.12, fc=AZULES[0], zorder=5))
+            if c.get('artic_sup'):
+                ax.add_patch(Circle((c['x'], z1 - tv), 0.13, fc='white', ec=AZULES[0], lw=1, zorder=6))
         # cargas
         if l['w_bays'] is None:
             ax.text(L / 2, z1 + 0.2, f'W = {l["W"]:g} t', ha='center', fontsize=8, color=AZULES[2], fontweight='bold')
@@ -1073,6 +1488,69 @@ def fig_estructura(p):
     return fig
 
 
+def fig_elastico(res):
+    """Espectro elástico contra el de diseño y fuerzas elásticas contra fuerzas de diseño por nivel."""
+    p, n, el = res['p'], res['p']['n'], res['elastico']
+    fig = Figure(figsize=(10, 4.2), dpi=100)
+    ax = fig.add_subplot(1, 2, 1)
+    ax.plot(res['serie'], el['curva'] / G, color=AZULES[3], lw=2, ls='--', label='Sa elástico (sin reducir)')
+    ax.plot(res['serie'], res['curvas_g'][0], color=AZULES[2], lw=2, label="Sa/(Q′R′) de diseño")
+    ax.plot(res['T'], el['Sa'] / G, 'o', color=AZULES[3])
+    ax.plot(res['T'], res['Sa_modal'][:, 0] / G, 'o', color=AZULES[2])
+    ax.set_xlabel('T (s)')
+    ax.set_ylabel('Sa (g)')
+    ax.set_xlim(0, min(8, max(4.0, 1.3 * p['Tb'] + 1)))
+    ax.set_title('Espectros', color=AZULES[2], fontsize=10.5, fontweight='bold', loc='left')
+    ax.grid(alpha=0.3)
+    ax.legend(loc='upper right', fontsize=8)
+    ax2 = fig.add_subplot(1, 2, 2)
+    t = res['tabla_din']
+    y = np.arange(n)
+    ax2.barh(y + 0.2, el['tabla']['F'][::-1], height=0.38, color=AZULES[3], label='Elástica')
+    ax2.barh(y - 0.2, t['F'][::-1], height=0.38, color=AZULES[2], label='Diseño')
+    ax2.set_yticks(y)
+    ax2.set_yticklabels([f'N{i}' for i in t['nivel'][::-1]])
+    ax2.set_xlabel('Fuerza por nivel F (t)')
+    ax2.set_title('Fuerzas sísmicas por nivel', color=AZULES[2], fontsize=10.5, fontweight='bold', loc='left')
+    ax2.grid(axis='x', alpha=0.3)
+    ax2.legend(fontsize=8)
+    fig.tight_layout()
+    return fig
+
+
+def fig_comparacion(res):
+    """Cortante por nivel (escalera) y Fu por nivel de los distintos análisis."""
+    p, n, el = res['p'], res['p']['n'], res['elastico']
+    zs = np.concatenate([[0.0], np.cumsum(p['alturas'])])
+    t = res['tabla_din']
+    series = [('Dinámico', t['Vu'][::-1], t['Fu'][::-1], AZULES[2], '-')]
+    if 'tabla_est' in res:
+        series.append(('Estático', res['tabla_est']['Vu'][::-1], res['tabla_est']['Fu'][::-1], AZULES[3], '--'))
+        series.append(('Dinámico escalado', res['tabla_din_esc']['Vu'][::-1], res['tabla_din_esc']['Fu'][::-1], AZULES[0], ':'))
+    series.append(('Elástico', el['tabla']['Vu'][::-1], el['tabla']['Fu'][::-1], '#7A9CC6', '-.'))
+    fig = Figure(figsize=(10, 4.4), dpi=100)
+    ax = fig.add_subplot(1, 2, 1)
+    for nombre, V, _, col, ls in series:
+        ax.step(np.concatenate([[V[0]], V]), zs, where='pre', color=col, ls=ls, lw=2, label=nombre)
+    ax.set_xlabel('Cortante Vu (t)')
+    ax.set_ylabel('Altura (m)')
+    ax.set_title('Cortante por entrepiso', color=AZULES[2], fontsize=10.5, fontweight='bold', loc='left')
+    ax.grid(alpha=0.3)
+    ax.legend(fontsize=8)
+    ax2 = fig.add_subplot(1, 2, 2)
+    ancho = 0.8 / len(series)
+    y = np.arange(n)
+    for k, (nombre, _, F, col, _) in enumerate(series):
+        ax2.barh(y + (k - (len(series) - 1) / 2) * ancho, F, height=ancho, color=col, label=nombre)
+    ax2.set_yticks(y)
+    ax2.set_yticklabels([f'N{i}' for i in range(1, n + 1)])
+    ax2.set_xlabel('Fuerza Fu (t)')
+    ax2.set_title('Fuerza por nivel', color=AZULES[2], fontsize=10.5, fontweight='bold', loc='left')
+    ax2.grid(axis='x', alpha=0.3)
+    fig.tight_layout()
+    return fig
+
+
 def fig_distorsiones(res):
     """Distorsión de entrepiso por estado límite contra su límite."""
     p, n = res['p'], res['p']['n']
@@ -1118,11 +1596,13 @@ def fig_fuerzas(res):
     return fig
 
 
-def fig_diagramas(res):
+def fig_diagramas(res, metodo='dinamico'):
     """Diagramas Fu, Vu y Mvu como en las hojas de clase: marco con las fuerzas, escalera de cortantes y volteo."""
     from matplotlib.patches import FancyArrowPatch, Rectangle
     p, n = res['p'], res['p']['n']
-    t = res['tabla_din']
+    t = {'dinamico': res['tabla_din'], 'estatico': res.get('tabla_est'), 'elastico': res['elastico']['tabla'],
+         'escalado': res['tabla_din_esc'] if 'tabla_din_esc' in res else res['tabla_din']}[metodo]
+    sufijo = {'dinamico': '', 'estatico': ' · estático', 'elastico': ' · elástico', 'escalado': ' · dinámico escalado'}[metodo]
     zs = np.concatenate([[0.0], np.cumsum(p['alturas'])])
     H = zs[-1]
     Fu, Vu = t['Fu'][::-1], t['Vu'][::-1]   # de abajo hacia arriba (Vu: cortante en cada entrepiso)
@@ -1135,7 +1615,7 @@ def fig_diagramas(res):
     # --- marco con las fuerzas sísmicas
     ax = fig.add_subplot(gs[0])
     ax.axis('off')
-    ax.set_title('Fu (t)', color=AZULES[2], fontsize=11, fontweight='bold')
+    ax.set_title('Fu (t)' + sufijo, color=AZULES[2], fontsize=11, fontweight='bold')
     for x in xs:
         ax.plot([x, x], [0, H], color=AZULES[0], lw=1.8, zorder=2)
     for z in zs[1:]:
@@ -1247,8 +1727,8 @@ def exportar_excel(res, ruta):
                for r in p['info']], '#,##0.0000')
         if 'geom' in p:
             titulo(ws, 'Columnas (eje, posición y rigidez)')
-            tabla(ws, ['Nivel', 'Eje', 'x (m)', 'Sección (cm)', 'I (cm4)', 'Base articulada', 'k (kg/cm)'],
-                  [[c['nivel'], c['eje'], c['x'], c['texto'], c['I'], 'Sí' if c['artic'] else 'No', c['k']]
+            tabla(ws, ['Nivel', 'Eje', 'x (m)', 'Sección (cm)', 'I (cm4)', 'Apoyo', 'k (kg/cm)'],
+                  [[c['nivel'], c['eje'], c['x'], c['texto'], c['I'], apoyo_txt(c), c['k']]
                    for l in p['geom']['niveles'] for c in l['cols']], '#,##0.0000')
     else:
         titulo(ws, 'Niveles (1 = planta baja)')
@@ -1292,18 +1772,54 @@ def exportar_excel(res, ruta):
     # Estático y factor de escala
     if 'tabla_est' in res:
         ws = hoja('Estático')
-        e = res['tabla_est']
-        titulo(ws, 'Espectro de diseño estático')
+        e, se = res['tabla_est'], res['estatico']
+        titulo(ws, 'Método estático: derivación del coeficiente sísmico (apuntes p. 20)')
+        enc, filas = tabla_derivacion_estatica(res)
+        tabla(ws, enc, filas, '0.0000')
+        tabla(ws, ['Coeficiente C (g)', 'Gobierna', 'Criterio'],
+              [[se['C'], se['gobierna'], 'Apuntes' if se['criterio'] == 'apuntes' else 'Máximo del espectro']], '0.000000')
+        titulo(ws, 'Fuerzas estáticas por nivel')
         tabla(ws, ['Nivel', 'h (m)', 'Wi (t)', 'Wihi (t-m)', 'Fi (t)', 'Fu (t)', 'Vu (t)', 'Mvu (t-m)'],
               zip(e['nivel'], e['h'], e['Wi'], e['hWi'], e['Fi'], e['Fu'], e['Vu'], e['Mvu']), '0.0000')
+        titulo(ws, 'Distorsiones: estático contra dinámico')
+        enc, filas = tabla_distorsiones_estatico(res)
+        tabla(ws, enc, filas, '0.00000')
         titulo(ws, 'Factor de escala')
         tabla(ws, ['Concepto', 'Valor'], [
-            ['Sa/(Q\'R\') máximo estático [g]', res['Fmax_est']],
+            ['Coeficiente sísmico estático C [g]', res['Fmax_est']],
             ['ΣWi (t)', float(e['Wi'].sum())], ['ΣWihi (t-m)', float(e['hWi'].sum())],
             ['ΣMvu (t-m)', float(e['Mvu'].sum())],
             ['V estático (t)', res['V_est']], ['Multiplicador', p['mult_V']],
-            ['V dinámico (t)', res['V_din']], ['FACTOR DE ESCALA', res['factor_escala']]], '0.000000')
+            ['V dinámico (t)', res['V_din']], ['FACTOR DE ESCALA', res['factor_escala']],
+            ['Factor aplicado a las fuerzas dinámicas', res['factor_aplicado']]], '0.000000')
+        titulo(ws, f'Fuerzas dinámicas escaladas (× {res["factor_aplicado"]:.4f})')
+        te = res['tabla_din_esc']
+        tabla(ws, ['Nivel', 'h (m)', 'F (t)', 'Fu (t)', 'Vu (t)', 'Mvu (t-m)'],
+              zip(te['nivel'], te['h'], te['F'], te['Fu'], te['Vu'], te['Mvu']), '0.0000')
         ancho(ws, 30)
+
+    # Elástico y comparación
+    ws = hoja('Elástico')
+    el = res['elastico']
+    titulo(ws, 'Análisis elástico: espectro sin reducir (Q′ = 1, R′ = 1)')
+    tabla(ws, ['Modo', 'T (s)', 'Sa elástico (cm/s²)', 'Sa de diseño (cm/s²)', 'Relación'],
+          [[j + 1, res['T'][j], el['Sa'][j], res['Sa_modal'][j, 0], el['Sa'][j] / res['Sa_modal'][j, 0]] for j in range(n)],
+          '0.0000')
+    te = el['tabla']
+    tabla(ws, ['Nivel', 'h (m)', 'F (t)', 'Fu (t)', 'Vu (t)', 'Mvu (t-m)'],
+          zip(te['nivel'], te['h'], te['F'], te['Fu'], te['Vu'], te['Mvu']), '0.0000')
+    titulo(ws, 'Fuerza y distorsión elásticas contra las de diseño')
+    enc, filas = tabla_elastico_comparacion(res)
+    tabla(ws, enc, filas, '0.00000')
+    ancho(ws, 22)
+    ws = hoja('Comparación')
+    titulo(ws, 'Comparación de métodos')
+    enc, filas = tabla_comparacion_metodos(res)
+    tabla(ws, enc, filas, '0.0000')
+    titulo(ws, 'Fu y Vu por nivel')
+    enc, filas = tabla_niveles_metodos(res)
+    tabla(ws, enc, filas, '0.0000')
+    ancho(ws, 26)
 
     # Normativa
     ws = hoja('Normativa')
@@ -1356,7 +1872,9 @@ def exportar_excel(res, ruta):
     # Gráficas
     ws = hoja('Gráficas')
     fila = 1
-    figs = ([fig_estructura(p)] if 'geom' in p else []) + [fig_modal(res), fig_espectro(res), fig_diagramas(res), fig_fuerzas(res), fig_distorsiones(res)]
+    figs = (([fig_estructura(p)] if 'geom' in p else []) + [fig_modal(res), fig_espectro(res), fig_diagramas(res)]
+            + ([fig_diagramas(res, 'estatico')] if 'tabla_est' in res else [])
+            + [fig_elastico(res), fig_comparacion(res), fig_fuerzas(res), fig_distorsiones(res)])
     for fig in figs:
         buf = io.BytesIO()
         fig.savefig(buf, format='png')
@@ -1423,6 +1941,37 @@ EJEMPLOS_MODELO = {
         K='300 -150 0 0\n-150 225 -75 0\n0 -75 150 -75\n0 0 -75 75', M='3 0 0 0\n0 3 0 0\n0 0 1.5 0\n0 0 0 1.5',
         subgrupo='A2', intensidad='Base de diseño', material='Concreto', Q='2', k1='0.8',
         a0='80', c='500', Ta='0.4', Tb='1.6', k='0.605', Ts='0.53', factor_Fu='1.1', mult_V='1'),
+    'Ejemplo 7 (hoja 21: método estático, estructura irregular)': dict(
+        modo='matrices', unidades='t, cm', alturas='3 3 3 3 3', pesos='400 400 400 400 300',
+        K='3000 -1500 0 0 0\n-1500 3000 -1500 0 0\n0 -1500 3000 -1500 0\n0 0 -1500 3000 -1500\n0 0 0 -1500 1500',
+        M='0.40775 0.40775 0.40775 0.40775 0.30581',
+        subgrupo='B1', intensidad='Base de diseño', material='Concreto', Q='2', k1='0.8', zona='III',
+        regularidad='Irregular', a0='224', c='975', Ta='0.8', Tb='1.7', k='0.445', Ts='1.05', factor_Fu='1.1',
+        mult_V='1'),
+    # Examen del 29-oct-2025, problema 1: marco de concreto con apoyos mixtos (empotrado, articulado, empotrado y
+    # rodillos), secciones distintas por columna, E en T/cm², grupo A y sismo máximo considerado (MC) -> seguridad de vida.
+    # Los parámetros del espectro SASID son ilustrativos: el examen los pide de las coordenadas.
+    'Ejemplo 8 (examen: apoyos mixtos con rodillo, grupo A, MC)': dict(
+        crujias='4 4 2', vigas='rigidas', material='Concreto', direccion='X', unidad_E='t/cm²',
+        niveles=[dict(h='3', ejes='todos', seccion='20x40 30x30 20x40 30x60', artic='2', rod='4', cargas='2', W=''),
+                 dict(h='3', ejes='todos', seccion='20x40 30x30 20x40 30x60', artic='', rod='', cargas='1', W='')],
+        E='158', fc='', subgrupo='A1', intensidad='Infrecuente', Q='2', k1='0.8', zeta='0.05',
+        a0='300', c='1300', Ta='0.8', Tb='1.7', k='0.445', Ts='1.0', factor_Fu='1.1', mult_V='1'),
+    # Examen del 29-oct-2025, problema 2: nave industrial. Se mide T = 0.17 s y se pide el peso total (2a); luego la
+    # fuerza sísmica estática para operación continua / limitación de daño (2b). Perfil IR 305x21.1 con el eje fuerte en X.
+    'Ejemplo 9 (examen: nave con periodo medido, operación continua)': dict(
+        crujias='5 7 5', vigas='rigidas', material='Acero', direccion='X', T_medido='0.17',
+        niveles=[dict(h='5.3', ejes='todos', seccion='I:3688/A:26.8/I2:98', artic='', rod='', cargas='', W='')],
+        E='2100000', fc='', subgrupo='B1', intensidad='Frecuente', Q='1', k1='1.0', zeta='0.05',
+        a0='224', c='975', Ta='0.8', Tb='1.7', k='0.445', Ts='1.0', Ks='0.25', factor_Fu='1.1', mult_V='1'),
+    'Ejemplo 10 (examen: marco mixto, concreto abajo y acero IR arriba)': dict(
+        crujias='5 4 4.5', vigas='flexibles', material='Concreto', direccion='X', unidad_E='t/cm²', E='221.35944',
+        niveles=[dict(h='4.5', ejes='todos', seccion='50x50', viga='25x50', artic='2 3', cargas='1.4', E_col=''),
+                 dict(h='3.5', ejes='todos', seccion='50x50', viga='25x50', cargas='2', E_col=''),
+                 dict(h='3.5', ejes='todos', seccion='50x50', viga='25x50', cargas='2', E_col=''),
+                 dict(h='3.5', ejes='todos', seccion='I:3688/A:26.8/I2:98', viga='25x50', cargas='1.8', E_col='2100')],
+        fc='', subgrupo='B1', intensidad='Base de diseño', Q='2', k1='1.0', zeta='0.05',
+        a0='114', c='320', Ta='0.9', Tb='2.2', k='0.390', Ts='0.5', factor_Fu='1.1', mult_V='1'),
 }
 
 

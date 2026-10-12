@@ -10,6 +10,8 @@ Sintaxis (dimensiones en cm; varias secciones separadas por espacio):
     T:50x10x60x15  sección T: ancho de ala x espesor de ala x peralte total x espesor de alma
     I:260000/A:1250            propiedades dadas: inercia (cm4) y área (cm2); opcional /I2:45000
                                para la inercia en la dirección Y
+    cualquiera@90              la misma sección girada 90° (intercambia las direcciones X y Y):
+                               25x50@90, I:3688/A:26.8/I2:98@90
 
 Para una VIGA, el peralte (h) es la dimensión vertical y se usa la inercia en X.
 """
@@ -24,7 +26,7 @@ _PERFIL = re.compile(rf'^([ht]):{_N}x{_N}x{_N}x{_N}$')
 _GEN = re.compile(rf'^i:{_N}/a:{_N}(?:/i2:{_N})?$')
 
 AYUDA_SECCIONES = ('Rectangular: 25x50 (b x h, h en la dirección X) · hueca: 25x50e3 · circular: Ø60 · tubo: Ø60e1.5 · '
-                   'perfil I armado: H:30x2x50x1 · T: T:50x10x60x15 · propiedades: I:260000/A:1250')
+                   'perfil I armado: H:30x2x50x1 · T: T:50x10x60x15 · propiedades: I:260000/A:1250 · girar 90°: 25x50@90')
 
 
 def _tokens(texto):
@@ -48,6 +50,14 @@ def _sec(tipo, texto, A, Ix, Iy, dx, dy, **forma):
     return dict(tipo=tipo, texto=texto, A=A, Ix=Ix, Iy=Iy, dx=dx, dy=dy, forma=forma)
 
 
+def _girar(sec):
+    """La misma sección girada 90° en planta: intercambia las inercias y las dimensiones X/Y."""
+    f = dict(sec['forma'])
+    if sec['tipo'] in ('rect', 'hrect'):
+        f['b'], f['h'] = f['h'], f['b']
+    return dict(sec, texto=sec['texto'] + '@90', Ix=sec['Iy'], Iy=sec['Ix'], dx=sec['dy'], dy=sec['dx'], forma=f)
+
+
 def parse_secciones(texto, nombre):
     """Devuelve una lista de secciones (dict con A, Ix, Iy, dx, dy, texto y datos para dibujarla)."""
     t = str(texto).lower().replace('×', 'x').replace('ø', 'ø')
@@ -56,6 +66,9 @@ def parse_secciones(texto, nombre):
     t = re.sub(r':\s+', ':', t)
     out = []
     for tok in _tokens(t):
+        rot = bool(re.search(r'@(90|r)$', tok))
+        if rot:
+            tok = tok.rsplit('@', 1)[0]
         if m := _RECT.match(tok):
             b, h = float(m.group(1)), float(m.group(2))
             e = float(m.group(3)) if m.group(3) else None
@@ -101,6 +114,8 @@ def parse_secciones(texto, nombre):
             out.append(_sec('gen', f'I:{I:g}/A:{A:g}', A, I, I2, lado, lado))
         else:
             raise ValueError(f'{nombre}: la sección "{tok}" no es válida. {AYUDA_SECCIONES}')
+        if rot:
+            out[-1] = _girar(out[-1])
     if not out:
         raise ValueError(f'{nombre}: falta la sección.')
     return out

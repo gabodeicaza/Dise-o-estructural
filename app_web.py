@@ -16,31 +16,44 @@ from ame_secciones import AYUDA_SECCIONES
 NAVY, AZUL_OSC, AZUL, AZUL_MED, AZUL_CLARO, PALE, BG = (
     '#0B2545', '#13315C', '#1D4E89', '#3E7CB1', '#81A4CD', '#DCE9F7', '#F1F6FC')
 
-COLS = ['h', 'ejes', 'seccion', 'viga', 'artic', 'cargas', 'W']
+COLS = ['h', 'ejes', 'seccion', 'E_col', 'viga', 'artic', 'rod', 'art_sup', 'cargas', 'W']
 ETIQ = {'h': 'h entrepiso (m)', 'ejes': 'Columnas en ejes', 'seccion': 'Sección de columnas (cm)',
-        'viga': 'Viga (cm)', 'artic': 'Articuladas en la base (ejes)', 'cargas': 'Carga por crujía (t/m)',
+        'E_col': 'E de las columnas', 'viga': 'Viga (cm)', 'artic': 'Articuladas en la base (ejes)', 'rod': 'Rodillos en la base (ejes)',
+        'art_sup': 'Articuladas arriba (ejes)', 'cargas': 'Carga por crujía (t/m)',
         'W': 'o Peso W (t)'}
 AYUDA = {'h': 'Altura del entrepiso en metros.',
          'ejes': 'Ejes que tienen columna en este nivel: "todos" (o vacío), "1 3" o "1-3".',
-         'seccion': AYUDA_SECCIONES + '. Una sola para todo el nivel o una por columna: "25x50 Ø40 25x50".',
+         'seccion': AYUDA_SECCIONES + '. Una sola para todo el nivel o una por columna: "25x50 Ø40 25x50". '
+                    'Para girar una sección 90° (otra orientación en planta) agrega @90: "20x40@90".',
          'viga': 'Viga de este piso (solo con vigas flexibles). b x h con h vertical: 30x60. También T:50x10x60x15 o H:...',
          'artic': 'Ejes cuya columna está articulada en su base (normalmente solo en el nivel 1): "2". Vacío = todas empotradas.',
-         'cargas': 'Un valor para todas las crujías o uno por crujía: "4.7 3.2".',
+         'E_col': 'Solo si las columnas de este nivel son de otro material: su E en la unidad de E (o "acero"). '
+                  'Vacío = el E general, que usan las vigas. Ej.: 2100 con t/cm².',
+         'rod': 'Ejes con apoyo de rodillos en la base (solo nivel 1): no transmite cortante, la columna no aporta '
+                'rigidez lateral. Ej.: "4".',
+         'art_sup': 'Ejes con la columna articulada en su parte superior (3EI/h³ si la base es empotrada).',
+         'cargas': 'Un valor para todas las crujías o uno por crujía: "4.7 3.2". Vacío si das el periodo medido.',
          'W': 'Opcional: peso total del nivel; sustituye a la carga por crujía.'}
 SUBGRUPOS = {'B2': 'B2 · riesgo I (ASCE 7)', 'B1': 'B1 · riesgo II', 'A2': 'A2 · riesgo III', 'A1': 'A1 · riesgo IV'}
 VIGAS = ['Rígidas (marco de cortante)', 'Flexibles (marco plano)']
 CLASES = ["Clase 1 (14000·√f'c)", "Clase 2 (8000·√f'c)"]
 MODOS = ['Por secciones y cargas', 'Matrices K y M (ya calculadas)']
 UNIDADES = ['kg, cm', 't, cm']
+CRITERIOS = ['Apuntes: el mayor entre el plato y T = 0', 'Máximo del espectro de diseño (como el código de MATLAB)']
+MODOS_OPC = ['Todos los modos', 'Criterio de los apuntes (95 % de masa o T ≥ 0.4 s)', 'Los primeros N']
+RDIST = ['Del plato (k2 = 0, como en tus hojas)', 'Del periodo fundamental (estricto)']
+NORM_OPC = ['Primer nivel = 1 (apuntes)', 'Último nivel (azotea) = 1', 'Valor máximo = 1', 'Masa unitaria (φᵀMφ = 1)']
 CLAVES_MANUAL = ['K_txt', 'M_txt', 'alturas_txt', 'pesos_txt']
-SOLO_SECCIONES = ('crujias', 'E', 'fc', 'clase', 'vigas', 'direccion')  # no aplican al modo de matrices
+SOLO_SECCIONES = ('crujias', 'E', 'fc', 'clase', 'vigas', 'direccion', 'unidad_E', 'unidad_fc', 'unidad_seccion')  # no aplican al modo de matrices
 ESPECTRO = ['a0', 'c', 'Ta', 'Tb', 'k', 'Ts']
 DEFECTOS = dict(crujias='', subgrupo='B1', intensidad='Base de diseño', direccion='X', estado='Automático', Ks='0.25',
                 Q='4', k1='1.0', combinacion='SRSS', zeta='', material='Concreto', E='', fc='', clase=CLASES[0],
                 vigas=VIGAS[0], factor_Fu='1.1', mult_V='1', lim_dl='0.004', lim_sv='0.03', lim_oi='0.005',
                 irreg=[], fuerte_torsion=False, fuerte_elev=False, zona='', regularidad='Regular', b_planta='',
                 R1_otros=True, proyecto='', autor='', modo=MODOS[0], K_txt='', M_txt='', unidades=UNIDADES[0],
-                alturas_txt='', pesos_txt='', **{k: '' for k in ESPECTRO})
+                alturas_txt='', pesos_txt='', criterio_estatico=CRITERIOS[0], unidad_espectro='cm/s²',
+                unidad_E='kg/cm²', unidad_fc='kg/cm²', unidad_seccion='cm', modos=MODOS_OPC[0], modos_n='',
+                R_dist=RDIST[0], Sa_modos='', e_s='', norm_modal=NORM_OPC[0], T_medido='', **{k: '' for k in ESPECTRO})
 CAMPOS = list(DEFECTOS)
 EJEMPLOS = ame.EJEMPLOS_MODELO
 
@@ -88,13 +101,15 @@ def cargar(d):
             continue  # un ejemplo con K y M no pisa los datos de secciones que ya capturaste
         st.session_state[k] = d.get(k, DEFECTOS[k])
     st.session_state['estado'] = d.get('estado') if d.get('estado') in ame.ESTADOS else 'Automático'
+    st.session_state['intensidad'] = ntc.normalizar_intensidad(st.session_state['intensidad'])
+    fuente = ntc.espectro_fuente(st.session_state['intensidad'])  # frecuente y ocasional usan el de base de diseño
     esp = {k: dict(v) for k, v in (d.get('espectros') or {}).items()}
     if not esp:  # campos sueltos del formato anterior: pertenecen a la intensidad elegida
-        esp = {st.session_state['intensidad']: {k: str(d.get(k, '')) for k in ESPECTRO}}
+        esp = {fuente: {k: str(d.get(k, '')) for k in ESPECTRO}}
     st.session_state['_esp'] = esp
     st.session_state['_int_prev'] = st.session_state['intensidad']
     for k in ESPECTRO:
-        st.session_state[k] = esp.get(st.session_state['intensidad'], {}).get(k, '')
+        st.session_state[k] = (esp.get(fuente) or esp.get(st.session_state['intensidad']) or {}).get(k, '')
     if isinstance(d.get('niveles'), list):
         st.session_state['df'] = df_de(d['niveles'])
     st.session_state['ver'] = st.session_state.get('ver', 0) + 1
@@ -103,10 +118,10 @@ def cargar(d):
 def cambiar_intensidad():
     """Guarda el espectro de la intensidad anterior y muestra el de la nueva."""
     esp = st.session_state['_esp']
-    esp[st.session_state['_int_prev']] = {k: st.session_state[k] for k in ESPECTRO}
+    esp[ntc.espectro_fuente(st.session_state['_int_prev'])] = {k: st.session_state[k] for k in ESPECTRO}
     nueva = st.session_state['intensidad']
     for k in ESPECTRO:
-        st.session_state[k] = esp.get(nueva, {}).get(k, '')
+        st.session_state[k] = esp.get(ntc.espectro_fuente(nueva), {}).get(k, '')
     st.session_state['_int_prev'] = nueva
 
 
@@ -134,7 +149,9 @@ with st.sidebar:
     st.selectbox('Grupo / subgrupo', list(SUBGRUPOS), key='subgrupo', format_func=SUBGRUPOS.get,
                  help='Grupo B: B1 y B2. Grupo A: A1 y A2. El riesgo equivale a la categoría de ASCE 7.')
     st.selectbox('Intensidad sísmica', ntc.INTENSIDADES, key='intensidad', on_change=cambiar_intensidad,
-                 help='Normalmente se usa el sismo base de diseño. El espectro SASID se guarda por intensidad.')
+                 format_func=lambda i: ntc.ETIQUETA_INTENSIDAD.get(i, i),
+                 help='Normalmente se usa el sismo base de diseño. MC = máximo considerado = infrecuente. Frecuente y '
+                      'ocasional usan el espectro de base de diseño × Ks (× 2.5 Ks en ocasional).')
     grupo_sel = ntc.SUBGRUPOS[st.session_state['subgrupo']]
     objetivo = ntc.objetivo_diseno(grupo_sel, st.session_state['intensidad'])
     st.markdown(f'<div class="objetivo"><b>{objetivo["desempeno"]}</b><br>{objetivo["espectro"]}<br>'
@@ -152,12 +169,13 @@ with st.sidebar:
              help='En una sección b x h, h está en la dirección X y b en la Y. Con Y se usa la inercia respecto al otro eje.',
              disabled=manual)
 
-    st.markdown(f'### Espectro SASID · {st.session_state["intensidad"]}')
+    st.markdown(f'### Espectro SASID · {ntc.espectro_fuente(st.session_state["intensidad"])}')
     c1, c2 = st.columns(2)
     for i, (et, k) in enumerate([('a0 (cm/s²)', 'a0'), ('c (cm/s²)', 'c'), ('Ta (s)', 'Ta'),
                                  ('Tb (s)', 'Tb'), ('k', 'k'), ('Ts (s)', 'Ts')]):
         (c1 if i % 2 == 0 else c2).text_input(et, key=k)
-    st.caption('Captura el espectro de la intensidad elegida; el de cada intensidad se conserva al cambiar.')
+    st.caption('Captura el espectro de base de diseño y el infrecuente (MC); se conservan al cambiar de intensidad. '
+               'En frecuente y ocasional se usa el de base de diseño.')
 
     st.markdown('### Análisis')
     st.selectbox('Combinación modal', list(COMBINACIONES), key='combinacion',
@@ -193,11 +211,35 @@ with st.sidebar:
                       'el espectro de SASID debe pedirse con el mismo ζ.')
         st.checkbox('R = 1 en materiales distintos del concreto', key='R1_otros',
                     help='Los apuntes indican R = 1 para otros materiales.')
+        st.selectbox('Coeficiente del método estático', CRITERIOS, key='criterio_estatico',
+                     help='Los apuntes toman el mayor entre c/(Q′R′) en el plato y a0/(Q′R′) en T = 0. '
+                          'El código de MATLAB toma el máximo del espectro de diseño completo.')
         st.selectbox('Zona geotécnica', ['', 'I', 'II', 'III'], key='zona',
                      format_func=lambda z: z or '—', help='Para verificar si el método estático es aplicable.')
         st.radio('Regularidad', ['Regular', 'Irregular'], key='regularidad', horizontal=True)
         st.text_input('Dimensión de la planta perpendicular al análisis, b (m)', key='b_planta',
                       help='Para calcular la excentricidad accidental y los momentos torsionantes.')
+
+    with st.expander('Unidades y opciones avanzadas'):
+        st.radio('Unidades del espectro (a0 y c)', ['cm/s²', 'g'], key='unidad_espectro', horizontal=True,
+                 help='Tus hojas dan el espectro en g y en cm/s². Si lo capturas en g se convierte (× 981).')
+        c1, c2 = st.columns(2)
+        c1.selectbox('Unidad de E', list(ame.FACTOR_ESFUERZO), key='unidad_E', disabled=manual)
+        c2.selectbox("Unidad de f'c", list(ame.FACTOR_ESFUERZO), key='unidad_fc', disabled=manual)
+        st.radio('Unidades de las secciones', ['cm', 'm'], key='unidad_seccion', horizontal=True, disabled=manual)
+        st.selectbox('Modos que se combinan', MODOS_OPC, key='modos',
+                     help='Para ejercicios que piden usar solo algunos modos. Los apuntes piden el 95 % de la masa '
+                          'efectiva o todos los modos con T ≥ 0.4 s.')
+        st.text_input('N (si eliges "Los primeros N")', key='modos_n')
+        st.selectbox('R′ para distorsiones y cimentación', RDIST, key='R_dist',
+                     help='En tus hojas QR′ = 4(2) = 8: R′ del plato con k2 = 0. La norma indica el periodo fundamental.')
+        st.text_input('Ordenadas Sa/(Q′R′) por modo (opcional)', key='Sa_modos',
+                      help='Si el ejercicio ya da las aceleraciones espectrales de cada modo (por ejemplo "0.0894 0.0879 '
+                           '0.0888" en g), se usan en lugar de las del espectro. Van en las unidades del espectro.')
+        st.selectbox('Normalización de las formas modales', NORM_OPC, key='norm_modal',
+                     help='Solo cambia cómo se presentan los modos (y γ); las fuerzas y los periodos no cambian.')
+        st.text_input('Excentricidad estática e_s (m, opcional)', key='e_s',
+                      help='Con la dimensión b de la planta calcula e = e_s ± e_a para los momentos torsionantes.')
 
     st.markdown('### Límites de distorsión')
     st.caption('Los γmáx dependen del sistema (tablas 4.3.x de la norma): confírmalos.')
@@ -210,6 +252,10 @@ with st.sidebar:
 st.radio('¿Cómo defines la estructura?', MODOS, key='modo', horizontal=True,
          help='Por secciones y cargas el programa arma K y M. Si el ejercicio ya te da K y M, usa las matrices.')
 manual = st.session_state['modo'] == MODOS[1]
+st.text_input('Periodo fundamental medido T₁ (s), opcional', key='T_medido',
+              help='Si el problema da el periodo medido y pide el peso total: deja vacías las cargas, escribe el periodo '
+                   'y el programa escala las masas para que T₁ sea ese valor. Si das cargas, se usan como distribución '
+                   'relativa entre niveles.')
 
 with st.expander('Matrices K y M (ya calculadas)', expanded=manual):
     c1, c2 = st.columns(2)
@@ -246,7 +292,7 @@ datos.update(K=st.session_state['K_txt'], M=st.session_state['M_txt'], alturas=s
              pesos=st.session_state['pesos_txt'])
 datos['vigas'] = 'flexibles' if flexibles else 'rigidas'
 esp = {k: dict(v) for k, v in st.session_state['_esp'].items()}
-esp[st.session_state['intensidad']] = {k: st.session_state[k] for k in ESPECTRO}
+esp[ntc.espectro_fuente(st.session_state['intensidad'])] = {k: st.session_state[k] for k in ESPECTRO}
 datos['espectros'] = esp
 datos['niveles'] = [{k: ('' if v is None or (isinstance(v, float) and np.isnan(v)) else str(v)) for k, v in fila.items()}
                     for _, fila in edit.dropna(how='all').iterrows()]
@@ -287,6 +333,11 @@ st.markdown('### Resultados')
 st.markdown(f'<div class="objetivo"><b>Grupo {p["subgrupo"]} · sismo {p["intensidad"].lower()}</b> → '
             f'{p["objetivo"]["desempeno"]} · estado de cálculo: <b>{p["estado"]}</b><br>'
             f'<small>{p["objetivo"]["espectro"]} · {p["objetivo"]["revisa"]}</small></div>', unsafe_allow_html=True)
+aj = p.get('ajuste_periodo')
+if aj:
+    st.success(f'**Peso total del marco: W = {aj["W_total"]:.3f} t** (masa total {aj["m_total"]:.4f} kg·s²/cm), obtenido '
+               f'del periodo medido T₁ = {aj["T_medido"]:g} s. Con los pesos dados el periodo calculado era '
+               f'{aj["T_calculado"]:.4f} s.')
 alertas = [t for s, t in res['avisos'] if s == 'alerta']
 avisos = [t for s, t in res['avisos'] if s == 'aviso']
 infos = [t for s, t in res['avisos'] if s == 'info']
@@ -304,7 +355,7 @@ if not res['avisos']:
 k = st.columns(4)
 kpi(k[0], 'PERIODO FUNDAMENTAL', f'{res["T"][0]:.4f} s', f'{n} niveles · γ₁ = {res["gam"][0]:.3f}')
 kpi(k[1], 'CORTANTE BASAL DINÁMICO', f'{res["V_din"]:.3f} t', f'Σ Mvu = {res["tabla_din"]["Mvu"].sum():.2f} t·m')
-kpi(k[2], 'CORTANTE BASAL ESTÁTICO', f'{res["V_est"]:.3f} t', f'Sa/(Q′R′) máx = {res["Fmax_est"]:.4f} g')
+kpi(k[2], 'CORTANTE BASAL ESTÁTICO', f'{res["V_est"]:.3f} t', f'C = {res["Fmax_est"]:.4f} g · gobierna {res["estatico"]["gobierna"].split(" (")[0]}')
 kpi(k[3], 'FACTOR DE ESCALA', f'{fe:.4f}', 'Escalar fuerzas dinámicas' if fe > 1 else 'El dinámico ya cumple (≤ 1)')
 st.write('')
 
@@ -339,18 +390,99 @@ def mostrar(df, dec=4):
                                 if pd.api.types.is_numeric_dtype(df[c])})
 
 
-tabs = st.tabs(['Fuerzas por nivel', 'Revisiones', 'Normativa', 'Modos', 'Detalle completo', 'Formas modales', 'Espectro'])
-with tabs[0]:
+NOMBRES = ['Resumen', 'Fuerzas por nivel', 'Análisis estático', 'Análisis elástico', 'Revisiones', 'Normativa', 'Modos',
+           'Detalle completo', 'Formas modales', 'Espectro']
+tab = dict(zip(NOMBRES, st.tabs(NOMBRES)))
+with tab['Resumen']:
+    est_txt = ('estático ' + ('aplicable' if nm['estatico']['aplica'] else 'no aplicable (referencia)')) if 'tabla_est' in res else ''
+    st.markdown(f'**Análisis de diseño: {p["estado"]}** · {res["n_modos"]} de {n} modos · {p["combinacion"]}'
+                f' · {est_txt} · elástico sin reducir')
+    enc, filas = ame.tabla_comparacion_metodos(res)
+    mostrar(pd.DataFrame(filas, columns=enc), 3)
+    if fe > 1:
+        st.info(f'V estático / V dinámico = {fe:.4f} > 1: para diseñar se usan las fuerzas dinámicas escaladas por ese factor.')
+    st.pyplot(ame.fig_comparacion(res))
+    st.markdown('**Fu y Vu por nivel de cada análisis**')
+    enc, filas = ame.tabla_niveles_metodos(res)
+    mostrar(pd.DataFrame(filas, columns=enc), 3)
+with tab['Fuerzas por nivel']:
     st.pyplot(ame.fig_diagramas(res))
     t = res['tabla_din']
     st.markdown('**Análisis dinámico (modal espectral)**')
     mostrar(pd.DataFrame({'Nivel': t['nivel'], 'h (m)': t['h'], 'F (t)': t['F'], 'Fu (t)': t['Fu'],
-                          'Vu (t)': t['Vu'], 'Mvu (t·m)': t['Mvu']}))
-    e = res['tabla_est']
-    st.markdown('**Análisis estático (para el factor de escala)**')
+                          'Vu (t)': t['Vu'], 'Mvu (t·m)': t['Mvu'], 'M volteo entrepiso (t·m)': t['Mv']}))
+    if res['factor_aplicado'] > 1:
+        te = res['tabla_din_esc']
+        st.markdown(f'**Fuerzas dinámicas escaladas (× {res["factor_aplicado"]:.4f})**')
+        mostrar(pd.DataFrame({'Nivel': te['nivel'], 'h (m)': te['h'], 'F (t)': te['F'], 'Fu (t)': te['Fu'],
+                              'Vu (t)': te['Vu'], 'Mvu (t·m)': te['Mvu'], 'M volteo entrepiso (t·m)': te['Mv']}))
+        st.caption('El factor de escala (V estático / V dinámico) es mayor que 1: estas son las fuerzas para el diseño.')
+    else:
+        st.caption('El factor de escala es menor o igual que 1: las fuerzas dinámicas ya cumplen y no se escalan.')
+    st.caption('M volteo entrepiso = momento de volteo en la base de ese entrepiso (Σ Fu·(z − z de la base)); el del '
+               'primer entrepiso es el momento de volteo total en la cimentación.')
+with tab['Análisis estático']:
+    e, se, ap = res['tabla_est'], res['estatico'], nm['estatico']
+    if ap['aplica']:
+        st.success('El método estático es aplicable' + (f' (H = {ap["H"]:.1f} m ≤ {ap["limite"]:g} m)' if ap['limite'] else '') + '.')
+    else:
+        st.warning('Según los apuntes el método estático **no aplica** (grupo A o altura excedida): '
+                   'el factor de escala es solo de referencia.')
+    st.markdown('**Coeficiente sísmico** · C = máx { c/(Q′R′) en el plato ; a₀/(Q′R′) en T = 0 }')
+    enc, filas = ame.tabla_derivacion_estatica(res)
+    mostrar(pd.DataFrame(filas, columns=enc))
+    c = st.columns(4)
+    c[0].metric('C (g)', f'{se["C"]:.5f}')
+    c[1].metric('Gobierna', se['gobierna'].split(' (')[0].replace('el ', '', 1))
+    c[2].metric('ΣW (t)', f'{se["W_T"]:.2f}')
+    c[3].metric('V estático (t)', f'{res["V_est"]:.3f}')
+    st.pyplot(ame.fig_diagramas(res, 'estatico'))
+    st.markdown('**Fuerzas por nivel**  ·  Fᵢ = C·(Wᵢhᵢ / ΣWᵢhᵢ)·ΣW')
     mostrar(pd.DataFrame({'Nivel': e['nivel'], 'h (m)': e['h'], 'Wi (t)': e['Wi'], 'Wihi (t·m)': e['hWi'],
-                          'Fi (t)': e['Fi'], 'Fu (t)': e['Fu'], 'Vu (t)': e['Vu'], 'Mvu (t·m)': e['Mvu']}))
-with tabs[1]:
+                          'Fi (t)': e['Fi'], 'Fu (t)': e['Fu'], 'Vu (t)': e['Vu'], 'Mvu (t·m)': e['Mvu'],
+                          'M volteo entrepiso (t·m)': e['Mv']}))
+    st.caption(f'Comprobación: ΣFᵢ = {e["Fi"].sum():.4f} t = C·ΣW = {se["C"]:.5f} × {se["W_T"]:.2f} · '
+               f'ΣMvu = {e["Mvu"].sum():.2f} t·m')
+    st.markdown(f'**Distorsiones por el método estático** ({p["estado"]})')
+    enc, filas = ame.tabla_distorsiones_estatico(res)
+    mostrar(pd.DataFrame(filas, columns=enc), 5)
+    st.caption('Desplazamientos de K⁻¹·Fᵢ × ' + ('1 (limitación de daños: sin FC ni Q·R′)' if res['clave'] == 'DL'
+               else f'FC·Q·R′ = {se["amp"]:.4f} (R′ del plato)') + ', comparados con el análisis dinámico.')
+    st.markdown('**Factor de escala**')
+    c = st.columns(4)
+    c[0].metric('V estático (t)', f'{res["V_est"] * p["mult_V"]:.3f}')
+    c[1].metric('V dinámico (t)', f'{res["V_din"]:.3f}')
+    c[2].metric('Factor V est. / V din.', f'{fe:.4f}')
+    c[3].metric('Se aplica', f'× {res["factor_aplicado"]:.4f}' if res['factor_aplicado'] > 1 else 'No hace falta')
+with tab['Análisis elástico']:
+    el = res['elastico']
+    st.info('Espectro **sin reducir** (Q′ = 1, R′ = 1), el "espectro transparente" de los apuntes: la demanda que tendría la '
+            'estructura si no se redujera por ductilidad ni sobrerresistencia. Mismo modelo, modos y combinación.')
+    c = st.columns(4)
+    c[0].metric('V elástico (t)', f'{el["V_el"]:.3f}')
+    c[1].metric('V de diseño (t)', f'{res["V_din"]:.3f}')
+    c[2].metric('V el. / V diseño', f'{el["V_el"] / res["V_din"]:.3f}')
+    c[3].metric('Σ Mvu elástico (t·m)', f'{el["tabla"]["Mvu"].sum():.2f}')
+    st.pyplot(ame.fig_elastico(res))
+    st.markdown('**Ordenadas espectrales por modo**')
+    mostrar(pd.DataFrame({'Modo': np.arange(1, n + 1), 'T (s)': res['T'], 'Sa elástico (cm/s²)': el['Sa'],
+                          'Sa de diseño (cm/s²)': res['Sa_modal'][:, 0], 'Relación': el['Sa'] / res['Sa_modal'][:, 0]}))
+    st.pyplot(ame.fig_diagramas(res, 'elastico'))
+    te = el['tabla']
+    st.markdown('**Fuerzas elásticas por nivel (dinámico)**')
+    mostrar(pd.DataFrame({'Nivel': te['nivel'], 'h (m)': te['h'], 'F (t)': te['F'], 'Fu (t)': te['Fu'],
+                          'Vu (t)': te['Vu'], 'Mvu (t·m)': te['Mvu'], 'M volteo entrepiso (t·m)': te['Mv']}))
+    if 'est' in el:
+        ee = el['est']['tabla']
+        st.markdown(f'**Fuerzas elásticas por el método estático** · C = máx(c, a₀) = {el["est"]["C"]:.4f} g')
+        mostrar(pd.DataFrame({'Nivel': ee['nivel'], 'h (m)': ee['h'], 'Wi (t)': ee['Wi'], 'Fi (t)': ee['Fi'],
+                              'Fu (t)': ee['Fu'], 'Vu (t)': ee['Vu'], 'Mvu (t·m)': ee['Mvu'],
+                              'M volteo entrepiso (t·m)': ee['Mv']}))
+    st.markdown('**Fuerza y distorsión elásticas contra las de diseño**')
+    enc, filas = ame.tabla_elastico_comparacion(res)
+    mostrar(pd.DataFrame(filas, columns=enc), 4)
+    st.caption('Las distorsiones de diseño incluyen la amplificación FC·Q·R′; las elásticas no se amplifican.')
+with tab['Revisiones']:
     rev = res['revision']
     st.markdown('**Distorsiones de entrepiso por estado límite** (★ = estado de diseño)')
     lims = [[(e['nombre'] + (' ★' if k_ == res['clave'] else '')),
@@ -359,8 +491,9 @@ with tabs[1]:
     mostrar(pd.DataFrame(lims, columns=['Estado límite', 'γmáx', 'γc', 'Límite aplicado']), 4)
     enc, filas = ame.tabla_distorsiones(res)
     mostrar(pd.DataFrame(filas, columns=enc), 5)
-    st.caption('Seguridad de vida y ocupación inmediata: desplazamientos × FC·Q·R′ con R′ del periodo fundamental. '
-               'Limitación de daños: Sa·Ks, sin factor de carga.')
+    st.caption('Seguridad de vida y ocupación inmediata: desplazamientos × FC·Q·R′ con R′ '
+               + ('del plato (k2 = 0, como en tus hojas)' if p.get('R_dist', 'plato') == 'plato' else 'del periodo fundamental')
+               + '. Limitación de daños: Sa·Ks, sin factor de carga.')
     st.pyplot(ame.fig_distorsiones(res))
     pdt = ame.tabla_pdelta(res)
     if pdt:
@@ -368,7 +501,7 @@ with tabs[1]:
         mostrar(pd.DataFrame(pdt[1], columns=pdt[0]))
         st.caption(f'Irregularidad de masa: {rev["irreg_masa"] or "ninguna"} · piso blando: '
                    f'{rev["irreg_rigidez"] or "ninguno"}. θ ≤ 0.10 se puede ignorar; θ > 0.25 posible inestabilidad.')
-with tabs[2]:
+with tab['Normativa']:
     st.markdown('**Factores y reglas aplicadas**')
     st.dataframe(pd.DataFrame(nm['factores'], columns=['Concepto', 'Valor', 'Regla o fuente']), hide_index=True,
                  width='stretch')
@@ -392,7 +525,16 @@ with tabs[2]:
         st.markdown(f'**Torsión accidental** · b = {tor["b"]:g} m')
         mostrar(pd.DataFrame({'Nivel': np.arange(n, 0, -1), 'eₐ (m)': tor['e_a'][::-1], 'Fu (t)': tor['Fu'][::-1],
                               'Mt (t·m)': tor['Mt'][::-1]}))
-        st.caption('Sin excentricidad estática eₛ ni efecto bidireccional 100% + 30%.')
+        if 'e_s' in tor:
+            st.markdown(f'**Excentricidad de diseño** · e_s = {tor["e_s"]:g} m: e = e_s ± e_a (dinámico, factor 1.0)'
+                        + (' y 1.5·e_s ± e_a (estático)' if 'e1_est' in tor else ''))
+            df = {'Nivel': np.arange(n, 0, -1), 'e₁ dinámico (m)': tor['e1_din'][::-1], 'e₂ dinámico (m)': tor['e2_din'][::-1],
+                  'Mt₁ dinámico (t·m)': tor['Mt1_din'][::-1], 'Mt₂ dinámico (t·m)': tor['Mt2_din'][::-1]}
+            if 'e1_est' in tor:
+                df.update({'e₁ estático (m)': tor['e1_est'][::-1], 'e₂ estático (m)': tor['e2_est'][::-1],
+                           'Mt₁ estático (t·m)': tor['Mt1_est'][::-1], 'Mt₂ estático (t·m)': tor['Mt2_est'][::-1]})
+            mostrar(pd.DataFrame(df))
+        st.caption('El efecto bidireccional 100% + 30% no se calcula (necesita el análisis en las dos direcciones).')
     else:
         st.caption('Captura "b" en Otros datos normativos para ver la torsión accidental.')
     es = nm['estatico']
@@ -405,14 +547,14 @@ with tabs[2]:
     mostrar(pd.DataFrame({'Modo': np.arange(1, n + 1), 'Masa efectiva': mo['m_ef'], 'Acumulada': mo['acum']}))
     st.caption(f'{mo["n95"]} modo(s) alcanzan 95%; modos con T ≥ 0.4 s: {mo["n_T04"]}. Los apuntes piden más de 3 modos, '
                'el 95% o todos los modos con T ≥ 0.4 s.')
-with tabs[3]:
+with tab['Modos']:
     qr = {f[0]: f[-1] for f in res['QR'][::len(res['Qs'])]}
     mostrar(pd.DataFrame({'Modo': np.arange(1, n + 1), 'T (s)': res['T'], 'f (Hz)': res['f'], 'ω (rad/s)': res['w'],
                           'γ': res['gam'], "Sa/(Q'R') (cm/s²)": res['Sa_modal'][:, 0],
                           "Q·R'": [qr[j + 1] for j in range(n)]}))
-with tabs[4]:
+with tab['Detalle completo']:
     st.code(ame.reporte_texto(res), language=None)
-with tabs[5]:
+with tab['Formas modales']:
     st.pyplot(ame.fig_modal(res))
-with tabs[6]:
+with tab['Espectro']:
     st.pyplot(ame.fig_espectro(res))

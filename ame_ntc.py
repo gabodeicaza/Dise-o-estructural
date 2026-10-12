@@ -6,8 +6,30 @@ límites γ_SV de cada sistema estructural) NO se inventa: se captura como dato 
 """
 import numpy as np
 
-INTENSIDADES = ('Frecuente', 'Base de diseño', 'Infrecuente')
-CODIGO_INTENSIDAD = {'Frecuente': 'FREC', 'Base de diseño': 'BD', 'Infrecuente': 'INF'}
+INTENSIDADES = ('Frecuente', 'Ocasional', 'Base de diseño', 'Infrecuente')
+CODIGO_INTENSIDAD = {'Frecuente': 'FREC', 'Ocasional': 'OCAS', 'Base de diseño': 'BD', 'Infrecuente': 'INF'}
+# "MC" (máximo considerado) es el nombre que algunos exámenes dan a la intensidad infrecuente
+ALIAS_INTENSIDAD = {'mc': 'Infrecuente', 'máximo considerado': 'Infrecuente', 'maximo considerado': 'Infrecuente',
+                    'máximo creíble': 'Infrecuente', 'bd': 'Base de diseño', 'frec': 'Frecuente', 'ocas': 'Ocasional'}
+ETIQUETA_INTENSIDAD = {'Infrecuente': 'Infrecuente (MC)', 'Base de diseño': 'Base de diseño (BD)'}
+FACTOR_KS_OCASIONAL = 2.5        # Sa(BD)·2.5·Ks en operación continua con sismo ocasional (p. 12)
+
+
+def normalizar_intensidad(texto):
+    """Acepta 'MC', 'Infrecuente (MC)', 'bd'… y devuelve el nombre canónico (o el mismo texto si no lo reconoce)."""
+    t = str(texto or '').strip()
+    if t in INTENSIDADES:
+        return t
+    base = t.split('(')[0].strip().lower()
+    for nombre in INTENSIDADES:
+        if base == nombre.lower():
+            return nombre
+    return ALIAS_INTENSIDAD.get(base) or ALIAS_INTENSIDAD.get(t.lower(), t)
+
+
+def espectro_fuente(intensidad):
+    """Espectro SASID que alimenta cada intensidad: frecuente y ocasional salen del de base de diseño (× Ks)."""
+    return 'Infrecuente' if intensidad == 'Infrecuente' else 'Base de diseño'
 
 # Subgrupos NTC y su categoría de riesgo equivalente en ASCE 7 (apuntes, p. 10)
 SUBGRUPOS = {'B2': 'B', 'B1': 'B', 'A2': 'A', 'A1': 'A'}
@@ -44,12 +66,20 @@ LIMITES_ALTURA_ESTATICO = {'I': (40.0, 30.0), 'II': (30.0, 20.0), 'III': (30.0, 
 def objetivo_diseno(grupo, intensidad):
     """Nivel de desempeño y espectro que corresponden al grupo y a la intensidad (tablas 1.1a y 3.1.1, p. 12).
 
+    Matriz (como en los exámenes):  Frecuente: B→OC · Ocasional: A→OC, B→OI · Base de diseño: A→OI, B→SV ·
+    Infrecuente (MC): A→SV, B→PC.
     Devuelve un dict con la clave del estado de cálculo ('DL', 'OI' o 'SV'), su nombre, el espectro y una nota.
     """
+    revisa_dl = 'Solo revisión de distorsiones (γ ≤ 0.002 ó 0.004)'
     if intensidad == 'Frecuente':
-        return dict(clave='DL', desempeno='Limitación de daño (no estructural)',
-                    espectro='Sa(BD)·Ks, sin factor de carga', revisa='Solo revisión de distorsiones (γ ≤ 0.002 ó 0.004)',
-                    nota='')
+        return dict(clave='DL', desempeno='Operación continua (limitación de daño)',
+                    espectro='Sa(BD)·Ks, sin factor de carga', revisa=revisa_dl, nota='')
+    if intensidad == 'Ocasional':
+        if grupo == 'A':
+            return dict(clave='DL', desempeno='Operación continua (limitación de daño)',
+                        espectro='Sa(BD)·2.5·Ks, sin factor de carga', revisa=revisa_dl, nota='')
+        return dict(clave='OI', desempeno='Ocupación inmediata',
+                    espectro='Sa(BD)/R′ con Q = 1 y R′ = 0.75·R', revisa='Distorsiones y diseño por resistencia', nota='')
     if grupo == 'A' and intensidad == 'Base de diseño':
         return dict(clave='OI', desempeno='Ocupación inmediata',
                     espectro='Sa(BD)/R′ con Q = 1 y R′ = 0.75·R', revisa='Distorsiones y diseño por resistencia',
@@ -57,7 +87,7 @@ def objetivo_diseno(grupo, intensidad):
     if grupo == 'A' and intensidad == 'Infrecuente':
         return dict(clave='SV', desempeno='Seguridad de vida',
                     espectro="Sa(INF)/(Q′·R′) con R′ = R", revisa='Distorsiones y diseño por resistencia',
-                    nota='Usa el espectro de la intensidad infrecuente.')
+                    nota='Usa el espectro de la intensidad infrecuente (MC).')
     if grupo == 'B' and intensidad == 'Base de diseño':
         return dict(clave='SV', desempeno='Seguridad de vida',
                     espectro="Sa(BD)/(Q′·R′) con R′ = R", revisa='Distorsiones y diseño por resistencia', nota='')

@@ -144,6 +144,7 @@ def memoria_pdf(res, destino, proyecto='', autor=''):
     if fe is not None:
         resumen += [['Cortante basal estático', f'{res["V_est"]:.3f} t'], ['Factor de escala', f'{fe:.4f}']]
     est = res['revision']['estados']
+    resumen += [['Cortante basal elástico (sin reducir)', f'{res["elastico"]["V_el"]:.3f} t']]
     resumen += [[f'Distorsión máx. · {e["nombre"]}', f'{e["dist"].max():.5f}'
                  + ('' if e['limite'] is None else f'  (límite {e["limite"]:g}: '
                                                    + ('cumple' if e['dist'].max() <= e['limite'] else 'NO cumple') + ')')]
@@ -169,6 +170,10 @@ def memoria_pdf(res, destino, proyecto='', autor=''):
              ['Rigidez de vigas', 'Flexibles (marco plano)' if p.get('vigas') == 'flexibles' else 'Rígidas (marco de cortante)'],
              ['Combinación modal', p['combinacion'] + f' (ζ = {p["zeta"]:g})'],
              ['Factor Fu (FC)', f'{p["factor_Fu"]:g}']]
+    if p.get('ajuste_periodo'):
+        aj = p['ajuste_periodo']
+        datos.append(['Periodo medido', f'T₁ = {aj["T_medido"]:g} s → peso total W = {aj["W_total"]:.3f} t '
+                                       f'(con los pesos dados, T₁ = {aj["T_calculado"]:.4f} s)'])
     if p.get('manual'):
         datos = [r for r in datos if r[0] not in ('Dirección del sismo', 'Rigidez de vigas')] + [['Estructura', 'Matrices K y M dadas']]
     E.append(_tabla(st, ['Parámetro', 'Valor'], [[a, Paragraph(b, st['base']) if len(b) > 40 else b] for a, b in datos],
@@ -199,9 +204,9 @@ def memoria_pdf(res, destino, proyecto='', autor=''):
                        'con diafragmas rígidos y se condensan los giros y desplazamientos verticales para dejar un '
                        'grado de libertad lateral por nivel.', 'nota'))
         if 'geom' in p:
-            filas_c = [[c['nivel'], c['eje'], c['x'], c['texto'], c['I'], 'Sí' if c['artic'] else 'No', c['k']]
+            filas_c = [[c['nivel'], c['eje'], c['x'], c['texto'], c['I'], ame.apoyo_txt(c), c['k']]
                        for l in p['geom']['niveles'] for c in l['cols']]
-            E += [P('Columnas', 'h2'), _tabla(st, ['Nivel', 'Eje', 'x (m)', 'Sección (cm)', 'I (cm⁴)', 'Base articulada',
+            E += [P('Columnas', 'h2'), _tabla(st, ['Nivel', 'Eje', 'x (m)', 'Sección (cm)', 'I (cm⁴)', 'Apoyo',
                                                   'k (kg/cm)'], filas_c, dec=2, fuente=7.5)]
 
     # ------------------------------------------------------------------ 3. matrices
@@ -313,30 +318,86 @@ def memoria_pdf(res, destino, proyecto='', autor=''):
     t = res['tabla_din']
     E += [P('8. Fuerzas sísmicas por nivel (análisis dinámico)', 'h1'),
           P(f'Fu = F · {p["factor_Fu"]:g}/1000 (t) · Vu = ΣFu (acumulado desde arriba) · Mvu = h · Fu', 'formula'),
-          _tabla(st, ['Nivel', 'h (m)', 'F (t)', 'Fu (t)', 'Vu (t)', 'Mvu (t·m)'],
-                 [[t['nivel'][i], t['h'][i], t['F'][i], t['Fu'][i], t['Vu'][i], t['Mvu'][i]] for i in range(n)]),
+          _tabla(st, ['Nivel', 'h (m)', 'F (t)', 'Fu (t)', 'Vu (t)', 'Mvu (t·m)', 'M volteo entrepiso (t·m)'],
+                 [[t['nivel'][i], t['h'][i], t['F'][i], t['Fu'][i], t['Vu'][i], t['Mvu'][i], t['Mv'][i]]
+                  for i in range(n)]),
           P(f'Σ Mvu = {t["Mvu"].sum():.4f} t·m', 'nota'), Spacer(1, 4), _imagen(ame.fig_diagramas(res), 17)]
 
-    # ------------------------------------------------------------------ 8. estático
+    # ------------------------------------------------------------------ 9. método estático
     if 'tabla_est' in res:
-        e = res['tabla_est']
-        E += [P('9. Análisis estático y factor de escala', 'h1'),
-              P('Fi = Sa_máx · (hᵢ·Wᵢ / Σ hᵢ·Wᵢ) · ΣWᵢ', 'formula'),
-              _tabla(st, ['Nivel', 'h (m)', 'Wi (t)', 'Wi·hi (t·m)', 'Fi (t)', 'Fu (t)', 'Vu (t)', 'Mvu (t·m)'],
+        e, se, ap = res['tabla_est'], res['estatico'], nm['estatico']
+        E += [P('9. Método estático y factor de escala', 'h1'),
+              P('Fᵢ = C · (Wᵢ·hᵢ / Σ Wᵢ·hᵢ) · ΣWᵢ   con   C = máx { c / (Q′R′) en el plato ; a₀ / (Q′R′) en T = 0 }', 'formula'),
+              P('Plato: k₂ = 0 y Q′ = 1 + (Q−1)·√(1/k).  Inicio (T = 0): k₂ = 0.5 y Q′ = 1.  Comprobación: ΣFᵢ = V_B = C·ΣWᵢ.',
+                'formula'),
+              P(('Aplicable según los apuntes' if ap['aplica'] else '<b>No aplicable</b> según los apuntes (grupo A o altura excedida): '
+                 'el factor de escala es solo de referencia')
+                + f'. H = {ap["H"]:.1f} m' + (f', límite {ap["limite"]:g} m (zona {ap["zona"]}, '
+                                           f'{"regular" if ap["regular"] else "irregular"})' if ap['limite'] else '') + '.', 'nota')]
+        enc, filas = ame.tabla_derivacion_estatica(res)
+        E.append(_tabla(st, enc, filas, dec=4, anchos=[6.2 * cm, 4.4 * cm, 4.4 * cm], fuente=8.5))
+        E.append(P(f'C = {se["C"]:.5f} g, gobierna {se["gobierna"]}'
+                   + (' (criterio: máximo del espectro, como el código de MATLAB)' if se['criterio'] == 'maximo' else '') + '.',
+                   'nota'))
+        E += [Spacer(1, 4),
+              _tabla(st, ['Nivel', 'h (m)', 'Wi (t)', 'Wi·hi (t·m)', 'Fi (t)', 'Fu (t)', 'Vu (t)', 'Mvu (t·m)',
+                          'M volteo entrepiso (t·m)'],
                      [[e['nivel'][i], e['h'][i], e['Wi'][i], e['hWi'][i], e['Fi'][i], e['Fu'][i], e['Vu'][i],
-                       e['Mvu'][i]] for i in range(n)]),
-              P(f'Sa/(Q′R′) máximo del espectro = {res["Fmax_est"]:.6f} g', 'nota')]
-        filas = [['V estático', f'{res["V_est"]:.4f} t']]
+                       e['Mvu'][i], e['Mv'][i]] for i in range(n)], fuente=7.5),
+              P(f'ΣFᵢ = {e["Fi"].sum():.4f} t = C·ΣWᵢ = {se["C"]:.5f}·{se["W_T"]:.4f} t   ·   Σ Mvu = {e["Mvu"].sum():.4f} t·m',
+                'nota'),
+              Spacer(1, 4), _imagen(ame.fig_diagramas(res, 'estatico'), 17)]
+        enc, filas = ame.tabla_distorsiones_estatico(res)
+        E += [P('Distorsiones por el método estático', 'h2'),
+              P(f'Estado de cálculo: {p["estado"]}. Desplazamientos de K⁻¹·Fᵢ × '
+                + ('1 (sin factor de carga ni Q·R′)' if res['clave'] == 'DL' else f'FC·Q·R′ = {se["amp"]:.4f} (R′ del plato)')
+                + '. Se compara con el análisis dinámico.', 'nota'),
+              _tabla(st, enc, filas, dec=5, fuente=8)]
+        filas = [['Coeficiente sísmico C', f'{se["C"]:.5f} g'], ['V estático', f'{res["V_est"]:.4f} t']]
         if p['mult_V'] != 1:
             filas.append(['Multiplicador', f'{p["mult_V"]:g}'])
-        filas += [['V dinámico', f'{res["V_din"]:.4f} t'], ['Factor de escala = V est. / V din.', f'{fe:.4f}']]
-        E += [Spacer(1, 4), _tabla(st, ['Concepto', 'Valor'], filas, anchos=[8 * cm, 5 * cm], fuente=9),
-              P('Si el factor es mayor que 1, las fuerzas del análisis dinámico deben multiplicarse por él.', 'nota')]
+        filas += [['V dinámico', f'{res["V_din"]:.4f} t'], ['Factor de escala = V est. / V din.', f'{fe:.4f}'],
+                  ['Factor aplicado a las fuerzas dinámicas', f'{res["factor_aplicado"]:.4f}']]
+        E += [P('Factor de escala', 'h2'), _tabla(st, ['Concepto', 'Valor'], filas, anchos=[8 * cm, 5 * cm], fuente=9)]
+        if res['factor_aplicado'] > 1:
+            te = res['tabla_din_esc']
+            E += [P(f'Fuerzas dinámicas escaladas (× {res["factor_aplicado"]:.4f})', 'h2'),
+                  _tabla(st, ['Nivel', 'h (m)', 'F (t)', 'Fu (t)', 'Vu (t)', 'Mvu (t·m)'],
+                         [[te['nivel'][i], te['h'][i], te['F'][i], te['Fu'][i], te['Vu'][i], te['Mvu'][i]] for i in range(n)]),
+                  P('El factor es mayor que 1: estas son las fuerzas dinámicas que deben usarse en el diseño.', 'nota')]
+        else:
+            E.append(P('El factor es menor o igual que 1: las fuerzas dinámicas ya cumplen y no se escalan.', 'nota'))
 
-    # ------------------------------------------------------------------ 9. revisiones
+    # ------------------------------------------------------------------ 10. análisis elástico y comparación
+    el = res['elastico']
+    E += [P('10. Análisis elástico (sin reducir)', 'h1'),
+          P('Espectro sin reducir por ductilidad ni sobrerresistencia (Q′ = 1, R′ = 1; el "espectro transparente" de los '
+            f'apuntes). Mismo modelo, {res["n_modos"]} de {n} modos y combinación {p["combinacion"]}.', 'nota'),
+          _tabla(st, ['Modo', 'T (s)', 'Sa elástico (cm/s²)', 'Sa de diseño (cm/s²)', 'Relación'],
+                 [[j + 1, res['T'][j], el['Sa'][j], res['Sa_modal'][j, 0], el['Sa'][j] / res['Sa_modal'][j, 0]]
+                  for j in range(n)], dec=4),
+          Spacer(1, 4), _imagen(ame.fig_elastico(res), 17),
+          _tabla(st, ['Nivel', 'h (m)', 'F (t)', 'Fu (t)', 'Vu (t)', 'Mvu (t·m)'],
+                 [[el['tabla']['nivel'][i], el['tabla']['h'][i], el['tabla']['F'][i], el['tabla']['Fu'][i],
+                   el['tabla']['Vu'][i], el['tabla']['Mvu'][i]] for i in range(n)]),
+          Spacer(1, 4), _imagen(ame.fig_diagramas(res, 'elastico'), 17)]
+    enc, filas = ame.tabla_elastico_comparacion(res)
+    E += [P('Fuerza y distorsión elásticas contra las de diseño', 'h2'),
+          P(f'V elástico / V de diseño = {el["V_el"] / res["V_din"]:.3f}: es el factor con el que la reducción por Q′ y R′ '
+            'baja la demanda. Las distorsiones de diseño ya incluyen la amplificación FC·Q·R′.', 'nota'),
+          _tabla(st, enc, filas, dec=4, fuente=8)]
+    enc, filas = ame.tabla_comparacion_metodos(res)
+    E += [P('11. Comparación de métodos', 'h1'),
+          _tabla(st, enc, [[a, b, c_, d_, Paragraph(e_, st['nota'])] for a, b, c_, d_, e_ in filas], dec=3,
+                 anchos=[5.6 * cm, 2.4 * cm, 2.6 * cm, 2 * cm, Ancho - 12.6 * cm], fuente=8),
+          Spacer(1, 4), _imagen(ame.fig_comparacion(res), 17)]
+    enc, filas = ame.tabla_niveles_metodos(res)
+    E += [P('Fu y Vu por nivel', 'h2'), _tabla(st, enc, filas, dec=3, fuente=6.5)]
+
+    # ------------------------------------------------------------------ 12. revisiones
     rev = res['revision']
-    E += [P('10. Revisiones', 'h1'), P('10.1 Distorsiones de entrepiso', 'h2'),
-          P('Seguridad de vida y ocupación inmediata: desplazamientos × FC·Q·R′, con R′ del periodo fundamental. '
+    E += [P('12. Revisiones', 'h1'), P('12.1 Distorsiones de entrepiso', 'h2'),
+          P('Seguridad de vida y ocupación inmediata: desplazamientos × FC·Q·R′, con R′ ' + ('del plato (k₂ = 0, como en las hojas)' if p.get('R_dist', 'plato') == 'plato' else 'del periodo fundamental') + '. '
             'Limitación de daños: Sa·Ks, sin factor de carga. Las distorsiones modales se combinan con el método elegido '
             'y γ = Δ / h. El límite de ocupación inmediata y de seguridad de vida se reduce por irregularidad (γc). '
             'Los límites γmáx vienen de las tablas 4.3.x de la norma: confírmalos. ★ = estado de diseño.', 'nota')]
@@ -349,7 +410,7 @@ def memoria_pdf(res, destino, proyecto='', autor=''):
     E += [Spacer(1, 4), _tabla(st, enc, filas, dec=5, fuente=8), Spacer(1, 4), _imagen(ame.fig_distorsiones(res), 12)]
     pdt = ame.tabla_pdelta(res)
     if pdt:
-        E += [P('10.2 Efectos P-Δ e irregularidades', 'h2'),
+        E += [P('12.2 Efectos P-Δ e irregularidades', 'h2'),
               P('θ = P·δ / (V·h): P = peso acumulado sobre el entrepiso, δ = deriva elástica con las fuerzas de diseño, '
                 'V = cortante de entrepiso, h = altura. θ ≤ 0.10: se pueden ignorar; θ > 0.25: posible inestabilidad '
                 '(criterio general ASCE 7).', 'nota'),
@@ -360,7 +421,7 @@ def memoria_pdf(res, destino, proyecto='', autor=''):
                 f'{", ".join(map(str, rev["irreg_rigidez"])) or "ninguno"}.', 'nota')]
 
     # ------------------------------------------------------------------ 10. avisos
-    E += [P('11. Avisos de coherencia', 'h1')]
+    E += [P('13. Avisos de coherencia', 'h1')]
     if res['avisos']:
         rows = [[{'alerta': 'ALERTA', 'aviso': 'AVISO', 'info': 'INFO'}[sev], Paragraph(txt, st['base'])]
                 for sev, txt in res['avisos']]
@@ -375,7 +436,7 @@ def memoria_pdf(res, destino, proyecto='', autor=''):
         E.append(P('Sin avisos.'))
 
     # ------------------------------------------------------------------ alcances
-    E += [P('12. Alcances y limitaciones', 'h1')]
+    E += [P('14. Alcances y limitaciones', 'h1')]
     for txt in ('Marco plano en una dirección: un grado de libertad lateral por nivel, masas concentradas y diafragmas rígidos.',
                 'La torsión accidental es solo informativa (momentos eₐ·Fu); no se calcula la excentricidad estática, el sismo '
                 'bidireccional, la interacción suelo-estructura ni zonas rígidas en los nudos.',

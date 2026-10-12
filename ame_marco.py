@@ -30,7 +30,8 @@ def rigidez_marco(E, alturas_cm, xs_cm, columnas, vigas):
 
     alturas_cm : altura de cada entrepiso (cm), de abajo hacia arriba.
     xs_cm      : posición de cada eje (cm).
-    columnas   : por nivel, lista de dicts con eje (1..), A, I (cm², cm4) y artic (articulada en su base).
+    columnas   : por nivel, lista de dicts con eje (1..), A, I (cm², cm4), artic (articulada en su base),
+                 artic_sup (articulada arriba) y rodillo (apoyo de rodillos en la base, solo nivel 1).
     vigas      : por piso 1..n, dict con I y A de la viga que une todos los ejes en ese piso.
     """
     n, ne = len(alturas_cm), len(xs_cm)
@@ -42,14 +43,20 @@ def rigidez_marco(E, alturas_cm, xs_cm, columnas, vigas):
             idx[(k, e)] = (k - 1, cont, cont + 1)  # ux, uz, θ
             cont += 2
     for c in columnas[0]:
-        idx[(0, c['eje'])] = (-1, -1, -1)  # base empotrada
+        if c.get('rodillo'):  # rodillo: el apoyo se desplaza libremente en horizontal (no transmite cortante)
+            idx[(0, c['eje'])] = (cont, -1, cont + 1)  # ux y giro libres: es un pasador sobre rodillos
+            cont += 2
+        else:
+            idx[(0, c['eje'])] = (-1, -1, -1)  # base empotrada
     ndof = cont
     K = np.zeros((ndof, ndof))
     zs = np.concatenate([[0.0], np.cumsum(alturas_cm)])
 
-    def ensamblar(k_loc, T, dofs, liberar_inicio=False):
+    def ensamblar(k_loc, T, dofs, liberar_inicio=False, liberar_fin=False):
         if liberar_inicio:  # articulación en el extremo inicial: se condensa su giro
             k_loc = k_loc - np.outer(k_loc[:, 2], k_loc[2, :]) / k_loc[2, 2]
+        if liberar_fin:  # articulación en el extremo final (parte superior de la columna)
+            k_loc = k_loc - np.outer(k_loc[:, 5], k_loc[5, :]) / k_loc[5, 5]
         kg = T.T @ k_loc @ T
         for i, gi in enumerate(dofs):
             if gi < 0:
@@ -61,13 +68,13 @@ def rigidez_marco(E, alturas_cm, xs_cm, columnas, vigas):
     for i, cols in enumerate(columnas):  # nivel i+1: del piso i al piso i+1
         L = alturas_cm[i]
         for c in cols:
-            ensamblar(_k_barra(E, c['A'], c['I'], L), _rot(0.0, 1.0),
-                      list(idx[(i, c['eje'])]) + list(idx[(i + 1, c['eje'])]), c['artic'])
+            ensamblar(_k_barra(c.get('E', E), c['A'], c['I'], L), _rot(0.0, 1.0),
+                      list(idx[(i, c['eje'])]) + list(idx[(i + 1, c['eje'])]), c['artic'], c.get('artic_sup', False))
     for k in range(1, n + 1):
         v = vigas[k - 1]
         for e in range(1, ne):
             L = xs_cm[e] - xs_cm[e - 1]
-            ensamblar(_k_barra(E, v['A'], v['I'], L), _rot(1.0, 0.0), list(idx[(k, e)]) + list(idx[(k, e + 1)]))
+            ensamblar(_k_barra(v.get('E', E), v['A'], v['I'], L), _rot(1.0, 0.0), list(idx[(k, e)]) + list(idx[(k, e + 1)]))
 
     Kaa, Kab, Kbb = K[:n, :n], K[:n, n:], K[n:, n:]
     try:

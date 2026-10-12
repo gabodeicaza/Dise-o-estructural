@@ -23,7 +23,7 @@ from ame_revision import combinar, irregularidades, rho_cqc, theta_pdelta  # noq
 from ame_secciones import parse_secciones  # noqa: E402
 
 EJ = ame.EJEMPLOS_MODELO
-EJ1, EJ2, EJ3, EJ4, EJ5, EJ6 = list(EJ.values())
+EJ1, EJ2, EJ3, EJ4, EJ5, EJ6, EJ7, EJ8, EJ9, EJ10 = list(EJ.values())
 
 
 def correr(d):
@@ -268,26 +268,30 @@ def un_nivel(**extra):
     return d
 
 
-def test_distorsion_sv_amplifica_con_FC_Q_Rprima_del_periodo_fundamental():
-    """Apuntes p. 13 y 15: desplazamientos × FC·Q·R′, con R′ evaluado en el periodo fundamental."""
+def test_distorsion_sv_amplifica_con_FC_Q_Rprima_del_plato_como_en_las_hojas():
+    """Hojas 14 y 18: QR′ = 4(2) = 8 → R′ del plato (k2 = 0). La opción estricta usa el periodo fundamental."""
     r = correr(un_nivel())
     p, T1 = r['p'], r['T'][0]
-    R1 = float(ame._R(p, 4.0, T1))
     est = r['revision']['estados']
-    assert est['SV']['amp'] == pytest.approx(1.1 * 4.0 * R1)
-    # con un solo modo: γ_DL / γ_SV = Ks·Q′(T) / (FC·Q)   (DL: Sa·Ks sin FC; SV: Sa/(Q′R′) · FC·Q·R′)
-    q = float(ame._q_r(p, 4.0, T1)[0][0])
-    assert est['DL']['dist'][0] / est['SV']['dist'][0] == pytest.approx(0.25 * q / (1.1 * 4.0), rel=1e-6)
+    assert est['SV']['amp'] == pytest.approx(1.1 * 4.0 * 2.0)                   # FC·Q·R′ con R′ = k1·R0 = 2
+    estricto = correr(un_nivel(R_dist='Del periodo fundamental (estricto)'))
+    R1 = float(ame._R(p, 4.0, T1))
+    assert estricto['revision']['estados']['SV']['amp'] == pytest.approx(1.1 * 4.0 * R1) and R1 > 2.0
+    # con un solo modo: γ_DL / γ_SV = Ks·Q′(T)·R′(T) / (FC·Q·R′ del plato)
+    q, rr = (float(x[0]) for x in ame._q_r(p, 4.0, T1))
+    assert est['DL']['dist'][0] / est['SV']['dist'][0] == pytest.approx(0.25 * q * rr / (1.1 * 4.0 * 2.0), rel=1e-6)
 
 
 def test_ocupacion_inmediata_usa_Q_uno_y_R_prima_075R():
     r = correr(un_nivel(subgrupo='A1'))
     p = r['p']
     assert p['estado'] == 'Ocupación inmediata' and r['Qs'] == pytest.approx([1.0])
+    assert r['revision']['estados']['OI']['amp'][0] == pytest.approx(1.1 * 1.0 * 0.75 * 1.75)   # R′ = 0.75·k1·R0 del plato
+    estricto = correr(un_nivel(subgrupo='A1', R_dist='Del periodo fundamental (estricto)'))
     R = float(ame._R(dict(p, Q=np.array([1.0])), 1.0, r['T'][0]))
-    assert r['revision']['estados']['OI']['amp'][0] == pytest.approx(1.1 * 1.0 * 0.75 * R)
+    assert estricto['revision']['estados']['OI']['amp'][0] == pytest.approx(1.1 * 1.0 * 0.75 * R)
     fila = {f[0]: f[1] for f in r['normativa']['factores']}
-    assert float(fila["R′ = 0.75·R"]) == pytest.approx(0.75 * R, abs=1e-4)
+    assert float(fila["R′ = 0.75·R"]) == pytest.approx(0.75 * 1.75, abs=1e-4)
 
 
 def test_theta_pdelta_a_mano():
@@ -356,7 +360,7 @@ def test_modo_principal_de_estado_coincide_con_la_revision():
 # ---------------------------------------------------------------- marco normativo NTC-S 2023 (apuntes)
 @pytest.mark.parametrize('grupo, intensidad, clave', [
     ('B', 'Frecuente', 'DL'), ('A', 'Frecuente', 'DL'), ('B', 'Base de diseño', 'SV'), ('A', 'Base de diseño', 'OI'),
-    ('A', 'Infrecuente', 'SV'), ('B', 'Infrecuente', 'SV')])
+    ('A', 'Infrecuente', 'SV'), ('B', 'Infrecuente', 'SV'), ('A', 'Ocasional', 'DL'), ('B', 'Ocasional', 'OI')])
 def test_objetivo_de_diseno_segun_la_matriz_de_los_apuntes(grupo, intensidad, clave):
     assert ntc.objetivo_diseno(grupo, intensidad)['clave'] == clave
 
@@ -395,8 +399,13 @@ def test_espectro_por_intensidad():
     v_bd = correr(dict(d, intensidad='Base de diseño'))['V_din']
     v_inf = correr(dict(d, intensidad='Infrecuente'))['V_din']
     assert v_inf / v_bd == pytest.approx(1300 / 975, rel=0.05)  # sube el plato del espectro
-    with pytest.raises(ValueError, match='espectro SASID de la intensidad "Frecuente"'):
-        ame.preparar_modelo(dict(d, intensidad='Frecuente'))
+    # frecuente y ocasional salen del espectro de base de diseño (× Ks): no piden uno propio
+    assert correr(dict(d, intensidad='Frecuente'))['p']['c'] == 975
+    sin_bd = dict(d, espectros={'Infrecuente': inf})
+    with pytest.raises(ValueError, match='intensidad "Base de diseño" \\(de él salen'):
+        ame.preparar_modelo(dict(sin_bd, intensidad='Ocasional'))
+    with pytest.raises(ValueError, match='intensidad "Infrecuente"'):
+        ame.preparar_modelo(dict(d, espectros={'Base de diseño': bd}, intensidad='Infrecuente'))
 
 
 def test_limitacion_de_danos_sin_factor_de_carga():
@@ -451,9 +460,11 @@ def test_aplicabilidad_del_metodo_estatico():
 def test_cimentacion_con_065_R_prima():
     r = correr(EJ2)
     c = r['normativa']['cimentacion']
-    R1 = float(ame._R(r['p'], 4.0, r['T'][0]))
-    assert c['factor'] == pytest.approx(0.65 * R1)
+    assert c['factor'] == pytest.approx(0.65 * 2.0)                              # R′ del plato (hojas)
     assert c['V'] == pytest.approx(c['factor'] * r['V_din'])
+    estricto = correr(dict(EJ2, R_dist='Del periodo fundamental (estricto)'))
+    assert estricto['normativa']['cimentacion']['factor'] == pytest.approx(
+        0.65 * float(ame._R(estricto['p'], 4.0, estricto['T'][0])))
     assert 'cimentacion' not in correr(dict(copy.deepcopy(EJ2), intensidad='Frecuente'))['normativa']
 
 
@@ -594,6 +605,449 @@ def test_modo_matrices_exporta_excel_y_pdf():
     assert buf.getvalue()[:2] == b'PK' and pdf.getvalue().startswith(b'%PDF')
 
 
+# ---------------------------------------------------------------- método estático (hojas 20 y 21 de los apuntes)
+def test_estatico_hoja21_marco_de_tres_niveles():
+    """Grupo B, Q = 4, k1 = 1, hoja 14: C = máx(0.06208 plato; 0.0624 en T = 0) = 0.0624 g."""
+    r = correr(EJ1)
+    se, e = r['estatico'], r['tabla_est']
+    assert se['q_pl'] == pytest.approx(5.2216, abs=1e-4) and se['Rp_pl'] == pytest.approx(2.0)   # Q′ = 5.2216, R′ = 2
+    assert se['q_pl'] * se['Rp_pl'] == pytest.approx(10.4432, abs=1e-3)
+    assert se['C_pl'] == pytest.approx(0.06208, abs=2e-5) and se['C_0'] == pytest.approx(0.0624, abs=2e-4)
+    assert se['C'] == se['C_0'] and 'T = 0' in se['gobierna']                                   # "0.0624 → aplica"
+    assert e['Fi'] == pytest.approx([0.91, 0.74, 0.41], abs=0.006)
+    assert e['Fu'] == pytest.approx([1.0, 0.82, 0.45], abs=0.006)
+    assert e['Vu'] == pytest.approx([1.0, 1.82, 2.26], abs=0.006)
+    assert e['Mvu'].sum() == pytest.approx(22.11, abs=0.02)
+    assert e['Fi'].sum() == pytest.approx(se['C'] * se['W_T'])                                  # ΣFi = V_B = C·ΣW
+
+
+def test_estatico_hoja21_estructura_irregular_de_cinco_niveles():
+    """Grupo B, Q = 2, k1 = 0.8, irregular: c/(Q′R′) = 0.2841 y a0/(Q′R′) = 0.1202."""
+    r = correr(EJ7)
+    se, e = r['estatico'], r['tabla_est']
+    assert se['q_pl'] == pytest.approx(2.4991, abs=1e-4) and se['Rp_pl'] == pytest.approx(1.40)
+    assert se['Rp_0'] == pytest.approx(1.90)                                                    # k2 = 0.5 en T = 0
+    assert se['C_pl'] == pytest.approx(0.2841, abs=1e-4) and se['C_0'] == pytest.approx(0.1202, abs=1e-4)
+    assert 'plato' in se['gobierna']
+    assert e['Wi'] == pytest.approx([300, 400, 400, 400, 400]) and e['hWi'].sum() == pytest.approx(16500)
+    assert e['Fi'] == pytest.approx([147.20, 157.02, 117.76, 78.51, 39.25], abs=0.01)
+    assert e['Fu'] == pytest.approx([161.92, 172.72, 129.54, 86.36, 43.18], abs=0.01)
+    assert e['Vu'] == pytest.approx([161.92, 334.64, 464.18, 550.53, 593.71], abs=0.01)
+    assert e['Mvu'] == pytest.approx([2428.83, 2072.60, 1165.84, 518.15, 129.54], abs=0.01)
+    assert e['Mvu'].sum() == pytest.approx(6314.95, abs=0.01)
+    assert 2 * se['Rp_pl'] == pytest.approx(2.8)                                                # Q·R′ = 2(1.4)
+    assert r['normativa']['estatico']['aplica']                                                 # H = 15 m ≤ 20 m (zona III, irregular)
+
+
+def test_estatico_criterio_maximo_del_espectro_es_el_del_codigo_de_matlab():
+    r = correr(dict(EJ1, criterio_estatico='Máximo del espectro de diseño (como el código de MATLAB)'))
+    se = r['estatico']
+    assert se['criterio'] == 'maximo' and se['C'] == pytest.approx(float(r['curvas_g'][0].max()))
+    assert se['C'] > correr(EJ1)['estatico']['C']       # 0.063008 g contra 0.0624 g de los apuntes
+
+
+def test_estatico_distorsiones_a_mano():
+    """Un solo nivel: u = F/k y la distorsión = u·FC·Q·R′/h."""
+    d = dict(EJ6, K='1000', M='0.4', alturas='3', pesos='400', subgrupo='B1', intensidad='Base de diseño', Q='4', k1='1')
+    r = correr(d)
+    se = r['estatico']
+    F_kg = se['C'] * 400 * 1000
+    assert se['u'][0] == pytest.approx(F_kg / 1_000_000)                    # K = 1000 t/cm = 1e6 kg/cm
+    assert se['dist'][0] == pytest.approx(se['u'][0] * 1.1 * 4 * se['Rp_pl'] / 300)
+
+
+def test_estatico_limitacion_de_danos_sin_FC_ni_QR():
+    r = correr(dict(EJ1, intensidad='Frecuente', espectros={'Frecuente': dict(a0='153', c='636', Ta='0.6', Tb='1.8',
+                                                                                  k='0.505', Ts='0.9')}))
+    se = r['estatico']
+    assert r['clave'] == 'DL' and se['FC'] == 1.0 and se['amp'] == 1.0
+    assert se['C'] == pytest.approx(0.25 * 636 / 981)                       # Sa(BD)·Ks, sin reducción
+    assert r['tabla_est']['Fu'] == pytest.approx(r['tabla_est']['Fi'])
+
+
+def test_estatico_ocupacion_inmediata_Q_uno_R_prima_075R():
+    r = correr(dict(EJ7, subgrupo='A1'))
+    se = r['estatico']
+    assert r['clave'] == 'OI' and se['q_pl'] == pytest.approx(1.0)
+    assert se['Rp_pl'] == pytest.approx(0.75 * 0.8 * 1.75) and se['Rp_0'] == pytest.approx(0.75 * (0.8 * 1.75 + 0.5))
+    assert not r['normativa']['estatico']['aplica']                         # grupo A: el estático no aplica
+
+
+def test_estatico_acero_R_igual_a_uno():
+    r = correr(EJ5)
+    assert r['estatico']['R_pl'] == 1.0 and r['estatico']['R_0'] == 1.0
+
+
+def test_tablas_de_derivacion_y_comparacion_estatica():
+    r = correr(EJ7)
+    enc, filas = ame.tabla_derivacion_estatica(r)
+    assert enc[0] == 'Concepto' and filas[-1][1] == pytest.approx(r['estatico']['C_pl'])
+    enc, filas = ame.tabla_distorsiones_estatico(r)
+    assert [f[0] for f in filas] == [5, 4, 3, 2, 1] and len(filas[0]) == len(enc)
+    assert r['estatico']['dist_din'] == pytest.approx(r['revision']['estados'][r['clave']]['dist'])
+
+
+def test_factor_de_escala_y_fuerzas_dinamicas_escaladas():
+    r = correr(EJ7)
+    f = r['factor_escala']
+    assert f == pytest.approx(r['V_est'] / r['V_din']) and f > 1
+    te = r['tabla_din_esc']
+    assert r['factor_aplicado'] == pytest.approx(f)
+    assert te['Vu'][-1] == pytest.approx(r['V_est'])                        # el dinámico escalado iguala al estático
+    assert te['Fu'] == pytest.approx(r['tabla_din']['Fu'] * f)
+    bajo = correr(dict(EJ7, mult_V='0.1'))                                  # factor < 1: no se escala
+    assert bajo['factor_escala'] < 1 and bajo['factor_aplicado'] == 1.0
+    assert bajo['tabla_din_esc']['Fu'] == pytest.approx(bajo['tabla_din']['Fu'])
+
+
+def test_estatico_se_exporta_y_se_grafica():
+    from openpyxl import load_workbook
+    r = correr(EJ7)
+    buf = io.BytesIO()
+    ame.exportar_excel(r, buf)
+    ws = load_workbook(io.BytesIO(buf.getvalue()))['Estático']
+    texto = ' '.join(str(c.value) for fila in ws.iter_rows() for c in fila if c.value is not None)
+    assert 'derivación del coeficiente' in texto and 'Fuerzas dinámicas escaladas' in texto
+    fig = ame.fig_diagramas(r, 'estatico')
+    buf2 = io.BytesIO()
+    fig.savefig(buf2, format='png')
+    assert len(buf2.getvalue()) > 5_000
+    assert 'MÉTODO ESTÁTICO' in ame.reporte_texto(r) and 'Comprobación: ΣFi' in ame.reporte_texto(r)
+
+
+def test_aviso_de_distorsion_estatica_y_criterio_matlab():
+    textos = lambda r: ' | '.join(t for _, t in r['avisos'])
+    assert 'máximo del espectro de diseño (como el código de MATLAB)' in textos(
+        correr(dict(EJ1, criterio_estatico='Máximo del espectro (MATLAB)')))
+    flexible = correr(dict(EJ7, K='300 -150 0 0 0\n-150 300 -150 0 0\n0 -150 300 -150 0\n0 0 -150 300 -150\n0 0 0 -150 150'))
+    assert 'Método estático: la distorsión supera' in textos(flexible)
+
+
+# ---------------------------------------------------------------- análisis elástico (sin reducir) y comparación
+def test_elastico_igual_al_de_diseno_cuando_no_hay_reduccion():
+    """Acero con R = 1 y Q = 1: Q′ = 1 y R′ = 1, así que el espectro de diseño ES el elástico."""
+    r = correr(dict(EJ5, Q='1'))
+    assert r['Sa_modal'][:, 0] == pytest.approx(r['elastico']['Sa'])
+    assert r['elastico']['V_el'] == pytest.approx(r['V_din'])
+    assert r['elastico']['tabla']['Fu'] == pytest.approx(r['tabla_din']['Fu'])
+
+
+def test_elastico_un_modo_la_razon_es_Qprima_por_Rprima():
+    r = correr(un_nivel())
+    q, rr = (float(x[0]) for x in ame._q_r(r['p'], 4.0, r['T'][0]))
+    assert r['elastico']['V_el'] / r['V_din'] == pytest.approx(q * rr, rel=1e-6)
+    assert r['elastico']['Sa'][0] / r['Sa_modal'][0, 0] == pytest.approx(q * rr, rel=1e-6)
+
+
+def test_elastico_espectro_sin_reducir_en_el_plato():
+    r = correr(EJ2)
+    el = r['elastico']
+    i = int(np.argmin(np.abs(r['serie'] - 1.2)))                 # T = 1.2 s está en el plato (0.8 a 1.7 s)
+    assert el['curva'][i] == pytest.approx(975.0)                # c, sin dividir entre Q′R′
+    assert np.all(el['Sa'] >= r['Sa_modal'][:, 0])               # elástico ≥ diseño
+    assert el['V_el'] > r['V_din'] and el['tabla']['Mvu'].sum() > r['tabla_din']['Mvu'].sum()
+
+
+def test_elastico_estatico_usa_el_maximo_de_c_y_a0():
+    r = correr(EJ2)
+    est = r['elastico']['est']
+    assert est['C'] == pytest.approx(975 / 981) and est['tabla']['Fi'].sum() == pytest.approx(est['C'] * est['tabla']['Wi'].sum())
+
+
+def test_comparacion_de_metodos():
+    r = correr(EJ7)
+    enc, filas = ame.tabla_comparacion_metodos(r)
+    nombres = [f[0] for f in filas]
+    assert enc[0] == 'Análisis' and any('Estático' in x for x in nombres) and any('Elástico dinámico' in x for x in nombres)
+    assert any('escalado' in x for x in nombres) and any('Elástico estático' in x for x in nombres)
+    enc, filas = ame.tabla_niveles_metodos(r)
+    assert len(filas) == 5 and len(filas[0]) == len(enc) and 'Fu elástico' in enc
+    enc, filas = ame.tabla_elastico_comparacion(r)
+    assert all(f[4] > 1 for f in filas)                          # la fuerza elástica supera a la de diseño en todos los niveles
+    for fig in (ame.fig_elastico(r), ame.fig_comparacion(r), ame.fig_diagramas(r, 'elastico'), ame.fig_diagramas(r, 'escalado')):
+        buf = io.BytesIO()
+        fig.savefig(buf, format='png')
+        assert len(buf.getvalue()) > 5_000
+    assert 'ANÁLISIS ELÁSTICO' in ame.reporte_texto(r) and 'COMPARACIÓN DE MÉTODOS' in ame.reporte_texto(r)
+
+
+# ---------------------------------------------------------------- unidades y opciones contra "trampas"
+def test_espectro_en_g_equivale_a_cm_s2():
+    base = correr(EJ2)
+    g = dict(copy.deepcopy(EJ2), a0=str(224 / 981), c=str(975 / 981), unidad_espectro='g')
+    assert correr(g)['V_din'] == pytest.approx(base['V_din'], rel=1e-9)
+    assert correr(g)['p']['c'] == pytest.approx(975.0)
+    with pytest.raises(ValueError, match='cm/s² o g'):
+        ame.preparar_modelo(dict(EJ2, unidad_espectro='ft/s'))
+
+
+def test_unidades_de_E_y_fc():
+    d = dict(copy.deepcopy(EJ2), E='2213594.4', unidad_E='t/m²')                    # hoja 7: E = 2,213,594.4 t/m²
+    assert ame.preparar_modelo(d)['E'] == pytest.approx(221359.44, rel=1e-6)
+    d = dict(copy.deepcopy(EJ2), E='', fc='24.516', unidad_fc='MPa')                # 24.516 MPa ≈ 250 kg/cm²
+    assert ame.preparar_modelo(d)['E'] == pytest.approx(14000 * np.sqrt(250), rel=1e-3)
+    assert ame.preparar_modelo(dict(copy.deepcopy(EJ2), E='2.04', unidad_E='GPa'))['E'] == pytest.approx(2.04 * 10197.16)
+    with pytest.raises(ValueError, match='Unidad no válida'):
+        ame.preparar_modelo(dict(EJ2, unidad_E='psi'))
+
+
+def test_secciones_en_metros():
+    a = ame.preparar_modelo(EJ2)
+    d = copy.deepcopy(EJ2)
+    d['niveles'] = [dict(n, seccion='0.25x0.5') for n in d['niveles']]
+    b = ame.preparar_modelo(dict(d, unidad_seccion='m'))
+    assert b['K'] == pytest.approx(a['K'])
+    d['niveles'][0]['seccion'] = 'I:0.0026/A:0.125'
+    with pytest.raises(ValueError, match='cm⁴ y cm²'):
+        ame.preparar_modelo(dict(d, unidad_seccion='m'))
+    with pytest.raises(ValueError, match='cm o m'):
+        ame.preparar_modelo(dict(EJ2, unidad_seccion='pulg'))
+
+
+def test_modos_que_se_combinan():
+    todos = correr(EJ4)
+    assert todos['n_modos'] == 3
+    dos = correr(dict(EJ4, modos='Los primeros N', modos_n='2'))
+    assert dos['n_modos'] == 2
+    esperado = np.sqrt((dos['F'][:, :2] ** 2).sum(axis=1))                    # SRSS solo con 2 modos
+    assert dos['F_final'] == pytest.approx(esperado)
+    assert dos['F_final'][0] < todos['F_final'][0]
+    uno = correr(dict(EJ4, modos='Los primeros N', modos_n='1'))
+    assert uno['n_modos'] == 1 and uno['F_final'] == pytest.approx(np.abs(uno['F'][:, 0]))
+    assert correr(dict(EJ4, modos='Criterio de los apuntes (95 % de masa o T ≥ 0.4 s)'))['n_modos'] >= 3
+    assert correr(dict(EJ4, modos='Los primeros N', modos_n='9'))['n_modos'] == 3     # no pasa del total
+    # las revisiones y el elástico usan los mismos modos
+    assert dos['elastico']['F_final'] == pytest.approx(np.sqrt((dos['elastico']['F'][:, :2] ** 2).sum(axis=1)))
+    assert 'Se combinan 2 de 3 modos' in ' '.join(t for _, t in dos['avisos'])
+
+
+def test_ordenadas_espectrales_dadas_por_modo():
+    r = correr(dict(EJ1, Sa_modos='60.475 59.00 59.452'))
+    assert r['Sa_modal'][:, 0] == pytest.approx([60.475, 59.00, 59.452])
+    assert r['F_final'] == pytest.approx(correr(EJ1)['F_final'], rel=2e-3)             # las de la hoja 14
+    g = correr(dict(EJ1, Sa_modos='0.06165 0.06014 0.06060', unidad_espectro='g', a0='0.156', c='0.6483'))
+    assert g['Sa_modal'][:, 0] == pytest.approx(np.array([0.06165, 0.06014, 0.06060]) * 981)
+    with pytest.raises(ValueError, match='ordenadas Sa por modo'):
+        correr(dict(EJ1, Sa_modos='60 59'))
+
+
+def test_excentricidad_estatica_en_la_torsion():
+    r = correr(dict(EJ2, b_planta='12', e_s='0.5'))
+    t = r['normativa']['torsion']
+    assert t['e1_din'] == pytest.approx(0.5 + t['e_a']) and t['e2_din'] == pytest.approx(0.5 - t['e_a'])
+    assert t['e1_est'] == pytest.approx(1.5 * 0.5 + t['e_a'])                          # estático: 1.5·e_s ± e_a
+    assert t['Mt1_din'] == pytest.approx(t['e1_din'] * t['Fu'])
+    assert 'e_s' not in correr(dict(EJ2, b_planta='12'))['normativa']['torsion']
+
+
+@pytest.mark.parametrize('cambio, texto', [
+    (lambda d: d['niveles'][0].update(h='350'), 'es absurda'),
+    (lambda d: d.update(unidad_seccion='cm', niveles=[dict(n, seccion='0.25x0.5') for n in d['niveles']]), 'mide menos de 3 cm'),
+    (lambda d: d.update(Q='0.5'), 'menor que 1'),
+    (lambda d: d.update(lim_sv='3'), '¿lo capturaste en %?'),
+    (lambda d: d['niveles'][0].update(cargas='4700'), '¿Está en kg/m?'),
+    (lambda d: d.update(k1='5'), 'fuera de los valores usuales'),
+])
+def test_avisos_de_capturas_absurdas(cambio, texto):
+    d = copy.deepcopy(EJ2)
+    cambio(d)
+    assert texto in ' | '.join(t for _, t in correr(d)['avisos'])
+
+
+def test_aviso_de_periodo_absurdo_si_K_y_M_estan_al_reves_o_en_otras_unidades():
+    r = correr(dict(EJ6, K=EJ6['M'], M=EJ6['K']))
+    assert any('es absurdo para un edificio' in t for s_, t in r['avisos'] if s_ == 'alerta')
+
+
+# ---------------------------------------------------------------- lo que pide el examen del 29-oct-2025
+def test_matriz_de_objetivos_del_examen_ocasional_y_MC():
+    """Tabla del examen: Frec B→OC · Ocas A→OC, B→OI · BD A→OI, B→SV · MC A→SV, B→PC."""
+    esperado = {('B', 'Frecuente'): 'DL', ('A', 'Ocasional'): 'DL', ('B', 'Ocasional'): 'OI', ('A', 'Base de diseño'): 'OI',
+                ('B', 'Base de diseño'): 'SV', ('A', 'Infrecuente'): 'SV'}
+    for (g, i), clave in esperado.items():
+        assert ntc.objetivo_diseno(g, i)['clave'] == clave
+    assert ntc.objetivo_diseno('B', 'Infrecuente')['desempeno'] == 'Prevención de colapso'
+    for alias in ('MC', 'mc', 'Infrecuente (MC)', 'Máximo considerado', 'Infrecuente'):
+        assert ntc.normalizar_intensidad(alias) == 'Infrecuente'
+    assert ntc.normalizar_intensidad('Base de diseño (BD)') == 'Base de diseño'
+    assert correr(dict(EJ8, intensidad='MC'))['p']['intensidad'] == 'Infrecuente'
+
+
+def test_sismo_ocasional_multiplica_Ks_por_2_5():
+    base = correr(dict(EJ2, intensidad='Frecuente'))
+    ocas = correr(dict(EJ2, subgrupo='A1', intensidad='Ocasional'))
+    assert base['p']['Ks'] == 0.25 and ocas['p']['Ks'] == pytest.approx(2.5 * 0.25) and ocas['clave'] == 'DL'
+    assert ocas['V_din'] == pytest.approx(2.5 * base['V_din'])                 # Sa(BD)·2.5·Ks contra Sa(BD)·Ks
+    assert correr(dict(EJ2, subgrupo='B1', intensidad='Ocasional'))['clave'] == 'OI'   # grupo B ocasional: ocupación inmediata
+    assert '2.5' in ' '.join(f[1] for f in ocas['normativa']['factores'] if f[0] == 'Ks')
+
+
+def test_E_en_toneladas_por_cm2():
+    d = dict(EJ8, E='158', unidad_E='t/cm²')
+    assert ame.preparar_modelo(d)['E'] == pytest.approx(158_000)
+    assert ame.preparar_modelo(dict(EJ8, E='158000', unidad_E='kg/cm²'))['E'] == pytest.approx(158_000)
+
+
+def test_apoyo_de_rodillos_no_aporta_rigidez_lateral_ejemplo_del_examen():
+    """Eje 4 con rodillos en la base: su columna no resiste cortante en el nivel 1 (k = 0)."""
+    p = ame.preparar_modelo(EJ8)
+    E, h = 158_000.0, 300.0
+    I = {'20x40': 20 * 40 ** 3 / 12, '30x30': 30 * 30 ** 3 / 12, '30x60': 30 * 60 ** 3 / 12}
+    k12 = lambda i: 12 * E * i / h ** 3
+    k3 = lambda i: 3 * E * i / h ** 3
+    assert p['info'][0]['k'] == pytest.approx(k12(I['20x40']) + k3(I['30x30']) + k12(I['20x40']))   # eje 4 → 0
+    assert p['info'][1]['k'] == pytest.approx(2 * k12(I['20x40']) + k12(I['30x30']) + k12(I['30x60']))
+    assert p['cargas'] == pytest.approx([20.0, 10.0])                        # 2 T/m y 1 T/m sobre 10 m
+    cols = {c['eje']: c for c in p['geom']['niveles'][0]['cols']}
+    assert cols[4]['rodillo'] and cols[4]['k'] == 0 and cols[2]['artic'] and not cols[1]['artic']
+    assert 'Rodillo' in ame.apoyo_txt(cols[4]) and ame.apoyo_txt(cols[2]) == 'Articulado'
+    assert any('apoyo de rodillos' in t for _, t in correr(EJ8)['avisos'])
+
+
+def test_rodillo_y_articulacion_superior_con_vigas_flexibles():
+    """El solver de marco plano da lo mismo que el modelo de cortante en el límite de vigas rígidas."""
+    for extra in (dict(rod='2'), dict(art_sup='2'), dict(artic='2', art_sup='1')):
+        d = copy.deepcopy(EJ4)
+        d['niveles'] = [dict(n, viga='1000x1000') for n in d['niveles']]
+        d['niveles'][0].update(extra)
+        d['niveles'][0]['seccion'] = 'I:213333/A:100000000/I2:213333'                    # axialmente rígida
+        d['niveles'][1]['seccion'] = d['niveles'][2]['seccion'] = 'I:213333/A:100000000/I2:213333'
+        flex = ame.preparar_modelo(d)
+        rig = ame.preparar_modelo(dict(d, vigas='rigidas'))
+        assert flex['K'] == pytest.approx(rig['K'], rel=1e-4, abs=1.0), extra   # K ~ 1e4 kg/cm
+
+
+def test_articulada_arriba_y_abajo_no_resiste_y_errores_de_apoyos():
+    d = copy.deepcopy(EJ2)
+    d['niveles'][1].update(artic='2', art_sup='2')
+    p = ame.preparar_modelo(d)
+    assert p['geom']['niveles'][1]['cols'][1]['k'] == 0
+    assert any('articulada arriba y abajo' in t for _, t in ame.calcular(p)['avisos'])
+    d = copy.deepcopy(EJ2)
+    d['niveles'][1].update(rod='1')
+    with pytest.raises(ValueError, match='solo aplican en la base'):
+        ame.preparar_modelo(d)
+    d = copy.deepcopy(EJ2)
+    d['niveles'][0].update(rod='2', artic='2')
+    with pytest.raises(ValueError, match='articulado y como rodillo'):
+        ame.preparar_modelo(d)
+    d = copy.deepcopy(EJ2)
+    d['niveles'][0]['rod'] = '1 2 3'                                           # ninguna columna resiste: mecanismo
+    with pytest.raises(ValueError, match='inestable'):
+        correr(d)
+
+
+def test_giro_de_secciones_con_arroba_90():
+    a = parse_secciones('20x40', 'x')[0]
+    b = parse_secciones('20x40@90', 'x')[0]
+    assert (b['Ix'], b['Iy'], b['texto']) == (a['Iy'], a['Ix'], '20x40@90')
+    perfil = parse_secciones('I:3688/A:26.8/I2:98@90', 'x')[0]
+    assert (perfil['Ix'], perfil['Iy']) == (98, 3688)
+    d = copy.deepcopy(EJ2)
+    d['niveles'] = [dict(n, seccion='25x50 25x50@90 25x50 25x50@90') if False else dict(n, seccion='25x50@90') for n in d['niveles']]
+    girado = ame.preparar_modelo(d)['info'][0]['k']
+    assert girado == pytest.approx(ame.preparar_modelo(dict(EJ2, direccion='Y'))['info'][0]['k'])
+    en_m = copy.deepcopy(EJ2)
+    en_m['niveles'] = [dict(n, seccion='0.25x0.5@90') for n in en_m['niveles']]       # el 90 del giro no se escala
+    assert ame.preparar_modelo(dict(en_m, unidad_seccion='m'))['info'][0]['k'] == pytest.approx(girado)
+
+
+def test_problema_2a_peso_total_a_partir_del_periodo_medido():
+    r = correr(EJ9)
+    p = r['p']
+    K = 4 * 12 * 2.1e6 * 3688 / 530 ** 3                                       # 4 columnas IR 305x21.1, base y techo rígidos
+    m = K * 0.17 ** 2 / (4 * np.pi ** 2)
+    assert p['K'][0, 0] == pytest.approx(K)
+    assert r['T'][0] == pytest.approx(0.17)
+    assert p['cargas'][0] == pytest.approx(m * 981 / 1000)                      # ≈ 1.793 t
+    aj = p['ajuste_periodo']
+    assert aj['W_total'] == pytest.approx(1.7932, abs=1e-3) and aj['T_medido'] == 0.17
+    assert any('Periodo medido' in t for _, t in r['avisos'])
+    # con cargas dadas el periodo medido solo fija la escala: el peso total sigue saliendo del periodo
+    otro = correr(dict(EJ9, niveles=[dict(EJ9['niveles'][0], W='500')]))
+    assert otro['p']['cargas'][0] == pytest.approx(m * 981 / 1000) and otro['T'][0] == pytest.approx(0.17)
+    assert 'ajuste_periodo' not in correr(EJ2)['p']
+    with pytest.raises(ValueError, match='mayor que cero'):
+        ame.preparar_modelo(dict(EJ9, T_medido='0'))
+
+
+def test_problema_2a_perfil_ir_con_el_eje_debil_en_la_direccion_del_sismo():
+    fuerte = correr(EJ9)['p']['cargas'][0]
+    debil = correr(dict(EJ9, niveles=[dict(EJ9['niveles'][0], seccion='I:3688/A:26.8/I2:98@90')]))['p']['cargas'][0]
+    assert debil / fuerte == pytest.approx(98 / 3688)                           # k ∝ I → el mismo T implica menos masa
+    mixto = ame.preparar_modelo(dict(EJ9, niveles=[dict(
+        EJ9['niveles'][0], seccion='I:3688/A:26.8/I2:98 I:3688/A:26.8/I2:98@90 I:3688/A:26.8/I2:98 I:3688/A:26.8/I2:98@90')]))
+    assert mixto['info'][0]['I'] == pytest.approx(2 * 3688 + 2 * 98)
+
+
+def test_problema_2b_operacion_continua_con_el_espectro_de_base_de_diseno():
+    r = correr(EJ9)
+    se = r['estatico']
+    assert r['p']['estado'] == 'Limitación de daños' and r['p']['objetivo']['desempeno'].startswith('Operación continua')
+    assert se['FC'] == 1.0 and se['C'] == pytest.approx(0.25 * 975 / 981)       # Sa(BD)·Ks en el plato
+    assert se['V_est'] == pytest.approx(se['C'] * r['p']['cargas'][0])          # V = C·W, sin factor de carga
+    assert r['normativa']['estatico']['aplica']
+
+
+def test_normalizacion_de_las_formas_modales_no_cambia_las_fuerzas():
+    base = correr(EJ4)
+    for opcion, verifica in (
+            ('Último nivel (azotea) = 1', lambda fi: np.allclose(fi[-1], 1)),
+            ('Valor máximo = 1', lambda fi: np.allclose(np.abs(fi).max(axis=0), 1)),
+            ('Masa unitaria (φᵀMφ = 1)', None)):
+        r = correr(dict(EJ4, norm_modal=opcion))
+        assert r['F_final'] == pytest.approx(base['F_final'], rel=1e-9) and r['V_din'] == pytest.approx(base['V_din'])
+        assert r['T'] == pytest.approx(base['T']) and r['elastico']['V_el'] == pytest.approx(base['elastico']['V_el'])
+        if verifica:
+            assert verifica(r['fi'])
+        else:
+            assert np.allclose(np.diag(r['fi'].T @ r['p']['M'] @ r['fi']), 1)
+    assert np.allclose(base['fi'][0], 1)                                       # por defecto: primer nivel = 1
+
+
+def test_momento_de_volteo_por_entrepiso():
+    r = correr(EJ8)
+    t = r['tabla_din']
+    Fu, h = t['Fu'], t['h']                                                    # de arriba hacia abajo
+    assert t['Mv'][0] == pytest.approx(Fu[0] * 3.0)                            # entrepiso superior: Fu·(h entrepiso)
+    assert t['Mv'][1] == pytest.approx(Fu[0] * h[0] + Fu[1] * h[1])            # base: ΣFu·z
+    assert t['Mv'][-1] == pytest.approx(t['Mvu'].sum())
+    for tabla in (r['tabla_est'], r['tabla_din_esc'], r['elastico']['tabla'], r['elastico']['est']['tabla']):
+        assert tabla['Mv'][-1] == pytest.approx(tabla['Mvu'].sum())
+
+
+def test_ejemplo_del_problema_1_dinamico_a_mano():
+    """Dos niveles, k = 16165.7 y 57640.7 kg/cm, W = 20 y 10 t: T, γ y las fuerzas con el espectro del ejemplo."""
+    r = correr(EJ8)
+    k1, k2 = 16165.7, 57640.7
+    m = np.diag([20, 10]) * 1000 / 981
+    K = np.array([[k1 + k2, -k2], [-k2, k2]])
+    lam = np.sort(np.linalg.eigvals(np.linalg.solve(m, K)).real)
+    assert r['T'] == pytest.approx(2 * np.pi / np.sqrt(lam), rel=1e-4)
+    assert r['gam'].sum() == pytest.approx(1.0)
+    assert r['p']['estado'] == 'Seguridad de vida' and r['Qs'][0] == 2 and r['p']['gamma_c'] == 1
+    assert r['p']['subgrupo'] == 'A1' and r['p']['intensidad'] == 'Infrecuente'
+
+
+def test_marco_mixto_concreto_y_acero_por_nivel():
+    """Examen: C1 50x50 de concreto (221.36 t/cm²) abajo y C2 = IR 305x21.1 de acero (2.1e6 kg/cm²) arriba."""
+    p = ame.preparar_modelo(dict(EJ10, vigas='rigidas'))
+    Ec, Es, I50 = 221_359.44, 2.1e6, 50 ** 4 / 12
+    esperado = [2 * 12 * Ec * I50 / 450 ** 3 + 2 * 3 * Ec * I50 / 450 ** 3, 4 * 12 * Ec * I50 / 350 ** 3,
+                4 * 12 * Ec * I50 / 350 ** 3, 4 * 12 * Es * 3688 / 350 ** 3]
+    assert [r['k'] for r in p['info']] == pytest.approx(esperado, rel=1e-6)
+    assert [l['cols'][0]['E'] for l in p['geom']['niveles']] == pytest.approx([Ec, Ec, Ec, Es], rel=1e-6)
+    flex = correr(EJ10)
+    assert flex['p']['vigas'] == 'flexibles' and flex['T'][0] > correr(dict(EJ10, vigas='rigidas'))['T'][0]
+    assert flex['p']['K'] == pytest.approx(flex['p']['K'].T) and np.all(np.linalg.eigvalsh(flex['p']['K']) > 0)
+    sin = copy.deepcopy(EJ10)
+    sin['niveles'][3]['E_col'] = ''                                          # sin E propio: usa el de concreto
+    assert ame.preparar_modelo(dict(sin, vigas='rigidas'))['info'][3]['k'] == pytest.approx(esperado[3] * Ec / Es)
+    acero = copy.deepcopy(EJ10)
+    acero['niveles'][3]['E_col'] = 'acero'
+    assert ame.preparar_modelo(dict(acero, vigas='rigidas'))['info'][3]['k'] == pytest.approx(esperado[3] * 2.04 / 2.1)
+
+
 # ---------------------------------------------------------------- exportación
 def test_excel_y_pdf_se_generan():
     from openpyxl import load_workbook
@@ -602,7 +1056,7 @@ def test_excel_y_pdf_se_generan():
         buf = io.BytesIO()
         ame.exportar_excel(r, buf)
         hojas = load_workbook(io.BytesIO(buf.getvalue())).sheetnames
-        assert {'Datos', 'Modal', 'Espectro', 'Dinámico', 'Estático', 'Normativa', 'Revisiones', 'Gráficas'} <= set(hojas)
+        assert {'Datos', 'Modal', 'Espectro', 'Dinámico', 'Estático', 'Elástico', 'Comparación', 'Normativa', 'Revisiones', 'Gráficas'} <= set(hojas)
         pdf = io.BytesIO()
         ame_pdf.memoria_pdf(r, pdf, proyecto='Prueba', autor='Pruebas')
         assert pdf.getvalue().startswith(b'%PDF') and len(pdf.getvalue()) > 30_000
@@ -614,7 +1068,7 @@ def test_pdf_con_formulas_y_letras_griegas():
     ame_pdf.memoria_pdf(correr(EJ2), buf, proyecto='Torre Ø', autor='Á')
     texto = ''.join(pg.get_text() for pg in pymupdf.open(stream=buf.getvalue(), filetype='pdf'))
     for esperado in ('Memoria de cálculo', 'λ', 'γ', 'Σ', 'T < Tₐ', 'Torre Ø', 'Marco normativo (NTC-S 2023)',
-                     'Cortante basal mínimo', 'Cimentación'):
+                     'Cortante basal mínimo', 'Cimentación', 'Análisis elástico (sin reducir)', 'Comparación de métodos'):
         assert esperado in texto
 
 
@@ -653,6 +1107,15 @@ def test_pagina_web_corre_con_todos_los_ejemplos():
     at.sidebar.button[0].click()
     at.run()
     at.sidebar.selectbox(key='combinacion').select('CQC').run()
+    at.sidebar.radio(key='unidad_espectro').set_value('g').run()                 # solo cambia las unidades
+    assert at.error and not at.exception                                           # a0 y c quedan enormes: alerta de captura
+    at.sidebar.radio(key='unidad_espectro').set_value('cm/s²').run()
+    at.sidebar.selectbox(key='modos').select('Los primeros N').run()
+    at.sidebar.text_input(key='modos_n').set_value('2').run()
+    assert not at.exception
+    at.sidebar.selectbox(key='modos').select('Todos los modos').run()
+    at.sidebar.selectbox(key='R_dist').select('Del periodo fundamental (estricto)').run()
+    assert not at.exception
     at.sidebar.selectbox(key='estado').select('Limitación de daños').run()
     at.sidebar.radio(key='direccion').set_value('Y').run()
     at.sidebar.selectbox(key='material').select('Acero').run()
@@ -665,6 +1128,7 @@ def test_pagina_web_corre_con_todos_los_ejemplos():
     at.sidebar.button[0].click()
     at.run()
     assert not at.exception and at.radio(key='modo').value.startswith('Matrices')
+    assert {'Resumen', 'Análisis estático', 'Análisis elástico'} <= {t.label for t in at.tabs}
     at.radio(key='modo').set_value('Por secciones y cargas').run()
     assert not at.exception and at.text_input(key='crujias').value
     at.sidebar.selectbox(key='intensidad').select('Infrecuente').run()

@@ -96,7 +96,9 @@ def avisos(res):
     if p['k1'] <= 0:
         add('alerta', 'k1 debe ser positivo.')
     for q in p['Q']:
-        if q not in (1, 1.5, 2, 3, 4):
+        if q < 1:
+            add('alerta', f'Q = {q:g} es menor que 1: Q va de 1 (elástico) a 4 (ductilidad alta).')
+        elif q not in (1, 1.5, 2, 3, 4):
             add('aviso', f'Q = {q:g} no es uno de los valores usuales (1, 1.5, 2, 3, 4).')
     z = p.get('zeta', 0.05)
     if not 0.005 <= z <= 0.25:
@@ -104,6 +106,8 @@ def avisos(res):
 
     # --- Periodo y modos
     T1 = res['T'][0]
+    if T1 > 8 or T1 < 0.03:
+        add('alerta', f'T₁ = {T1:.3f} s es absurdo para un edificio: revisa unidades de K y M, y que no estén al revés.')
     t_min, t_max = _estim_periodo(res)
     if T1 > 2.5 * t_max or T1 < 0.4 * t_min:
         add('aviso', f'T₁ = {T1:.3f} s difiere mucho del estimado empírico ({t_min:.2f}–{t_max:.2f} s). '
@@ -131,18 +135,31 @@ def avisos(res):
     # --- Geometría y secciones
     h = p['alturas']
     for i, hi in enumerate(h, 1):
-        if hi < 2 or hi > 6:
+        if hi < 1 or hi > 12:
+            add('alerta', f'Nivel {i}: la altura de entrepiso ({hi:g} m) es absurda. ¿La capturaste en cm?')
+        elif hi < 2 or hi > 6:
             add('aviso', f'Nivel {i}: la altura de entrepiso ({hi:g} m) es poco usual.')
     geom = p.get('geom')
     if geom:
         for i, l in enumerate(geom['niveles'], 1):
             cols = l['cols']
+            if l['w_bays'] is not None and max(l['w_bays']) > 30:
+                add('aviso', f'Nivel {i}: carga de {max(l["w_bays"]):g} t/m por crujía. ¿Está en kg/m?')
+            if l['W'] <= 0:
+                add('alerta', f'Nivel {i}: el peso del nivel es {l["W"]:g} t.')
             if len(cols) == 1:
                 add('aviso', f'Nivel {i}: solo tiene una columna; el marco sería muy flexible o inestable.')
             if i == 1 and cols and sum(c['artic'] for c in cols) > len(cols) / 2:
                 add('aviso', 'Más de la mitad de las columnas de la base están articuladas.')
             for c in cols:
                 lado = min(c['dx'], c['dy'])
+                if 0 < lado < 3:
+                    add('alerta', f'Nivel {i}, eje {c["eje"]}: la sección {c["texto"]} mide menos de 3 cm. '
+                                  '¿Está en metros? Cambia las unidades de las secciones a m.')
+                    break
+                if lado > 300:
+                    add('aviso', f'Nivel {i}, eje {c["eje"]}: la sección {c["texto"]} mide más de 3 m: ¿está en mm?')
+                    break
                 if lado > 0 and l['h'] * 100 / lado > 20:
                     add('aviso', f'Nivel {i}, eje {c["eje"]}: columna esbelta (h/lado = {l["h"] * 100 / lado:.0f} > 20).')
                     break
@@ -232,6 +249,51 @@ def avisos(res):
                          'el factor de escala se muestra solo como referencia.')
         if p.get('gamma_c', 1.0) != 1.0:
             add('info', p['gamma_c_txt'] + ' Se aplica a los límites de ocupación inmediata y seguridad de vida.')
+
+    # --- Método estático
+    est = res.get('estatico')
+    if est:
+        if est['criterio'] == 'maximo':
+            add('info', 'Coeficiente estático = máximo del espectro de diseño (como el código de MATLAB). Los apuntes usan '
+                        'el mayor entre el plato y T = 0.')
+        if est['limite'] is not None:
+            mal = [i + 1 for i in range(n) if est['dist'][i] > est['limite']]
+            if mal:
+                add('aviso', f'Método estático: la distorsión supera {est["limite"]:g} en el nivel(es) '
+                             f'{", ".join(map(str, mal))} (máx. {est["dist"].max():.4f}).')
+
+    # --- Apoyos especiales y periodo medido
+    if geom:
+        for i, l in enumerate(geom['niveles'], 1):
+            for c in l['cols']:
+                if c.get('rodillo'):
+                    add('info', f'Eje {c["eje"]}: apoyo de rodillos. No transmite cortante, así que esa columna no aporta '
+                                'rigidez lateral en el nivel 1 (sí carga peso).')
+                if c['artic'] and c.get('artic_sup'):
+                    add('aviso', f'Nivel {i}, eje {c["eje"]}: columna articulada arriba y abajo. No resiste fuerzas laterales '
+                                 '(rigidez lateral = 0).')
+    aj = p.get('ajuste_periodo')
+    if aj:
+        add('info', f'Periodo medido T₁ = {aj["T_medido"]:g} s: con los pesos relativos dados el periodo calculado era '
+                    f'{aj["T_calculado"]:.4f} s; se escalaron las masas (× {aj["factor"]:.4f}) y resulta un peso total de '
+                    f'{aj["W_total"]:.3f} t.')
+
+    # --- Opciones de captura y modos
+    if p.get('unidad_espectro') == 'g':
+        add('info', 'El espectro se capturó en g y se convirtió a cm/s² (× 981).')
+    if p.get('Sa_manual') is not None:
+        add('info', 'Se usaron las ordenadas Sa/(Q′R′) dadas por modo en lugar de las que calcula el espectro.')
+    if nm and nm['modos']['n_usados'] < n:
+        mo = nm['modos']
+        add('aviso' if mo['acum_usados'] < 0.90 else 'info',
+            f'Se combinan {mo["n_usados"]} de {n} modos (masa efectiva acumulada: {100 * mo["acum_usados"]:.1f}%).')
+    for nombre in ('lim_dl', 'lim_sv', 'lim_oi'):
+        if p.get(nombre) is not None and p[nombre] > 0.1:
+            add('aviso', f'El límite de distorsión {nombre[-2:].upper()} = {p[nombre]:g} es muy alto: ¿lo capturaste en %?')
+    if p['k1'] < 0.5 or p['k1'] > 1.5:
+        add('aviso', f'k1 = {p["k1"]:g} está fuera de los valores usuales (0.8, 1.0, 1.25).')
+    if p.get('R_dist') == 'T1':
+        add('info', 'R′ de las distorsiones y de la cimentación calculado con el periodo fundamental (en tus hojas se usa el del plato).')
 
     # --- Cortante basal
     fe = res.get('factor_escala')
