@@ -23,7 +23,7 @@ from ame_revision import combinar, irregularidades, rho_cqc, theta_pdelta  # noq
 from ame_secciones import parse_secciones  # noqa: E402
 
 EJ = ame.EJEMPLOS_MODELO
-EJ1, EJ2, EJ3, EJ4, EJ5, EJ6, EJ7, EJ8, EJ9, EJ10 = list(EJ.values())
+EJ1, EJ2, EJ3, EJ4, EJ5, EJ6, EJ7, EJ8, EJ9, EJ10, EJ11 = list(EJ.values())
 
 
 def correr(d):
@@ -165,6 +165,19 @@ def test_propiedades_de_secciones():
     assert (gen['Ix'], gen['Iy'], gen['A']) == (260000, 45000, 1250)
 
 
+def test_inercia_directa_sin_area():
+    a = parse_secciones('I:3688', 'x')[0]
+    assert (a['Ix'], a['Iy'], a['texto']) == (3688, 3688, 'I:3688') and a['A'] == 1e9
+    b = parse_secciones('I=3688/I2:98@90', 'x')[0]
+    assert (b['Ix'], b['Iy']) == (98, 3688)
+    d = copy.deepcopy(EJ2)
+    d['niveles'] = [dict(n, seccion='I:260416.6667') for n in d['niveles']]
+    assert ame.preparar_modelo(d)['K'] == pytest.approx(ame.preparar_modelo(EJ2)['K'], rel=1e-6)   # = 25x50
+    d['vigas'] = 'flexibles'
+    d['niveles'] = [dict(n, viga='I:520833') for n in d['niveles']]
+    assert np.all(np.linalg.eigvalsh(ame.preparar_modelo(d)['K']) > 0)                          # viga solo con I
+
+
 def test_direccion_del_sismo_gira_las_secciones():
     d = copy.deepcopy(EJ2)
     kx = ame.preparar_modelo(d)['info'][0]['k']
@@ -283,11 +296,11 @@ def test_distorsion_sv_amplifica_con_FC_Q_Rprima_del_plato_como_en_las_hojas():
 
 
 def test_ocupacion_inmediata_usa_Q_uno_y_R_prima_075R():
-    r = correr(un_nivel(subgrupo='A1'))
+    r = correr(un_nivel(subgrupo='A2'))
     p = r['p']
     assert p['estado'] == 'Ocupación inmediata' and r['Qs'] == pytest.approx([1.0])
     assert r['revision']['estados']['OI']['amp'][0] == pytest.approx(1.1 * 1.0 * 0.75 * 1.75)   # R′ = 0.75·k1·R0 del plato
-    estricto = correr(un_nivel(subgrupo='A1', R_dist='Del periodo fundamental (estricto)'))
+    estricto = correr(un_nivel(subgrupo='A2', R_dist='Del periodo fundamental (estricto)'))
     R = float(ame._R(dict(p, Q=np.array([1.0])), 1.0, r['T'][0]))
     assert estricto['revision']['estados']['OI']['amp'][0] == pytest.approx(1.1 * 1.0 * 0.75 * R)
     fila = {f[0]: f[1] for f in r['normativa']['factores']}
@@ -666,7 +679,7 @@ def test_estatico_limitacion_de_danos_sin_FC_ni_QR():
 
 
 def test_estatico_ocupacion_inmediata_Q_uno_R_prima_075R():
-    r = correr(dict(EJ7, subgrupo='A1'))
+    r = correr(dict(EJ7, subgrupo='A2'))
     se = r['estatico']
     assert r['clave'] == 'OI' and se['q_pl'] == pytest.approx(1.0)
     assert se['Rp_pl'] == pytest.approx(0.75 * 0.8 * 1.75) and se['Rp_0'] == pytest.approx(0.75 * (0.8 * 1.75 + 0.5))
@@ -1026,7 +1039,7 @@ def test_ejemplo_del_problema_1_dinamico_a_mano():
     assert r['T'] == pytest.approx(2 * np.pi / np.sqrt(lam), rel=1e-4)
     assert r['gam'].sum() == pytest.approx(1.0)
     assert r['p']['estado'] == 'Seguridad de vida' and r['Qs'][0] == 2 and r['p']['gamma_c'] == 1
-    assert r['p']['subgrupo'] == 'A1' and r['p']['intensidad'] == 'Infrecuente'
+    assert r['p']['subgrupo'] == 'A2' and r['p']['intensidad'] == 'Infrecuente'
 
 
 def test_marco_mixto_concreto_y_acero_por_nivel():
@@ -1046,6 +1059,74 @@ def test_marco_mixto_concreto_y_acero_por_nivel():
     acero = copy.deepcopy(EJ10)
     acero['niveles'][3]['E_col'] = 'acero'
     assert ame.preparar_modelo(dict(acero, vigas='rigidas'))['info'][3]['k'] == pytest.approx(esperado[3] * 2.04 / 2.1)
+
+
+# ---------------------------------------------------------------- matriz del pizarrón (A1 / A2) y volados
+@pytest.mark.parametrize('sub, intensidad, clave', [
+    ('B1', 'Frecuente', 'DL'), ('B1', 'Ocasional', 'OI'), ('B1', 'Base de diseño', 'SV'), ('B1', 'Infrecuente', 'SV'),
+    ('A2', 'Frecuente', 'DL'), ('A2', 'Ocasional', 'DL'), ('A2', 'Base de diseño', 'OI'), ('A2', 'Infrecuente', 'SV'),
+    ('A1', 'Frecuente', 'DL'), ('A1', 'Ocasional', 'DL'), ('A1', 'Base de diseño', 'DL'), ('A1', 'Infrecuente', 'OI')])
+def test_matriz_del_pizarron_distingue_A1_y_A2(sub, intensidad, clave):
+    assert ntc.objetivo_diseno(ntc.SUBGRUPOS[sub], intensidad, sub)['clave'] == clave
+    assert correr(dict(EJ2, subgrupo=sub, intensidad=intensidad, espectros={
+        'Base de diseño': dict(a0='224', c='975', Ta='0.8', Tb='1.7', k='0.445', Ts='1.0'),
+        'Infrecuente': dict(a0='300', c='1300', Ta='0.8', Tb='1.7', k='0.445', Ts='1.0')}))['clave'] == clave
+
+
+def test_B_en_MC_es_prevencion_de_colapso_y_A1_en_SBD_avisa_su_supuesto():
+    assert ntc.objetivo_diseno('B', 'Infrecuente', 'B1')['desempeno'] == 'Prevención de colapso'
+    assert 'confirma con la norma' in ntc.objetivo_diseno('A', 'Base de diseño', 'A1')['nota']
+    assert ntc.objetivo_diseno('A', 'Base de diseño')['clave'] == 'OI'                # "A" sin subgrupo = A2
+
+
+def test_volados_masas_y_rigidez_como_en_el_pizarron():
+    """W1 = 4(3)+2(6)+2(3) = 30, W2 = 4(6)+2(3) = 30, W3 = 3(9) = 27 t; K con rodillo (0), empotrada (12EI/h³), articulada (3EI/h³)."""
+    p = ame.preparar_modelo(EJ11)
+    assert p['cargas'] == pytest.approx([30, 30, 27])
+    assert np.diag(p['M']) == pytest.approx(np.array([30000, 30000, 27000]) / 981)
+    E, I = 158_000.0, 40 ** 4 / 12
+    k12 = lambda h: 12 * E * I / (h * 100) ** 3
+    k3 = lambda h: 3 * E * I / (h * 100) ** 3
+    ks = [0 + k12(3) + k3(3), 3 * k12(4), 2 * k12(3.5)]
+    K = np.array([[ks[0] + ks[1], -ks[1], 0], [-ks[1], ks[1] + ks[2], -ks[2]], [0, -ks[2], ks[2]]])
+    assert p['K'] == pytest.approx(K)
+    assert p['geom']['volados'] == (3.0, 2.0) and len(p['geom']['spans']) == 4
+
+
+def test_volados_no_cambian_la_rigidez_lateral_con_vigas_flexibles():
+    d = copy.deepcopy(EJ11)
+    d['vigas'] = 'flexibles'
+    d['niveles'] = [dict(n, viga='30x60') for n in d['niveles']]
+    con = ame.preparar_modelo(d)
+    sin = copy.deepcopy(d)
+    sin.update(volado_izq='', volado_der='')
+    sin['niveles'] = [dict(n, cargas='2 2') for n in sin['niveles']]
+    assert con['K'] == pytest.approx(ame.preparar_modelo(sin)['K'])                 # un volado isostático no aporta rigidez
+
+
+def test_cargas_con_volados_errores_y_una_sola_carga():
+    d = copy.deepcopy(EJ11)
+    d['niveles'][0]['cargas'] = '2 2 4'
+    with pytest.raises(ValueError, match='4 tramo'):
+        ame.preparar_modelo(d)
+    d['niveles'][0]['cargas'] = '1'
+    assert ame.preparar_modelo(d)['cargas'][0] == pytest.approx(1 * (3 + 6 + 3 + 2))   # una carga para todos los tramos
+    d['volado_izq'] = '-1'
+    with pytest.raises(ValueError, match='no pueden ser negativos'):
+        ame.preparar_modelo(d)
+
+
+def test_volados_se_dibujan_y_se_exportan():
+    r = correr(EJ11)
+    fig = ame.fig_estructura(r['p'])
+    buf = io.BytesIO()
+    fig.savefig(buf, format='png')
+    assert len(buf.getvalue()) > 5_000
+    out = io.BytesIO()
+    ame.exportar_excel(r, out)
+    pdf = io.BytesIO()
+    ame_pdf.memoria_pdf(r, pdf, proyecto='Volados', autor='Pruebas')
+    assert out.getvalue()[:2] == b'PK' and pdf.getvalue().startswith(b'%PDF')
 
 
 # ---------------------------------------------------------------- exportación

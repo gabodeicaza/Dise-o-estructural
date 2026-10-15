@@ -63,35 +63,48 @@ ZETA_MATERIAL = {'Concreto': 0.05, 'Acero': 0.03}   # amortiguamiento crítico (
 LIMITES_ALTURA_ESTATICO = {'I': (40.0, 30.0), 'II': (30.0, 20.0), 'III': (30.0, 20.0)}  # regular, irregular (p. 20)
 
 
-def objetivo_diseno(grupo, intensidad):
-    """Nivel de desempeño y espectro que corresponden al grupo y a la intensidad (tablas 1.1a y 3.1.1, p. 12).
+def objetivo_diseno(grupo, intensidad, subgrupo=None):
+    """Nivel de desempeño y espectro que corresponden al subgrupo y a la intensidad (pizarrón de clase y tablas 1.1a / 3.1.1).
 
-    Matriz (como en los exámenes):  Frecuente: B→OC · Ocasional: A→OC, B→OI · Base de diseño: A→OI, B→SV ·
-    Infrecuente (MC): A→SV, B→PC.
-    Devuelve un dict con la clave del estado de cálculo ('DL', 'OI' o 'SV'), su nombre, el espectro y una nota.
+                 Op. continua   Ocup. inmediata   Seg. de vida   Prev. de colapso
+    Frecuente        B  (A1, A2 también cumplen)
+    Ocasional        A1, A2         B
+    Base de diseño   A1             A2                B
+    MC (infrecuente)                A1                A2             B
+
+    Un grupo A sin subgrupo ('A') se toma como A2. Devuelve un dict con la clave del estado de cálculo
+    ('DL', 'OI' o 'SV'), su nombre, el espectro y una nota.
     """
+    sub = str(subgrupo or '').strip().upper()
+    a1 = grupo == 'A' and sub == 'A1'
     revisa_dl = 'Solo revisión de distorsiones (γ ≤ 0.002 ó 0.004)'
+    revisa_r = 'Distorsiones y diseño por resistencia'
+
+    def dl(espectro, nota=''):
+        return dict(clave='DL', desempeno='Operación continua (limitación de daño)', espectro=espectro, revisa=revisa_dl,
+                    nota=nota)
+
+    def oi(espectro):
+        return dict(clave='OI', desempeno='Ocupación inmediata', espectro=espectro, revisa=revisa_r, nota='')
+
     if intensidad == 'Frecuente':
-        return dict(clave='DL', desempeno='Operación continua (limitación de daño)',
-                    espectro='Sa(BD)·Ks, sin factor de carga', revisa=revisa_dl, nota='')
+        return dl('Sa(BD)·Ks, sin factor de carga')
     if intensidad == 'Ocasional':
+        return dl('Sa(BD)·2.5·Ks, sin factor de carga') if grupo == 'A' else oi('Sa(BD)/R′ con Q = 1 y R′ = 0.75·R')
+    if intensidad == 'Base de diseño':
+        if a1:
+            return dl('Sa(BD)·Ks, sin factor de carga',
+                      'Operación continua con el sismo base de diseño (A1): se usa Sa(BD)·Ks como en limitación de daño; '
+                      'confirma con la norma si lleva otro factor.')
         if grupo == 'A':
-            return dict(clave='DL', desempeno='Operación continua (limitación de daño)',
-                        espectro='Sa(BD)·2.5·Ks, sin factor de carga', revisa=revisa_dl, nota='')
-        return dict(clave='OI', desempeno='Ocupación inmediata',
-                    espectro='Sa(BD)/R′ con Q = 1 y R′ = 0.75·R', revisa='Distorsiones y diseño por resistencia', nota='')
-    if grupo == 'A' and intensidad == 'Base de diseño':
-        return dict(clave='OI', desempeno='Ocupación inmediata',
-                    espectro='Sa(BD)/R′ con Q = 1 y R′ = 0.75·R', revisa='Distorsiones y diseño por resistencia',
-                    nota='')
-    if grupo == 'A' and intensidad == 'Infrecuente':
-        return dict(clave='SV', desempeno='Seguridad de vida',
-                    espectro="Sa(INF)/(Q′·R′) con R′ = R", revisa='Distorsiones y diseño por resistencia',
+            return oi('Sa(BD)/R′ con Q = 1 y R′ = 0.75·R')
+        return dict(clave='SV', desempeno='Seguridad de vida', espectro="Sa(BD)/(Q′·R′) con R′ = R", revisa=revisa_r, nota='')
+    if a1:  # MC, A1
+        return oi('Sa(INF)/R′ con Q = 1 y R′ = 0.75·R')
+    if grupo == 'A':  # MC, A2
+        return dict(clave='SV', desempeno='Seguridad de vida', espectro="Sa(INF)/(Q′·R′) con R′ = R", revisa=revisa_r,
                     nota='Usa el espectro de la intensidad infrecuente (MC).')
-    if grupo == 'B' and intensidad == 'Base de diseño':
-        return dict(clave='SV', desempeno='Seguridad de vida',
-                    espectro="Sa(BD)/(Q′·R′) con R′ = R", revisa='Distorsiones y diseño por resistencia', nota='')
-    # Grupo B, infrecuente: prevención de colapso (evaluación basada en desempeño)
+    # Grupo B, MC: prevención de colapso (evaluación basada en desempeño)
     return dict(clave='SV', desempeno='Prevención de colapso',
                 espectro="Sa(INF)/(Q′·R′)", revisa='Evaluación basada en desempeño (acelerogramas)',
                 nota='La prevención de colapso del grupo B es una revisión optativa con acelerogramas; '

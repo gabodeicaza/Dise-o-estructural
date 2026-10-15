@@ -32,7 +32,8 @@ AYUDA = {'h': 'Altura del entrepiso en metros.',
          'rod': 'Ejes con apoyo de rodillos en la base (solo nivel 1): no transmite cortante, la columna no aporta '
                 'rigidez lateral. Ej.: "4".',
          'art_sup': 'Ejes con la columna articulada en su parte superior (3EI/h³ si la base es empotrada).',
-         'cargas': 'Un valor para todas las crujías o uno por crujía: "4.7 3.2". Vacío si das el periodo medido.',
+         'cargas': 'Un valor para todos los tramos o uno por tramo de izquierda a derecha: "4.7 3.2". Con volados, '
+                   'incluye los volados (izq., crujías, der.), con 0 donde no hay losa: "2 2 4 0". Vacío si das el periodo medido.',
          'W': 'Opcional: peso total del nivel; sustituye a la carga por crujía.'}
 SUBGRUPOS = {'B2': 'B2 · riesgo I (ASCE 7)', 'B1': 'B1 · riesgo II', 'A2': 'A2 · riesgo III', 'A1': 'A1 · riesgo IV'}
 VIGAS = ['Rígidas (marco de cortante)', 'Flexibles (marco plano)']
@@ -44,9 +45,9 @@ MODOS_OPC = ['Todos los modos', 'Criterio de los apuntes (95 % de masa o T ≥ 0
 RDIST = ['Del plato (k2 = 0, como en tus hojas)', 'Del periodo fundamental (estricto)']
 NORM_OPC = ['Primer nivel = 1 (apuntes)', 'Último nivel (azotea) = 1', 'Valor máximo = 1', 'Masa unitaria (φᵀMφ = 1)']
 CLAVES_MANUAL = ['K_txt', 'M_txt', 'alturas_txt', 'pesos_txt']
-SOLO_SECCIONES = ('crujias', 'E', 'fc', 'clase', 'vigas', 'direccion', 'unidad_E', 'unidad_fc', 'unidad_seccion')  # no aplican al modo de matrices
+SOLO_SECCIONES = ('crujias', 'volado_izq', 'volado_der', 'E', 'fc', 'clase', 'vigas', 'direccion', 'unidad_E', 'unidad_fc', 'unidad_seccion')  # no aplican al modo de matrices
 ESPECTRO = ['a0', 'c', 'Ta', 'Tb', 'k', 'Ts']
-DEFECTOS = dict(crujias='', subgrupo='B1', intensidad='Base de diseño', direccion='X', estado='Automático', Ks='0.25',
+DEFECTOS = dict(crujias='', volado_izq='', volado_der='', subgrupo='B1', intensidad='Base de diseño', direccion='X', estado='Automático', Ks='0.25',
                 Q='4', k1='1.0', combinacion='SRSS', zeta='', material='Concreto', E='', fc='', clase=CLASES[0],
                 vigas=VIGAS[0], factor_Fu='1.1', mult_V='1', lim_dl='0.004', lim_sv='0.03', lim_oi='0.005',
                 irreg=[], fuerte_torsion=False, fuerte_elev=False, zona='', regularidad='Regular', b_planta='',
@@ -153,9 +154,11 @@ with st.sidebar:
                  help='Normalmente se usa el sismo base de diseño. MC = máximo considerado = infrecuente. Frecuente y '
                       'ocasional usan el espectro de base de diseño × Ks (× 2.5 Ks en ocasional).')
     grupo_sel = ntc.SUBGRUPOS[st.session_state['subgrupo']]
-    objetivo = ntc.objetivo_diseno(grupo_sel, st.session_state['intensidad'])
+    objetivo = ntc.objetivo_diseno(grupo_sel, st.session_state['intensidad'], st.session_state['subgrupo'])
     st.markdown(f'<div class="objetivo"><b>{objetivo["desempeno"]}</b><br>{objetivo["espectro"]}<br>'
                 f'<small>{objetivo["revisa"]}</small></div>', unsafe_allow_html=True)
+    if objetivo['nota']:
+        st.caption(objetivo['nota'])
     st.selectbox('Estado de cálculo', ['Automático', *ame.ESTADOS], key='estado',
                  help='Automático: el que corresponde al objetivo de diseño. Puedes forzar otro estado.')
     st.text_input('Ks (limitación de daños)', key='Ks', help='Sa(BD)·Ks. En tus hojas Ks = 0.25.')
@@ -276,6 +279,10 @@ with st.expander('Matrices K y M (ya calculadas)', expanded=manual):
 with st.expander('Estructura por secciones y cargas (niveles de abajo hacia arriba)', expanded=not manual):
     st.text_input('Crujías (m), de izquierda a derecha', key='crujias',
                   help='Anchos de cada crujía separados por espacio: "4 5" define 2 crujías y 3 ejes (1, 2 y 3).')
+    c1, c2, _ = st.columns([1, 1, 2])
+    c1.text_input('Volado izquierdo (m)', key='volado_izq',
+                  help='Voladizo más allá del primer eje. Solo aporta peso; no cambia la rigidez lateral.')
+    c2.text_input('Volado derecho (m)', key='volado_der', help='Voladizo más allá del último eje.')
     flexibles = st.session_state['vigas'].startswith('Flex')
     conf = {k: st.column_config.TextColumn(ETIQ[k], help=AYUDA[k]) for k in COLS}
     if not flexibles:

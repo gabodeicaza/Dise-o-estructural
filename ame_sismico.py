@@ -248,7 +248,7 @@ def _objetivo_de(d):
     intensidad = ntc.normalizar_intensidad(d.get('intensidad') or ('Infrecuente' if 'infrec' in tipo.lower() else 'Base de diseño'))
     if intensidad not in ntc.INTENSIDADES:
         raise ValueError(f'Intensidad sísmica no válida: {intensidad}.')
-    objetivo = ntc.objetivo_diseno(grupo, intensidad)
+    objetivo = ntc.objetivo_diseno(grupo, intensidad, sub)
     nombre = {v: k for k, v in CLAVE_ESTADO.items()}[objetivo['clave']]
     sismo = {'Frecuente': 'F', 'Ocasional': 'O', 'Base de diseño': 'B', 'Infrecuente': 'I'}[intensidad]
     return dict(grupo=grupo, subgrupo=sub, intensidad=intensidad, sismo=sismo, objetivo=objetivo, estado_auto=nombre)
@@ -479,6 +479,8 @@ def preparar_modelo(d):
     """Arma K, M y la geometría a partir de ejes y niveles.
 
     d['crujias']: anchos de crujía (m) de izquierda a derecha, p. ej. "4 5" -> ejes 1, 2 y 3.
+    d['volado_izq'], d['volado_der']: volados (m) más allá del primer y del último eje; "cargas" admite entonces un valor
+        por tramo de izquierda a derecha (volado izq., crujías, volado der.), con 0 donde no hay losa.
     d['direccion']: 'X' (por defecto) o 'Y': dirección del sismo. En una sección b x h, h va en X y b en Y.
     d['vigas']: 'rigidas' (marco de cortante) o 'flexibles' (marco plano con vigas y columnas).
     d['niveles'] (de abajo hacia arriba), dicts con:
@@ -501,6 +503,13 @@ def preparar_modelo(d):
     nb = len(bays)
     nejes = nb + 1
     xs = np.concatenate([[0.0], np.cumsum(bays)])
+    vi = _num_opc(d, 'volado_izq', None) or 0.0      # volados (voladizos) más allá del primer y último eje
+    vd = _num_opc(d, 'volado_der', None) or 0.0
+    if vi < 0 or vd < 0:
+        raise ValueError('Los volados no pueden ser negativos.')
+    spans = ([(-vi, 0.0)] if vi > 0 else []) + [(float(xs[j]), float(xs[j + 1])) for j in range(nb)] \
+        + ([(float(xs[-1]), float(xs[-1] + vd))] if vd > 0 else [])
+    lon_spans = np.array([b_ - a_ for a_, b_ in spans])
     direccion = (str(d.get('direccion') or 'X').strip().upper() or 'X')[0]
     if direccion not in 'XY':
         raise ValueError('La dirección del sismo debe ser X o Y.')
@@ -570,17 +579,26 @@ def preparar_modelo(d):
         else:
             v = parse_vector(r.get('cargas', ''), f'{nom} - carga por crujía')
             if len(v) == 1:
-                v = np.repeat(v, nb)
-            elif len(v) != nb:
-                raise ValueError(f'{nom}: hay {nb} crujía(s) y escribiste {len(v)} cargas. '
-                                 'Escribe una sola o una por crujía.')
-            Wi, w_bays = float(v @ bays), v
+                v = np.repeat(v, len(spans))
+            elif len(v) != len(spans):
+                desc = ('volado izq. + ' if vi > 0 else '') + f'{nb} crujía(s)' + (' + volado der.' if vd > 0 else '')
+                raise ValueError(f'{nom}: hay {len(spans)} tramo(s) con carga ({desc}, de izquierda a derecha) y escribiste '
+                                 f'{len(v)} cargas. Escribe una sola o una por tramo (0 si no hay carga).')
+            Wi, w_bays = float(v @ lon_spans), v
         ks.append(kn); alturas.append(h); W.append(Wi); m.append(Wi * 1000 / G)
         textos = list(dict.fromkeys(c['texto'] for c in cols))
         filas.append(dict(nivel=i, h=h, ncol=len(cols), nart=len(artic) + len(rod), seccion=', '.join(textos),
                           I=sum(c['I'] for c in cols), k=kn, W=Wi, m=Wi * 1000 / G,
                           viga=viga['texto'] if flexibles else ''))
-        geom_niv.append(dict(h=h, W=Wi, w_bays=w_bays, cols=cols, viga=viga, viga_h=viga['alto'] if flexibles else 30.0))
+        w_spans = None if w_bays is None else [(a_, b_, float(w_)) for (a_, b_), w_ in zip(spans, w_bays)]
+        ext = [spans[0][0] if vi > 0 else float(xs[0]), spans[-1][1] if vd > 0 else float(xs[-1])]
+        if w_spans is not None:  # un volado sin carga en este nivel se dibuja sin losa
+            if vi > 0 and w_spans[0][2] == 0:
+                ext[0] = float(xs[0])
+            if vd > 0 and w_spans[-1][2] == 0:
+                ext[1] = float(xs[-1])
+        geom_niv.append(dict(h=h, W=Wi, w_bays=w_bays, w_spans=w_spans, ext=ext, cols=cols, viga=viga,
+                             viga_h=viga['alto'] if flexibles else 30.0))
 
     if flexibles:
         K = rigidez_marco(E, [x * 100 for x in alturas], xs * 100,
@@ -599,7 +617,7 @@ def preparar_modelo(d):
                   grupo=obj['grupo'], sismo=obj['sismo'], subgrupo=obj['subgrupo'], intensidad=obj['intensidad'],
                   objetivo=obj['objetivo'], E=E, info=filas, material=mat, direccion=direccion,
                   vigas='flexibles' if flexibles else 'rigidas', R_legacy=False,
-                  geom=dict(bays=bays, xs=xs, niveles=geom_niv),
+                  geom=dict(bays=bays, xs=xs, niveles=geom_niv, volados=(vi, vd), spans=spans),
                   **_params_norma(d, mat), **_params_espectro(d, obj['estado_auto'], mat, obj['intensidad']))
     return _ajustar_periodo(modelo, T_med) if T_med else modelo
 
@@ -1392,6 +1410,7 @@ def fig_estructura(p):
                  color=AZULES[2], fontsize=10.5, fontweight='bold', loc='left')
 
     # terreno
+    vi, vd = g.get('volados', (0.0, 0.0))
     x0, x1 = xs[0] - 0.9, xs[-1] + 0.9
     ax.plot([x0, x1], [0, 0], color=AZULES[0], lw=1.6, zorder=2)
     for xh in np.arange(x0, x1, 0.25):
@@ -1400,7 +1419,8 @@ def fig_estructura(p):
     for i, l in enumerate(niv):
         z0, z1 = zs[i], zs[i + 1]
         tv = l['viga_h'] / 100  # peralte de la viga (m)
-        ax.add_patch(Rectangle((xs[0] - 0.3, z1 - tv), L + 0.6, tv, fc='#DCE9F7', ec=AZULES[1], lw=1, zorder=3))
+        xl, xr = l.get('ext', [xs[0], xs[-1]])
+        ax.add_patch(Rectangle((xl - 0.3, z1 - tv), (xr - xl) + 0.6, tv, fc='#DCE9F7', ec=AZULES[1], lw=1, zorder=3))
         for c in l['cols']:
             w = max(c['eq'] / 100, 0.14)
             circular = c['tipo'] in ('circ', 'hcirc')
@@ -1427,19 +1447,21 @@ def fig_estructura(p):
         if l['w_bays'] is None:
             ax.text(L / 2, z1 + 0.2, f'W = {l["W"]:g} t', ha='center', fontsize=8, color=AZULES[2], fontweight='bold')
         else:
-            for j, w_ in enumerate(l['w_bays']):
-                mg = 0.4 if bays[j] > 1.2 else 0.15
-                xa, xb, zt = xs[j] + mg, xs[j + 1] - mg, z1 + 0.55
+            for xa0, xb0, w_ in l['w_spans']:
+                if w_ == 0:
+                    continue
+                mg = 0.4 if (xb0 - xa0) > 1.2 else 0.15
+                xa, xb, zt = xa0 + mg, xb0 - mg, z1 + 0.55
                 ax.plot([xa, xb], [zt, zt], color=AZULES[2], lw=1.2, zorder=5)
                 for xv in np.linspace(xa, xb, max(3, int((xb - xa) / 0.5))):
                     ax.annotate('', xy=(xv, z1 + 0.02), xytext=(xv, zt), zorder=5,
                                 arrowprops=dict(arrowstyle='-|>', color=AZULES[2], lw=0.8, mutation_scale=7))
                 ax.text((xa + xb) / 2, zt + 0.1, f'{w_:g} t/m', ha='center', va='bottom', fontsize=8, color=AZULES[0])
-        ax.text(xs[-1] + 0.7, z1 - 0.15, f'N{i + 1}', fontsize=10, fontweight='bold', color=AZULES[0], va='center')
-        ax.text(xs[-1] + 0.7, z1 - 0.7, f'W = {l["W"]:.2f} t', fontsize=8, color=AZULES[1], va='center')
+        ax.text(xs[-1] + vd + 0.7, z1 - 0.15, f'N{i + 1}', fontsize=10, fontweight='bold', color=AZULES[0], va='center')
+        ax.text(xs[-1] + vd + 0.7, z1 - 0.7, f'W = {l["W"]:.2f} t', fontsize=8, color=AZULES[1], va='center')
         if flexibles:
-            ax.text(xs[-1] + 0.7, z1 - 1.2, f'Viga {l["viga"]["texto"]}', fontsize=8, color=AZULES[1], va='center')
-        xd = xs[0] - 1.2  # cota de altura
+            ax.text(xs[-1] + vd + 0.7, z1 - 1.2, f'Viga {l["viga"]["texto"]}', fontsize=8, color=AZULES[1], va='center')
+        xd = xs[0] - vi - 1.2  # cota de altura
         ax.annotate('', xy=(xd, z1), xytext=(xd, z0), arrowprops=dict(arrowstyle='<->', color=AZULES[1], lw=1))
         ax.text(xd - 0.12, (z0 + z1) / 2, f'{l["h"]:g} m', rotation=90, ha='right', va='center', fontsize=8,
                 color=AZULES[1])
@@ -1452,10 +1474,14 @@ def fig_estructura(p):
         ax.annotate('', xy=(xs[j + 1], -1.0), xytext=(xs[j], -1.0),
                     arrowprops=dict(arrowstyle='<->', color=AZULES[1], lw=1))
         ax.text((xs[j] + xs[j + 1]) / 2, -0.9, f'{b:g} m', ha='center', va='bottom', fontsize=8, color=AZULES[1])
+    for a_, b_, lab in ((-vi, 0.0, vi), (xs[-1], xs[-1] + vd, vd)):
+        if lab > 0:
+            ax.annotate('', xy=(b_, -1.0), xytext=(a_, -1.0), arrowprops=dict(arrowstyle='<->', color=AZULES[1], lw=1))
+            ax.text((a_ + b_) / 2, -0.9, f'{lab:g} m (volado)', ha='center', va='bottom', fontsize=8, color=AZULES[1])
     ax.annotate('', xy=(L / 2 + 1.6, H + 1.6), xytext=(L / 2 - 1.6, H + 1.6),
                 arrowprops=dict(arrowstyle='-|>', color=AZULES[0], lw=2))
     ax.text(L / 2, H + 1.8, 'Dirección del análisis', ha='center', fontsize=9, color=AZULES[0])
-    ax.set_xlim(xs[0] - 2.4, xs[-1] + 3.6)
+    ax.set_xlim(xs[0] - vi - 2.4, xs[-1] + vd + 3.6)
     ax.set_ylim(-2.4, H + 2.6)
 
     # secciones en planta, a escala (X horizontal, Y vertical)
@@ -1955,7 +1981,7 @@ EJEMPLOS_MODELO = {
         crujias='4 4 2', vigas='rigidas', material='Concreto', direccion='X', unidad_E='t/cm²',
         niveles=[dict(h='3', ejes='todos', seccion='20x40 30x30 20x40 30x60', artic='2', rod='4', cargas='2', W=''),
                  dict(h='3', ejes='todos', seccion='20x40 30x30 20x40 30x60', artic='', rod='', cargas='1', W='')],
-        E='158', fc='', subgrupo='A1', intensidad='Infrecuente', Q='2', k1='0.8', zeta='0.05',
+        E='158', fc='', subgrupo='A2', intensidad='Infrecuente', Q='2', k1='0.8', zeta='0.05',
         a0='300', c='1300', Ta='0.8', Tb='1.7', k='0.445', Ts='1.0', factor_Fu='1.1', mult_V='1'),
     # Examen del 29-oct-2025, problema 2: nave industrial. Se mide T = 0.17 s y se pide el peso total (2a); luego la
     # fuerza sísmica estática para operación continua / limitación de daño (2b). Perfil IR 305x21.1 con el eje fuerte en X.
@@ -1970,6 +1996,16 @@ EJEMPLOS_MODELO = {
                  dict(h='3.5', ejes='todos', seccion='50x50', viga='25x50', cargas='2', E_col=''),
                  dict(h='3.5', ejes='todos', seccion='50x50', viga='25x50', cargas='2', E_col=''),
                  dict(h='3.5', ejes='todos', seccion='I:3688/A:26.8/I2:98', viga='25x50', cargas='1.8', E_col='2100')],
+        fc='', subgrupo='B1', intensidad='Base de diseño', Q='2', k1='1.0', zeta='0.05',
+        a0='114', c='320', Ta='0.9', Tb='2.2', k='0.390', Ts='0.5', factor_Fu='1.1', mult_V='1'),
+    # Pizarrón del profesor: volados de 3 m (izq.) y 2 m (der.), rodillo en el eje 1, empotrado en el 2 y articulado en el 3.
+    # Pesos: W1 = 4(3)+2(6)+2(3) = 30 t, W2 = 4(6)+2(3) = 30 t, W3 = 3(9) = 27 t. Secciones y espectro: ilustrativos.
+    'Ejemplo 11 (pizarrón: volados 3 y 2 m, apoyos mixtos, 3 niveles)': dict(
+        crujias='6 3', volado_izq='3', volado_der='2', vigas='rigidas', material='Concreto', direccion='X',
+        unidad_E='t/cm²', E='158',
+        niveles=[dict(h='3', ejes='todos', seccion='40x40', rod='1', artic='3', cargas='2 2 4 0'),
+                 dict(h='4', ejes='todos', seccion='40x40', cargas='0 4 2 0'),
+                 dict(h='3.5', ejes='1 3', seccion='40x40', cargas='0 3 3 0')],
         fc='', subgrupo='B1', intensidad='Base de diseño', Q='2', k1='1.0', zeta='0.05',
         a0='114', c='320', Ta='0.9', Tb='2.2', k='0.390', Ts='0.5', factor_Fu='1.1', mult_V='1'),
 }
