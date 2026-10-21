@@ -45,11 +45,12 @@ AYUDA = {'h': 'Altura del entrepiso en metros.',
 ETIQ.update(volado_izq='Volado izq. (m)', volado_der='Volado der. (m)')
 AYUDA.update(volado_izq='Volado izquierdo de este nivel (m). Vacío = el volado general de arriba. 0 = sin volado.',
              volado_der='Volado derecho de este nivel (m). Vacío = el volado general de arriba. 0 = sin volado.')
-SUBGRUPOS = {'B2': 'B2 · riesgo I (ASCE 7)', 'B1': 'B1 · riesgo II', 'A2': 'A2 · riesgo III', 'A1': 'A1 · riesgo IV'}
+SUBGRUPOS = {'B': 'B · riesgo I–II (ASCE 7)', 'A2': 'A2 · riesgo III', 'A1': 'A1 · riesgo IV'}
 VIGAS = ['Rígidas (marco de cortante)', 'Flexibles (marco plano)']
 CLASES = ["Clase 1 (14000·√f'c)", "Clase 2 (8000·√f'c)"]
 MODOS = ['Por secciones y cargas', 'Matrices K y M (ya calculadas)']
 UNIDADES = ['kg, cm', 't, cm']
+ORIENT_EI = ['Eje fuerte en la dirección del sismo (Ix)', 'Eje débil (Iy)']
 CAPTURAS = ['Por nivel (una fila por nivel)', 'Por columna (una fila por columna)']
 COLS_CONT = ['eje', 'desde', 'hasta', 'seccion', 'E', 'apoyo', 'art_sup']
 CRITERIOS = ['Apuntes: el mayor entre el plato y T = 0', 'Máximo del espectro de diseño (como el código de MATLAB)']
@@ -61,7 +62,7 @@ SOLO_SECCIONES = ('crujias', 'volado_izq', 'volado_der', 'E', 'fc', 'clase', 'vi
 ESPECTRO = ['a0', 'c', 'Ta', 'Tb', 'k', 'Ts']
 SIMBOLO_APOYO = {'Empotrado': '▬  Empotrado', 'Articulado': '△  Articulado', 'Rodillo': '◬  Rodillo (sin cortante)'}
 MAX_EJES = 20
-DEFECTOS = dict(captura=CAPTURAS[0], crujias='', volado_izq='', volado_der='', subgrupo='B1', intensidad='Base de diseño', direccion='X', estado='Automático', Ks='0.25',
+DEFECTOS = dict(captura=CAPTURAS[0], crujias='', volado_izq='', volado_der='', subgrupo='B', intensidad='Base de diseño', direccion='X', estado='Automático', Ks='0.25',
                 Q='4', k1='1.0', combinacion='SRSS', zeta='', material='Concreto', E='', fc='', clase=CLASES[0],
                 vigas=VIGAS[0], factor_Fu='1.1', mult_V='1', lim_dl='0.004', lim_sv='0.03', lim_oi='0.005',
                 irreg=[], fuerte_torsion=False, fuerte_elev=False, zona='', regularidad='Regular', b_planta='',
@@ -127,8 +128,12 @@ def cargar(d):
         d['unidades'] = UNIDADES[0]
     if 'subgrupo' not in d:  # proyectos anteriores: "tipo" = Grupo B / Grupo A - sismo base / infrecuente
         grupo, sismo = ame.grupo_sismo(d.get('tipo', 'Grupo B'))
-        d['subgrupo'] = grupo + '1'
+        d['subgrupo'] = 'B' if grupo == 'B' else 'A2'
         d.setdefault('intensidad', 'Infrecuente' if sismo == 'I' else 'Base de diseño')
+    d['vigas'] = VIGAS[1] if str(d.get('vigas', '')).strip().lower().startswith('flex') else VIGAS[0]   # 'flexibles'/'rigidas'
+    d['subgrupo'] = ntc.normalizar_subgrupo(d.get('subgrupo'))          # B1 y B2 de proyectos anteriores = B
+    if d['subgrupo'] not in SUBGRUPOS:
+        d['subgrupo'] = 'A2' if d['subgrupo'].startswith('A') else 'B'
     for k in CAMPOS:
         if matrices and k in SOLO_SECCIONES and k not in d:
             continue  # un ejemplo con K y M no pisa los datos de secciones que ya capturaste
@@ -328,7 +333,7 @@ with T_sismo:
     st.caption('Paso 2 · Objetivo de diseño, espectro del sitio y datos de la norma.')
     st.markdown('### Objetivo de diseño (NTC-S 2023)')
     st.selectbox('Grupo / subgrupo', list(SUBGRUPOS), key='subgrupo', format_func=SUBGRUPOS.get,
-                 help='Grupo B: B1 y B2. Grupo A: A1 y A2. El riesgo equivale a la categoría de ASCE 7.')
+                 help='Grupo B, o Grupo A con sus subgrupos A2 y A1 (A1 es el más exigente). El riesgo equivale a la categoría de ASCE 7.')
     st.selectbox('Intensidad sísmica', ntc.INTENSIDADES, key='intensidad', on_change=cambiar_intensidad,
                  format_func=lambda i: ntc.ETIQUETA_INTENSIDAD.get(i, i),
                  help='Normalmente se usa el sismo base de diseño. MC = máximo considerado = infrecuente. Frecuente y '
@@ -713,42 +718,44 @@ with T_res:
 with T_herr:
     sub_calc, sub_dim = st.tabs(['Calculadora de EI', 'Dimensionar · resolver al revés'])
     with sub_calc:
-        for _k, _v in dict(calc_sec='I:3688/A:26.8/I2:98', calc_E='2.1e6', calc_uE='kg/cm²', calc_h='', calc_us='cm',
-                           calc_dir='Eje fuerte en la dirección del sismo (Ix)').items():
-            st.session_state.setdefault(_k, _v)
-        with st.expander('Calculadora de EI (E·I de un miembro)', expanded=True):
-            st.caption('Escribe los datos de la sección (por ejemplo los de la tabla del IR) y el E del material: obtienes I, EI y, '
-                       'si das la altura, la rigidez lateral de la columna. Copia el texto de la sección a la tabla de niveles.')
-            c1, c2, c3 = st.columns([2, 1, 1])
-            c1.text_input('Sección(es)', key='calc_sec',
-                          help='Misma sintaxis de la tabla: 50x50, Ø60, I:3688/A:26.8/I2:98 (inercia en cm⁴, área en cm²), H:…, T:…. '
-                               'Varias separadas por espacio. Agrega @90 para girarla.')
-            c2.text_input('E', key='calc_E')
-            c3.selectbox('Unidad de E', list(ame.FACTOR_ESFUERZO), key='calc_uE')
-            c1, c2, c3 = st.columns([2, 1, 1])
-            c1.radio('Orientación respecto al sismo', ['Eje fuerte en la dirección del sismo (Ix)', 'Eje débil (Iy)'],
-                     key='calc_dir', horizontal=True)
-            c2.text_input('Altura h (m), opcional', key='calc_h')
-            c3.radio('Unidades de la sección', ['cm', 'm'], key='calc_us', horizontal=True)
-            try:
-                h_calc = float(st.session_state['calc_h'].replace(',', '.')) if st.session_state.get('calc_h', '').strip() else None
-                filas_calc = ame.propiedades_miembros(st.session_state['calc_sec'], st.session_state['calc_E'],
-                                                      st.session_state['calc_uE'],
-                                                      'X' if st.session_state['calc_dir'].startswith('Eje fuerte') else 'Y',
-                                                      st.session_state['calc_us'], h_calc)
-                tabla_calc = pd.DataFrame([{
-                    'Sección': f['seccion'], 'I (cm⁴)': f['I'], 'I otra dirección (cm⁴)': f['I_otra'],
-                    'A (cm²)': f['A'] if f['A'] else np.nan, 'r (cm)': f['r'] if f['r'] else np.nan,
-                    'EI (kg·cm²)': f['EI'], 'EI (t·cm²)': f['EI_tcm2'], 'EI (t·m²)': f['EI_tm2'],
-                    **({'12EI/h³ (t/cm)': f['k12_tcm'], '3EI/h³ (t/cm)': f['k3_tcm'], '12EI/h³ (kg/cm)': f['k12'],
-                        '3EI/h³ (kg/cm)': f['k3']} if h_calc else {})} for f in filas_calc])
-                st.dataframe(tabla_calc, hide_index=True, width='stretch',
-                             column_config={c: st.column_config.NumberColumn(format='%.6g') for c in tabla_calc.columns[1:]})
-                st.caption('E en kg/cm² = ' + f'{filas_calc[0]["E"]:,.1f}' + '. Rigidez lateral: 12EI/h³ si la columna está empotrada '
-                           'arriba y abajo (vigas rígidas), 3EI/h³ si está articulada en un extremo.')
-            except ValueError as e_calc:
-                st.warning(str(e_calc))
-
+        st.caption('Cada fila es un miembro con su propia sección y su propio E. Agrega las filas que necesites con el + de la '
+                   'tabla. Obtienes I, EI y, si das la altura, la rigidez lateral de la columna. Copia el texto de la sección '
+                   'a la tabla de estructura.')
+        if 'calc_df' not in st.session_state:
+            st.session_state['calc_df'] = pd.DataFrame(
+                [dict(seccion='I:3688/A:26.8/I2:98', E='2.1e6', unidad_E='kg/cm²', orientacion=ORIENT_EI[0], h=''),
+                 dict(seccion='50x50', E='221.35944', unidad_E='t/cm²', orientacion=ORIENT_EI[0], h='3.5')], dtype=object)
+        unidad_calc = st.radio('Unidades de las secciones', ['cm', 'm'], key='calc_us', horizontal=True)
+        edit_calc = st.data_editor(
+            st.session_state['calc_df'], key='calc_tab', num_rows='dynamic', width='stretch',
+            column_config={
+                'seccion': st.column_config.TextColumn('Sección', help='Misma sintaxis de la tabla de estructura: 50x50, Ø60, '
+                                                       'I:3688/A:26.8/I2:98 (inercia en cm⁴, área en cm²), H:…, T:…. '
+                                                       'Agrega @90 para girarla.'),
+                'E': st.column_config.TextColumn('E', help='El E de ESTA sección, en la unidad de la columna de al lado.'),
+                'unidad_E': st.column_config.SelectboxColumn('Unidad de E', options=list(ame.FACTOR_ESFUERZO), required=False),
+                'orientacion': st.column_config.SelectboxColumn('Orientación respecto al sismo', options=ORIENT_EI,
+                                                                required=False),
+                'h': st.column_config.TextColumn('Altura h (m)', help='Opcional: para obtener 12EI/h³ y 3EI/h³.')})
+        filas_calc, errores_calc = ame.propiedades_tabla(filas_de(edit_calc), unidad_calc)
+        for i_err, msg_err in errores_calc:
+            st.warning(f'Fila {i_err}: {msg_err}')
+        if filas_calc:
+            hay_h = any('k12' in f for f in filas_calc)
+            tabla_calc = pd.DataFrame([{
+                'Fila': f['fila'], 'Sección': f['seccion'], 'E (kg/cm²)': f['E'], 'I (cm⁴)': f['I'],
+                'I otra dirección (cm⁴)': f['I_otra'], 'A (cm²)': f['A'] if f['A'] else np.nan,
+                'r (cm)': f['r'] if f['r'] else np.nan, 'EI (kg·cm²)': f['EI'], 'EI (t·cm²)': f['EI_tcm2'],
+                'EI (t·m²)': f['EI_tm2'],
+                **({'12EI/h³ (t/cm)': f.get('k12_tcm', np.nan), '3EI/h³ (t/cm)': f.get('k3_tcm', np.nan),
+                    '12EI/h³ (kg/cm)': f.get('k12', np.nan), '3EI/h³ (kg/cm)': f.get('k3', np.nan)} if hay_h else {})}
+                for f in filas_calc])
+            st.dataframe(tabla_calc, hide_index=True, width='stretch',
+                         column_config={c: st.column_config.NumberColumn(format='%.6g') for c in tabla_calc.columns[2:]})
+            st.caption('Rigidez lateral: 12EI/h³ si la columna está empotrada arriba y abajo (vigas rígidas), 3EI/h³ si está '
+                       'articulada en un extremo.')
+        elif not errores_calc:
+            st.info('Escribe al menos una sección y su E.')
     with sub_dim:
         if res is None:
             st.info('Primero completa una estructura válida en las pestañas «Estructura» y «Sismo y norma».')

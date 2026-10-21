@@ -236,12 +236,12 @@ def _flag(v):
 
 def _objetivo_de(d):
     """Grupo, subgrupo, intensidad y objetivo de diseño (NTC-S 2023) a partir de subgrupo/tipo e intensidad."""
-    sub = str(d.get('subgrupo') or '').strip().upper()
+    sub = ntc.normalizar_subgrupo(d.get('subgrupo'))
     tipo = str(d.get('tipo') or 'Grupo B')
     if sub in ntc.SUBGRUPOS:
         grupo = ntc.SUBGRUPOS[sub]
     elif sub:
-        raise ValueError(f'Subgrupo no válido: {sub} (usa B2, B1, A2 o A1).')
+        raise ValueError(f'Subgrupo no válido: {sub} (usa B, A2 o A1).')
     else:
         grupo, _ = grupo_sismo(tipo)
         sub = grupo
@@ -627,6 +627,38 @@ def _tramos(texto, nb, nom):
 
 
 APOYOS = ('Empotrado', 'Articulado', 'Rodillo')
+
+
+def propiedades_tabla(filas, unidad_seccion='cm'):
+    """Calculadora de EI por filas: cada fila trae su sección, su E y su unidad, su orientación y su altura (opcionales).
+
+    filas: lista de dicts con seccion, E, unidad_E ('kg/cm²' por defecto), orientacion ('Y' o 'débil' = eje débil; si no,
+    eje fuerte) y h (m). Una fila puede traer varias secciones separadas por espacio (se calculan con el mismo E).
+    Devuelve (resultados, errores): cada resultado es el de propiedades_miembros más 'fila'; los errores son
+    (número de fila, mensaje) y no detienen el cálculo de las demás filas. Las filas vacías se omiten."""
+    res, errores = [], []
+    for i, f in enumerate(filas, 1):
+        vals = [str(f.get(k, '')).strip() for k in ('seccion', 'E', 'h')]
+        if not any(v and v.lower() not in ('nan', 'none') for v in vals):
+            continue
+        try:
+            h_txt = vals[2].replace(',', '.')
+            h = float(h_txt) if h_txt and h_txt.lower() not in ('nan', 'none') else None
+            if h is not None and h <= 0:
+                raise ValueError('la altura debe ser mayor que cero.')
+            orient = str(f.get('orientacion', '')).strip().lower()
+            direccion = 'Y' if ('débil' in orient or 'debil' in orient or orient in ('y', 'iy')) else 'X'
+            unidad = str(f.get('unidad_E', '') or 'kg/cm²').strip()
+            if vals[0].lower() in ('', 'nan', 'none'):
+                raise ValueError('falta la sección.')
+            if vals[1].lower() in ('', 'nan', 'none'):
+                raise ValueError('falta E.')
+            for r in propiedades_miembros(vals[0], vals[1], unidad if unidad.lower() != 'nan' else 'kg/cm²', direccion,
+                                          unidad_seccion, h):
+                res.append(dict(r, fila=i, unidad_E=unidad, orientacion='Iy' if direccion == 'Y' else 'Ix'))
+        except ValueError as e:
+            errores.append((i, str(e)))
+    return res, errores
 
 
 def estados_apoyo(artic, rod, nejes):
@@ -2270,7 +2302,7 @@ EJEMPLOS_MODELO = {
         modo='matrices', unidades='t, cm', alturas='3 3 3 3 3', pesos='400 400 400 400 300',
         K='3000 -1500 0 0 0\n-1500 3000 -1500 0 0\n0 -1500 3000 -1500 0\n0 0 -1500 3000 -1500\n0 0 0 -1500 1500',
         M='0.40775 0.40775 0.40775 0.40775 0.30581',
-        subgrupo='B1', intensidad='Base de diseño', material='Concreto', Q='2', k1='0.8', zona='III',
+        subgrupo='B', intensidad='Base de diseño', material='Concreto', Q='2', k1='0.8', zona='III',
         regularidad='Irregular', a0='224', c='975', Ta='0.8', Tb='1.7', k='0.445', Ts='1.05', factor_Fu='1.1',
         mult_V='1'),
     # Examen del 29-oct-2025, problema 1: marco de concreto con apoyos mixtos (empotrado, articulado, empotrado y
@@ -2287,7 +2319,7 @@ EJEMPLOS_MODELO = {
     'Ejemplo 9 (examen: nave con periodo medido, operación continua)': dict(
         crujias='5 7 5', vigas='rigidas', material='Acero', direccion='X', T_medido='0.17',
         niveles=[dict(h='5.3', ejes='todos', seccion='I:3688/A:26.8/I2:98', artic='', rod='', cargas='', W='')],
-        E='2100000', fc='', subgrupo='B1', intensidad='Frecuente', Q='1', k1='1.0', zeta='0.05',
+        E='2100000', fc='', subgrupo='B', intensidad='Frecuente', Q='1', k1='1.0', zeta='0.05',
         a0='224', c='975', Ta='0.8', Tb='1.7', k='0.445', Ts='1.0', Ks='0.25', factor_Fu='1.1', mult_V='1'),
     'Ejemplo 10 (examen: marco mixto, concreto abajo y acero IR arriba)': dict(
         crujias='5 4 4.5', vigas='flexibles', material='Concreto', direccion='X', unidad_E='t/cm²', E='221.35944',
@@ -2295,7 +2327,7 @@ EJEMPLOS_MODELO = {
                  dict(h='3.5', ejes='todos', seccion='50x50', viga='25x50', cargas='2', E_col=''),
                  dict(h='3.5', ejes='todos', seccion='50x50', viga='25x50', cargas='2', E_col=''),
                  dict(h='3.5', ejes='todos', seccion='I:3688/A:26.8/I2:98', viga='25x50', cargas='1.8', E_col='2100')],
-        fc='', subgrupo='B1', intensidad='Base de diseño', Q='2', k1='1.0', zeta='0.05',
+        fc='', subgrupo='B', intensidad='Base de diseño', Q='2', k1='1.0', zeta='0.05',
         a0='114', c='320', Ta='0.9', Tb='2.2', k='0.390', Ts='0.5', factor_Fu='1.1', mult_V='1'),
     # Pizarrón del profesor: volados de 3 m (izq.) y 2 m (der.), rodillo en el eje 1, empotrado en el 2 y articulado en el 3.
     # Pesos: W1 = 4(3)+2(6)+2(3) = 30 t, W2 = 4(6)+2(3) = 30 t, W3 = 3(9) = 27 t. Secciones y espectro: ilustrativos.
@@ -2305,7 +2337,7 @@ EJEMPLOS_MODELO = {
         niveles=[dict(h='3', ejes='todos', seccion='40x40', rod='1', artic='3', cargas='2 2 4 0'),
                  dict(h='4', ejes='todos', seccion='40x40', cargas='0 4 2 0'),
                  dict(h='3.5', ejes='1 3', seccion='40x40', cargas='0 3 3 0')],
-        fc='', subgrupo='B1', intensidad='Base de diseño', Q='2', k1='1.0', zeta='0.05',
+        fc='', subgrupo='B', intensidad='Base de diseño', Q='2', k1='1.0', zeta='0.05',
         a0='114', c='320', Ta='0.9', Tb='2.2', k='0.390', Ts='0.5', factor_Fu='1.1', mult_V='1'),
     # Problema de tarea: 4 niveles; C1 50x50 de concreto (E = 221.35944 t/cm²) y C2 = IR 305x21.1 de acero (E = 2.1e6 kg/cm²).
     # En el piso del nivel 3 no hay losa en la crujía 3, así que la columna del eje 4 es una sola de 7 m (del piso 2 al 4).

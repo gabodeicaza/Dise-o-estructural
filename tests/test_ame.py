@@ -7,6 +7,7 @@ modificación futura los cambia, estas pruebas fallan.
 """
 import copy
 import io
+import re
 import sys
 from pathlib import Path
 
@@ -394,8 +395,12 @@ def test_tipo_del_formato_anterior_se_traduce_a_grupo_e_intensidad():
 
 
 def test_subgrupos_y_categoria_de_riesgo_asce():
-    assert [ntc.SUBGRUPOS[s] for s in ('B2', 'B1', 'A2', 'A1')] == ['B', 'B', 'A', 'A']
-    assert [ntc.RIESGO_ASCE[s] for s in ('B2', 'B1', 'A2', 'A1')] == ['I', 'II', 'III', 'IV']
+    assert [ntc.SUBGRUPOS[s] for s in ('B', 'A2', 'A1')] == ['B', 'A', 'A']
+    assert [ntc.RIESGO_ASCE[s] for s in ('B', 'A2', 'A1')] == ['I–II', 'III', 'IV']
+    assert [ntc.normalizar_subgrupo(s) for s in ('B1', 'b2', 'B', 'A1')] == ['B', 'B', 'B', 'A1']
+    r1, r2, r3 = (correr(dict(EJ2, subgrupo=s)) for s in ('B1', 'B2', 'B'))      # proyectos anteriores con B1 o B2
+    assert r1['p']['subgrupo'] == r2['p']['subgrupo'] == r3['p']['subgrupo'] == 'B'
+    assert r1['V_din'] == pytest.approx(r3['V_din']) and r2['V_din'] == pytest.approx(r3['V_din'])
     d = copy.deepcopy(EJ2)
     d['subgrupo'] = 'A2'
     p = ame.preparar_modelo(d)
@@ -662,7 +667,7 @@ def test_estatico_criterio_maximo_del_espectro_es_el_del_codigo_de_matlab():
 
 def test_estatico_distorsiones_a_mano():
     """Un solo nivel: u = F/k y la distorsión = u·FC·Q·R′/h."""
-    d = dict(EJ6, K='1000', M='0.4', alturas='3', pesos='400', subgrupo='B1', intensidad='Base de diseño', Q='4', k1='1')
+    d = dict(EJ6, K='1000', M='0.4', alturas='3', pesos='400', subgrupo='B', intensidad='Base de diseño', Q='4', k1='1')
     r = correr(d)
     se = r['estatico']
     F_kg = se['C'] * 400 * 1000
@@ -892,7 +897,7 @@ def test_sismo_ocasional_multiplica_Ks_por_2_5():
     ocas = correr(dict(EJ2, subgrupo='A1', intensidad='Ocasional'))
     assert base['p']['Ks'] == 0.25 and ocas['p']['Ks'] == pytest.approx(2.5 * 0.25) and ocas['clave'] == 'DL'
     assert ocas['V_din'] == pytest.approx(2.5 * base['V_din'])                 # Sa(BD)·2.5·Ks contra Sa(BD)·Ks
-    assert correr(dict(EJ2, subgrupo='B1', intensidad='Ocasional'))['clave'] == 'OI'   # grupo B ocasional: ocupación inmediata
+    assert correr(dict(EJ2, subgrupo='B', intensidad='Ocasional'))['clave'] == 'OI'   # grupo B ocasional: ocupación inmediata
     assert '2.5' in ' '.join(f[1] for f in ocas['normativa']['factores'] if f[0] == 'Ks')
 
 
@@ -1064,7 +1069,7 @@ def test_marco_mixto_concreto_y_acero_por_nivel():
 
 # ---------------------------------------------------------------- matriz del pizarrón (A1 / A2) y volados
 @pytest.mark.parametrize('sub, intensidad, clave', [
-    ('B1', 'Frecuente', 'DL'), ('B1', 'Ocasional', 'OI'), ('B1', 'Base de diseño', 'SV'), ('B1', 'Infrecuente', 'SV'),
+    ('B', 'Frecuente', 'DL'), ('B', 'Ocasional', 'OI'), ('B', 'Base de diseño', 'SV'), ('B', 'Infrecuente', 'SV'),
     ('A2', 'Frecuente', 'DL'), ('A2', 'Ocasional', 'DL'), ('A2', 'Base de diseño', 'OI'), ('A2', 'Infrecuente', 'SV'),
     ('A1', 'Frecuente', 'DL'), ('A1', 'Ocasional', 'DL'), ('A1', 'Base de diseño', 'DL'), ('A1', 'Infrecuente', 'OI')])
 def test_matriz_del_pizarron_distingue_A1_y_A2(sub, intensidad, clave):
@@ -1075,7 +1080,7 @@ def test_matriz_del_pizarron_distingue_A1_y_A2(sub, intensidad, clave):
 
 
 def test_B_en_MC_es_prevencion_de_colapso_y_A1_en_SBD_avisa_su_supuesto():
-    assert ntc.objetivo_diseno('B', 'Infrecuente', 'B1')['desempeno'] == 'Prevención de colapso'
+    assert ntc.objetivo_diseno('B', 'Infrecuente', 'B')['desempeno'] == 'Prevención de colapso'
     assert 'confirma con la norma' in ntc.objetivo_diseno('A', 'Base de diseño', 'A1')['nota']
     assert ntc.objetivo_diseno('A', 'Base de diseño')['clave'] == 'OI'                # "A" sin subgrupo = A2
 
@@ -1416,9 +1421,43 @@ def test_pagina_organizada_en_tabs_y_errores_no_la_rompen():
     # datos inválidos: el error aparece, las demás pestañas siguen disponibles y la calculadora funciona
     at.text_input(key='crujias').set_value('x').run()
     assert not at.exception and any('Revisa los datos' in e.value for e in at.error)
-    assert 'Calculadora de EI' in [t_.label for t_ in at.tabs] and at.text_input(key='calc_sec').value
+    assert 'Calculadora de EI' in [t_.label for t_ in at.tabs] and len(at.session_state['calc_df']) >= 1
+    assert not any(w_.value.startswith('Fila') for w_ in at.warning)               # la tabla de ejemplo no da errores
     at.text_input(key='crujias').set_value('4 5').run()
     assert not at.exception and not any('Revisa los datos' in e.value for e in at.error)
+
+
+def test_calculadora_por_filas_cada_seccion_con_su_E():
+    filas = [dict(seccion='I:3688/A:26.8/I2:98', E='2.1e6', unidad_E='kg/cm²', orientacion='Eje fuerte (Ix)', h=''),
+             dict(seccion='50x50', E='221.35944', unidad_E='t/cm²', orientacion='Eje fuerte (Ix)', h='3.5'),
+             dict(seccion='I:3688/A:26.8/I2:98', E='2100', unidad_E='t/cm²', orientacion='Eje débil (Iy)', h='3.5'),
+             dict(seccion='', E='', unidad_E='', orientacion='', h='')]                  # fila vacía: se omite
+    res, errores = ame.propiedades_tabla(filas)
+    assert not errores and [r['fila'] for r in res] == [1, 2, 3]
+    assert res[0]['EI'] == pytest.approx(2.1e6 * 3688) and 'k12' not in res[0]
+    assert res[1]['E'] == pytest.approx(221359.44) and res[1]['EI'] == pytest.approx(221359.44 * 50 ** 4 / 12)
+    assert res[1]['k12'] == pytest.approx(12 * res[1]['EI'] / 350 ** 3)
+    assert res[2]['I'] == 98 and res[2]['orientacion'] == 'Iy' and res[2]['EI'] == pytest.approx(2.1e6 * 98)
+    assert [r['unidad_E'] for r in res] == ['kg/cm²', 't/cm²', 't/cm²']
+    # una fila con varias secciones usa el mismo E para todas
+    multiple, _ = ame.propiedades_tabla([dict(seccion='30x30 40x40', E='200000')])
+    assert [r['fila'] for r in multiple] == [1, 1] and multiple[1]['EI'] == pytest.approx(200000 * 40 ** 4 / 12)
+    # n filas: se pueden agregar tantas como se quiera
+    muchas, err = ame.propiedades_tabla([dict(seccion=f'{20 + 5 * i}x{20 + 5 * i}', E='221359') for i in range(30)])
+    assert len(muchas) == 30 and not err and muchas[-1]['I'] == pytest.approx(165 ** 4 / 12)
+
+
+def test_calculadora_por_filas_errores_por_fila_sin_detener_las_demas():
+    res, errores = ame.propiedades_tabla([dict(seccion='50x50', E='221359'), dict(seccion='redonda', E='221359'),
+                                          dict(seccion='40x40', E=''), dict(seccion='', E='2e6'),
+                                          dict(seccion='30x30', E='2e6', h='-3'), dict(seccion='30x30', E='0'),
+                                          dict(seccion='30x30', E='2e6', unidad_E='psi')])
+    assert [r['fila'] for r in res] == [1]
+    assert [i for i, _ in errores] == [2, 3, 4, 5, 6, 7]
+    mensajes = ' | '.join(m for _, m in errores)
+    for esperado in ('no es válida', 'falta E', 'falta la sección', 'altura debe ser mayor', 'E debe ser mayor que cero',
+                     'Unidad no válida'):
+        assert esperado in mensajes
 
 
 # ---------------------------------------------------------------- exportación
@@ -1475,6 +1514,9 @@ def test_pagina_web_corre_con_todos_los_ejemplos():
         at.sidebar.button[0].click()
         at.run()
         assert not at.exception, nombre
+        # la página debe dar el mismo periodo que el cálculo directo del ejemplo (detecta datos mal cargados en la página)
+        t1_pagina = re.search(r'class="n">([^<]*)<', [m.value for m in at.markdown if 'PERIODO' in m.value][0]).group(1)
+        assert t1_pagina == f'{correr(EJ[nombre])["T"][0]:.4f} s', nombre
     # controles nuevos (sobre un ejemplo por secciones: con matrices algunos controles se deshabilitan)
     at.sidebar.selectbox(key='ejemplo').select(list(EJ)[1])
     at.sidebar.button[0].click()

@@ -32,8 +32,15 @@ def espectro_fuente(intensidad):
     return 'Infrecuente' if intensidad == 'Infrecuente' else 'Base de diseño'
 
 # Subgrupos NTC y su categoría de riesgo equivalente en ASCE 7 (apuntes, p. 10)
-SUBGRUPOS = {'B2': 'B', 'B1': 'B', 'A2': 'A', 'A1': 'A'}
-RIESGO_ASCE = {'B2': 'I', 'B1': 'II', 'A2': 'III', 'A1': 'IV'}
+SUBGRUPOS = {'B': 'B', 'A2': 'A', 'A1': 'A'}
+RIESGO_ASCE = {'B': 'I–II', 'A2': 'III', 'A1': 'IV'}
+ALIAS_SUBGRUPO = {'B1': 'B', 'B2': 'B'}     # proyectos anteriores: las dos B de la norma se unifican en una sola
+
+
+def normalizar_subgrupo(texto):
+    """'B1' y 'B2' (proyectos anteriores) pasan a 'B'; el resto se deja igual (en mayúsculas)."""
+    t = str(texto or '').strip().upper()
+    return ALIAS_SUBGRUPO.get(t, t)
 
 # Guía de Q (p. 11)
 GUIA_Q = {1.0: 'Ductilidad baja · estructura elástica, sin daño (γmáx = 0.005)',
