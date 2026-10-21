@@ -52,7 +52,7 @@ MODOS = ['Por secciones y cargas', 'Matrices K y M (ya calculadas)']
 UNIDADES = ['kg, cm', 't, cm']
 ORIENT_EI = ['Eje fuerte en la dirección del sismo (Ix)', 'Eje débil (Iy)']
 CAPTURAS = ['Por nivel (una fila por nivel)', 'Por columna (una fila por columna)']
-COLS_CONT = ['eje', 'desde', 'hasta', 'seccion', 'E', 'apoyo', 'art_sup']
+COLS_CONT = ['eje', 'desde', 'hasta', 'seccion', 'I', 'A', 'E', 'apoyo', 'art_sup']
 CRITERIOS = ['Apuntes: el mayor entre el plato y T = 0', 'Máximo del espectro de diseño (como el código de MATLAB)']
 MODOS_OPC = ['Todos los modos', 'Criterio de los apuntes (95 % de masa o T ≥ 0.4 s)', 'Los primeros N']
 RDIST = ['Del plato (k2 = 0, como en tus hojas)', 'Del periodo fundamental (estricto)']
@@ -160,6 +160,9 @@ def cargar(d):
         st.session_state['df_cols'] = df_cols_de(filas_c)
         st.session_state['ver_cols'] = st.session_state.get('ver_cols', 0) + 1
         st.session_state['captura'] = CAPTURAS[1] if d.get('columnas') else CAPTURAS[0]
+        st.session_state['_captura_prev'] = st.session_state['captura']
+        st.session_state['_ult_niveles'] = [dict(r) for r in d['niveles']]
+        st.session_state['_ult_cols'] = [dict(f) for f in filas_c]
         for i in range(1, MAX_EJES + 1):
             st.session_state[f'apoyo_{i}'] = 'Empotrado'
         try:                                     # los apoyos de la base del proyecto pasan a los selectores
@@ -208,6 +211,32 @@ with st.sidebar:
 T_est, T_sismo, T_res, T_herr = st.tabs(['1 · Estructura', '2 · Sismo y norma', '3 · Resultados', '4 · Herramientas'])
 
 # ------------------------------------------------------------------ 1 · estructura
+_capt_ahora = st.session_state['captura']
+_capt_antes = st.session_state.get('_captura_prev', _capt_ahora)
+if _capt_ahora != _capt_antes:       # al cambiar de modo, la otra tabla se llena con lo que ya capturaste
+    try:
+        if _capt_ahora == CAPTURAS[1]:
+            st.session_state['df_cols'] = df_cols_de(ame.columnas_desde_niveles(
+                dict(crujias=st.session_state['crujias'], niveles=st.session_state.get('_ult_niveles', []))))
+            st.session_state['ver_cols'] += 1
+        else:
+            nuevo_d = ame.niveles_desde_columnas(dict(crujias=st.session_state['crujias'],
+                                                      niveles=st.session_state.get('_ult_niveles', []),
+                                                      columnas=st.session_state.get('_ult_cols', [])))
+            st.session_state['df'] = df_de(nuevo_d['niveles'])
+            st.session_state['ver'] += 1
+            n1_ = nuevo_d['niveles'][0]
+            try:
+                nej_ = len(ame.parse_vector(st.session_state['crujias'], 'Crujías')) + 1
+                for i, est in enumerate(ame.estados_apoyo(n1_.get('artic', ''), n1_.get('rod', ''), nej_), 1):
+                    st.session_state[f'apoyo_{i}'] = est
+            except ValueError:
+                pass
+        st.session_state.pop('_aviso_sync', None)
+    except (ValueError, KeyError, TypeError) as e_sync:
+        st.session_state['_aviso_sync'] = f'No se pudo pasar lo capturado al otro modo: {e_sync}'
+st.session_state['_captura_prev'] = _capt_ahora
+
 with T_est:
     st.caption('Paso 1 · Define la estructura: material, geometría, apoyos y cargas. '
                'Luego completa «Sismo y norma» y mira los «Resultados».')
@@ -258,6 +287,11 @@ with T_est:
                  help='Por nivel: una fila por nivel con los ejes, secciones y E de sus columnas. Por columna: una fila por columna '
                       '(eje, niveles que abarca, sección, E, apoyo); es lo más directo cuando las columnas cambian de nivel a nivel.')
         por_columna = st.session_state['captura'] == CAPTURAS[1]
+        if st.session_state.get('_aviso_sync'):
+            st.warning(st.session_state['_aviso_sync'])
+        if not por_columna:
+            st.caption('Si cada columna tiene su propio E o I, o alguna cruza varios niveles, usa «Por columna»: '
+                       'lo que ya capturaste se pasa solo a esa tabla.')
         st.text_input('Crujías (m), de izquierda a derecha', key='crujias',
                       help='Anchos de cada crujía separados por espacio: "4 5" define 2 crujías y 3 ejes (1, 2 y 3).')
         c1, c2, _ = st.columns([1, 1, 2])
@@ -310,8 +344,14 @@ with T_est:
                       'desde': st.column_config.TextColumn('Desde nivel', help='Nivel donde empieza (vacío = 1).'),
                       'hasta': st.column_config.TextColumn('Hasta nivel', help='Nivel donde termina (vacío = el último). '
                                                            'Una columna que cruza un piso sin viga es una sola fila.'),
-                      'seccion': st.column_config.TextColumn('Sección (cm)', help=AYUDA_SECCIONES),
-                      'E': st.column_config.TextColumn('E', help='En la unidad de E, o "acero". Vacío = el E general.'),
+                      'seccion': st.column_config.TextColumn('Sección (cm)', help=AYUDA_SECCIONES + ' Déjala vacía si das la '
+                                                             'inercia I directamente.'),
+                      'I': st.column_config.TextColumn('I (cm⁴)', help='Inercia de esta columna en la dirección del sismo. '
+                                                       'Si la llenas, se usa en lugar de la sección.'),
+                      'A': st.column_config.TextColumn('A (cm²)', help='Área, opcional (solo con vigas flexibles). '
+                                                       'Sin área la columna es axialmente rígida.'),
+                      'E': st.column_config.TextColumn('E', help='E de esta columna, en la unidad de E, o "acero". '
+                                                       'Vacío = el E general.'),
                       'apoyo': st.column_config.SelectboxColumn('Apoyo en su base', options=list(ame.APOYOS), required=False,
                                                                 help='Cómo termina la columna abajo (base de la estructura si empieza '
                                                                      'en el nivel 1). Rodillo solo en la base.'),
@@ -443,6 +483,9 @@ elif datos['niveles'] and 2 <= nej <= MAX_EJES and not manual:       # los selec
     art_, rod_ = ame.apoyos_a_texto([st.session_state.get(f'apoyo_{i}', 'Empotrado') for i in range(1, nej + 1)])
     datos['niveles'][0]['artic'] = ' '.join(str(e) for e in art_ if e in ejes1)
     datos['niveles'][0]['rod'] = ' '.join(str(e) for e in rod_ if e in ejes1)
+st.session_state['_ult_niveles'] = [dict(r) for r in datos['niveles']]          # con los apoyos de los selectores aplicados
+if edit_cols is not None:
+    st.session_state['_ult_cols'] = filas_de(edit_cols)
 firma = hashlib.md5(json.dumps(datos, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
 
 modelo = res = error_modelo = None
@@ -478,6 +521,16 @@ with T_est:
         with st.expander('Vista previa de la estructura', expanded=True):
             st.pyplot(ame.fig_estructura(modelo))
             st.caption('Revisa que ejes, secciones, articulaciones, vigas y cargas sean los que esperas antes de leer los resultados.')
+        st.markdown('**Columnas del modelo** · valores efectivos de cada columna (las que cruzan niveles aparecen una sola vez)')
+        tabla_col = pd.DataFrame([{
+            'Eje': f['eje'], 'Niveles': f'{f["desde"]}' + (f' a {f["hasta"]}' if f['hasta'] != f['desde'] else ''),
+            'Sección': f['seccion'], 'E (kg/cm²)': f['E'], 'I (cm⁴)': f['I'], 'A (cm²)': f['A'] if f['A'] else np.nan,
+            'EI (t·m²)': f['EI_tm2'], 'Longitud (m)': f['L'], 'Rigidez lateral k (kg/cm)': f['k'], 'Apoyo': f['apoyo']}
+            for f in ame.tabla_columnas(modelo)])
+        st.dataframe(tabla_col, hide_index=True, width='stretch',
+                     column_config={c: st.column_config.NumberColumn(format='%.6g')
+                                    for c in ('E (kg/cm²)', 'I (cm⁴)', 'A (cm²)', 'EI (t·m²)', 'Longitud (m)',
+                                              'Rigidez lateral k (kg/cm)')})
 
 # ------------------------------------------------------------------ 3 · resultados
 with T_res:

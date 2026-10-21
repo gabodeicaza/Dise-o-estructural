@@ -495,6 +495,12 @@ def _apoyo_de(v, nom):
     raise ValueError(f'{nom}: apoyo no válido "{v}". Usa Empotrado, Articulado o Rodillo.')
 
 
+def _vacio(v):
+    """Texto de una celda; '' si está vacía (None, nan)."""
+    t = str(v).strip()
+    return '' if t.lower() in ('nan', 'none') else t
+
+
 def niveles_desde_columnas(d):
     """Pasa la captura POR COLUMNA a la captura por nivel que usa preparar_modelo.
 
@@ -517,9 +523,25 @@ def niveles_desde_columnas(d):
         hasta = int(parse_num(txt_h, f'{nom} - hasta')) if txt_h and txt_h.lower() != 'nan' else n
         if not 1 <= desde <= hasta <= n:
             raise ValueError(f'{nom}: los niveles deben cumplir 1 ≤ desde ≤ hasta ≤ {n} (escribiste {desde} y {hasta}).')
-        toks = tokens_seccion(r.get('seccion', ''))
-        if len(toks) != 1:
-            raise ValueError(f'{nom} - sección: escribe exactamente una sección (por ejemplo 50x50 o I:3688/A:26.8).')
+        I_txt, A_txt = _vacio(r.get('I', '')), _vacio(r.get('A', ''))
+        if I_txt:                                # inercia (y área) dadas directamente: sustituyen a la sección
+            I_dir = parse_num(I_txt, f'{nom} - I')
+            if I_dir <= 0:
+                raise ValueError(f'{nom} - I: la inercia debe ser mayor que cero.')
+            tok = f'i:{I_dir:.10g}'
+            if A_txt:
+                A_dir = parse_num(A_txt, f'{nom} - A')
+                if A_dir <= 0:
+                    raise ValueError(f'{nom} - A: el área debe ser mayor que cero.')
+                tok += f'/a:{A_dir:.10g}'
+            toks = [tok]
+        else:
+            if A_txt:
+                raise ValueError(f'{nom}: escribiste el área A pero no la inercia I.')
+            toks = tokens_seccion(r.get('seccion', ''))
+            if len(toks) != 1:
+                raise ValueError(f'{nom} - sección: escribe exactamente una sección (por ejemplo 50x50 o I:3688/A:26.8), '
+                                 'o la inercia I.')
         E_txt = str(r.get('E', '')).strip()
         E_txt = 'general' if E_txt.lower() in ('', 'nan', 'none') else E_txt
         apoyo = _apoyo_de(r.get('apoyo', ''), nom)
@@ -627,6 +649,22 @@ def _tramos(texto, nb, nom):
 
 
 APOYOS = ('Empotrado', 'Articulado', 'Rodillo')
+
+
+def tabla_columnas(p):
+    """Valores efectivos de cada columna del modelo (una fila por columna física, también las que cruzan niveles):
+    eje, niveles, sección, E, I, A, EI, longitud real, rigidez lateral y apoyo."""
+    filas = []
+    for i, l in enumerate(p['geom']['niveles']):
+        for c in l['cols']:
+            if c.get('k_cont'):
+                continue
+            fin = c.get('fin_nivel', i)
+            L = float(sum(p['alturas'][i:fin + 1]))
+            filas.append(dict(eje=c['eje'], desde=i + 1, hasta=fin + 1, seccion=c['texto'], E=float(c['E']), I=float(c['I']),
+                              A=float(c['A']) if c['A'] < 1e8 else None, EI_tm2=float(c['E'] * c['I'] / 1e7), L=L,
+                              k=float(c['k']), apoyo=apoyo_txt(c)))
+    return sorted(filas, key=lambda f: (f['eje'], f['desde']))
 
 
 def propiedades_tabla(filas, unidad_seccion='cm'):
@@ -1757,7 +1795,8 @@ def fig_estructura(p):
             ax.add_patch(Rectangle((c['x'] - w / 2, z0), w, zt - z0, fc=AZULES[1] if circular else AZULES[2],
                                    ec=AZULES[0], lw=0.8, zorder=4))
             cruza = fin > i                                  # la etiqueta de una columna que cruza va a su izquierda
-            ax.text(c['x'] + (-1 if cruza else 1) * (w / 2 + 0.1), (z0 + zs[fin + 1]) / 2, c['texto'], fontsize=7.5,
+            ax.text(c['x'] + (-1 if cruza else 1) * (w / 2 + 0.1), (z0 + zs[fin + 1]) / 2,
+                    c['texto'] + (f'  (L = {zs[fin + 1] - z0:g} m)' if cruza else ''), fontsize=7.5,
                     color=AZULES[0], va='center', ha='right' if cruza else 'left', zorder=6)
             if c.get('rodillo'):  # apoyo de rodillos: triángulo sobre dos ruedas
                 ax.add_patch(Polygon([(c['x'], 0), (c['x'] - 0.25, -0.32), (c['x'] + 0.25, -0.32)],

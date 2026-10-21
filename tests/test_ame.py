@@ -1460,6 +1460,62 @@ def test_calculadora_por_filas_errores_por_fila_sin_detener_las_demas():
         assert esperado in mensajes
 
 
+# ---------------------------------------------------------------- E e I de cada columna (también las que cruzan niveles)
+def test_I_y_E_directos_por_columna_equivalen_a_la_seccion():
+    d = copy.deepcopy(EJ13)
+    for f in d['columnas']:
+        if f['eje'] == '4' and f['desde'] == '3':
+            f.update(seccion='', I='3688', A='26.8', E='2100')               # la columna 12, que cruza los niveles 3 y 4
+    assert ame.preparar_modelo(d)['K'] == pytest.approx(ame.preparar_modelo(EJ13)['K'])
+    d['columnas'][-1].update(I='5000')                                       # editar solo su I: la rigidez cambia
+    assert abs(ame.preparar_modelo(d)['K'][1, 3]) == pytest.approx(abs(ame.preparar_modelo(EJ13)['K'][1, 3]) * 5000 / 3688)
+
+
+@pytest.mark.parametrize('cambio, texto', [
+    (dict(I='-5'), 'la inercia debe ser mayor que cero'), (dict(I='0'), 'la inercia debe ser mayor que cero'),
+    (dict(I='abc'), 'Valor numérico no válido'), (dict(seccion='', I='', A='10'), 'escribiste el área A pero no la inercia I'),
+    (dict(I='3688', A='-2'), 'el área debe ser mayor que cero'), (dict(seccion='', I=''), 'exactamente una sección')])
+def test_errores_de_I_y_A_por_columna(cambio, texto):
+    d = copy.deepcopy(EJ13)
+    d['columnas'][-1].update(cambio)
+    with pytest.raises(ValueError, match=texto):
+        ame.preparar_modelo(d)
+
+
+def test_tabla_de_valores_efectivos_por_columna():
+    filas = ame.tabla_columnas(ame.preparar_modelo(EJ12))
+    assert len(filas) == 15                                                  # 16 tramos de columna − 1 continuación (la 12 cruza)
+    c12 = [f for f in filas if f['eje'] == 4 and f['desde'] == 3][0]
+    assert (c12['hasta'], c12['L']) == (4, 7.0) and c12['E'] == pytest.approx(2.1e6) and c12['I'] == 3688
+    assert c12['EI_tm2'] == pytest.approx(774.48) and c12['k'] == pytest.approx(12 * 2.1e6 * 3688 / 700 ** 3)
+    assert 'cruza hasta el piso 4' in c12['apoyo']
+    c1 = [f for f in filas if f['eje'] == 1 and f['desde'] == 1][0]
+    assert c1['L'] == 4.5 and c1['I'] == pytest.approx(50 ** 4 / 12) and c1['A'] == pytest.approx(2500)
+    assert [f['apoyo'] for f in filas if f['desde'] == 1] == ['Empotrado', 'Articulado', 'Articulado', 'Empotrado']
+
+
+def test_pagina_cambiar_de_modo_conserva_la_estructura_y_los_apoyos():
+    pytest.importorskip('streamlit')
+    from streamlit.testing.v1 import AppTest
+    raiz = Path(__file__).resolve().parents[1]
+    at = AppTest.from_file(str(raiz / 'app_web.py'), default_timeout=180).run()
+    t1 = lambda: re.search(r'class="n">([^<]*)<', [m.value for m in at.markdown if 'PERIODO' in m.value][0]).group(1)
+    for idx in (11, 10):                                                     # tarea (cruza niveles) y pizarrón (volados, rodillo)
+        at.selectbox(key='ejemplo').select(list(EJ)[idx])
+        at.sidebar.button[0].click()
+        at.run()
+        inicial = t1()
+        at.radio(key='captura').set_value('Por columna (una fila por columna)').run()
+        assert not at.exception and t1() == inicial
+        assert {'I', 'A', 'E'} <= set(at.session_state['df_cols'].columns)
+        at.radio(key='captura').set_value('Por nivel (una fila por nivel)').run()
+        assert not at.exception and t1() == inicial                          # los apoyos de la base también se conservan
+    at.selectbox(key='apoyo_1').select('Articulado').run()
+    cambiado = t1()
+    at.radio(key='captura').set_value('Por columna (una fila por columna)').run()
+    assert t1() == cambiado                                                  # un apoyo cambiado a mano pasa a la otra tabla
+
+
 # ---------------------------------------------------------------- exportación
 def test_excel_y_pdf_se_generan():
     from openpyxl import load_workbook
