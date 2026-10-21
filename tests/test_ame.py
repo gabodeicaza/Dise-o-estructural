@@ -15,6 +15,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+import ame_dimensionado as dim  # noqa: E402
 import ame_ntc as ntc  # noqa: E402
 import ame_pdf  # noqa: E402
 import ame_sismico as ame  # noqa: E402
@@ -23,7 +24,7 @@ from ame_revision import combinar, irregularidades, rho_cqc, theta_pdelta  # noq
 from ame_secciones import parse_secciones  # noqa: E402
 
 EJ = ame.EJEMPLOS_MODELO
-EJ1, EJ2, EJ3, EJ4, EJ5, EJ6, EJ7, EJ8, EJ9, EJ10, EJ11, EJ12 = list(EJ.values())
+EJ1, EJ2, EJ3, EJ4, EJ5, EJ6, EJ7, EJ8, EJ9, EJ10, EJ11, EJ12, EJ13 = list(EJ.values())
 
 
 def correr(d):
@@ -1250,6 +1251,176 @@ def test_apoyos_de_la_base_por_eje():
     assert ame.preparar_modelo(d)['K'] == pytest.approx(ame.preparar_modelo(EJ11)['K'])
 
 
+# ---------------------------------------------------------------- captura por columna, volados por nivel
+def test_captura_por_columna_equivale_a_la_captura_por_nivel():
+    a, b = ame.preparar_modelo(EJ12), ame.preparar_modelo(EJ13)
+    assert b['K'] == pytest.approx(a['K']) and b['M'] == pytest.approx(a['M']) and b['cargas'] == pytest.approx(a['cargas'])
+    assert correr(EJ13)['T'] == pytest.approx(correr(EJ12)['T'])
+    cols3 = {c['eje']: c for c in b['geom']['niveles'][2]['cols']}
+    assert cols3[4]['hasta'] == 4 and ame.apoyo_txt(cols3[2]) == 'Empotrado'
+    assert {c['eje']: ame.apoyo_txt(c) for c in b['geom']['niveles'][0]['cols']} == {
+        1: 'Empotrado', 2: 'Articulado', 3: 'Articulado', 4: 'Empotrado'}
+
+
+def test_ida_y_vuelta_entre_tabla_por_columna_y_por_nivel():
+    filas = ame.columnas_desde_niveles(EJ12)
+    assert {f['eje'] for f in filas} == {1, 2, 3, 4}
+    assert any(f['eje'] == 4 and f['desde'] == 3 and f['hasta'] == 4 for f in filas)       # la columna que cruza es una fila
+    por_nivel = {k: v for k, v in EJ12.items() if k != 'niveles'}
+    por_nivel['niveles'] = [{k: v for k, v in n.items() if k in ('h', 'viga', 'E_viga', 'sin_losa', 'cargas')}
+                            for n in EJ12['niveles']]
+    vuelta = ame.preparar_modelo(dict(por_nivel, columnas=filas))
+    assert vuelta['K'] == pytest.approx(ame.preparar_modelo(EJ12)['K'])
+
+
+@pytest.mark.parametrize('cambio, texto', [
+    (lambda c: c[0].update(eje='9'), 'el eje 9 no existe'),
+    (lambda c: c[0].update(desde='3', hasta='1'), 'deben cumplir 1 ≤ desde ≤ hasta'),
+    (lambda c: c[0].update(seccion=''), 'exactamente una sección'),
+    (lambda c: c[0].update(seccion='50x50 40x40'), 'exactamente una sección'),
+    (lambda c: c[0].update(apoyo='Fijo'), 'apoyo no válido'),
+    (lambda c: c[1].update(apoyo='Rodillo'), 'rodillos solo aplican en la base'),
+    (lambda c: c.append(dict(eje='1', desde='1', hasta='4', seccion='40x40')), 'tiene dos columnas'),
+    (lambda c: None, 'no tiene ninguna columna'),
+])
+def test_errores_de_la_tabla_por_columna(cambio, texto):
+    d = copy.deepcopy(EJ13)
+    cambio(d['columnas'])
+    if texto == 'no tiene ninguna columna':                       # deja el nivel 4 sin columnas
+        d['columnas'] = [f for f in d['columnas'] if f['hasta'] != '4' and f['desde'] != '4']
+        d['columnas'] = [dict(f, hasta='3') if f['eje'] == '4' else f for f in d['columnas']]
+    with pytest.raises(ValueError, match=texto):
+        ame.preparar_modelo(d)
+
+
+def test_filas_vacias_y_columnas_con_valores_en_blanco():
+    d = copy.deepcopy(EJ13)
+    d['columnas'].append(dict(eje='', desde='', hasta='', seccion='', E='', apoyo='', art_sup=False))
+    d['columnas'][0]['desde'] = ''                                   # vacío = nivel 1
+    d['columnas'][0]['apoyo'] = None
+    assert ame.preparar_modelo(d)['K'] == pytest.approx(ame.preparar_modelo(EJ13)['K'])
+
+
+def test_volados_distintos_por_nivel():
+    d = copy.deepcopy(EJ11)
+    d['volado_izq'], d['volado_der'] = '3', '2'
+    d['niveles'][1].update(volado_izq='1', cargas='2 4 2 0')              # nivel 2: volado izquierdo de 1 m
+    d['niveles'][2].update(volado_izq='0', volado_der='1', cargas='3 3 1')  # nivel 3: sin volado izq., der. de 1 m
+    p = ame.preparar_modelo(d)
+    assert p['cargas'] == pytest.approx([30.0, 1 * 2 + 6 * 4 + 3 * 2, 6 * 3 + 3 * 3 + 1 * 1])
+    assert p['geom']['volados'] == (3.0, 2.0)
+    d['niveles'][1]['cargas'] = '2 2 4'
+    with pytest.raises(ValueError, match='Nivel 2: hay 4 tramo'):
+        ame.preparar_modelo(d)
+    d['niveles'][1].update(cargas='2 2 4 0', volado_izq='-1')
+    with pytest.raises(ValueError, match='Nivel 2: los volados no pueden ser negativos'):
+        ame.preparar_modelo(d)
+    buf = io.BytesIO()
+    ame.fig_estructura(ame.preparar_modelo(dict(d, niveles=[dict(n, **({'volado_izq': '1'} if i == 1 else {}))
+                                                          for i, n in enumerate(d['niveles'])]))).savefig(buf, format='png')
+    assert len(buf.getvalue()) > 5_000
+
+
+# ---------------------------------------------------------------- resolver al revés (dimensionado)
+def con_columnas_25x50():
+    d = copy.deepcopy(EJ2)
+    d['niveles'] = [dict(n, seccion='25x50') for n in d['niveles']]
+    return d
+
+
+@pytest.mark.parametrize('limite', [0.02, 0.01, 0.005])
+def test_dimensionado_por_distorsion_cumple_y_es_minimo(limite):
+    d = con_columnas_25x50()
+    r = dim.dimensionar_distorsion(d, [1, 2, 3], paso=5, lado_ini=20, limite=limite)
+    assert r['cumple'] and max(r['dist']) <= limite and r['razones'].max() <= 1 + 1e-9
+    base = dim._base(d)
+    for nivel, lado in r['lados'].items():
+        if lado > 20:                                                   # un paso menos en ese nivel ya incumple
+            menos = dict(r['lados'])
+            menos[nivel] -= 5
+            res = ame.calcular(ame.preparar_modelo(dim._con_lados(base, menos, 'Cuadrada', 1.0)))
+            assert dim._razones(res, 'diseno', limite)[0].max() > 1
+    assert all(texto == f'{l:g}x{l:g}' for l, texto in zip(r['lados'].values(), r['textos'].values()))
+
+
+def test_dimensionado_formas_y_estados():
+    d = con_columnas_25x50()
+    circ = dim.dimensionar_distorsion(d, [1, 2, 3], forma='Circular', limite=0.01)
+    assert circ['cumple'] and all(t.startswith('Ø') for t in circ['textos'].values())
+    rect = dim.dimensionar_distorsion(d, [1, 2, 3], forma='Rectangular', rel=1.5, limite=0.01)
+    assert rect['cumple'] and all('x' in t for t in rect['textos'].values())
+    assert rect['textos'][1] == f'{rect["lados"][1]:g}x{1.5 * rect["lados"][1]:g}'
+    todos = dim.dimensionar_distorsion(d, [1, 2, 3], estados='todos')       # SV (0.03), DL (0.004) y OI (0.005) a la vez
+    assert todos['cumple'] and len(todos['usados']) == 3 and max(todos['dist']) <= 0.03
+    assert max(todos['lados'].values()) >= max(dim.dimensionar_distorsion(d, [1, 2, 3], estados='diseno')['lados'].values())
+
+
+def test_dimensionado_por_periodo():
+    d = con_columnas_25x50()
+    r = dim.dimensionar_periodo(d, [1, 2, 3], 0.5)
+    assert r['T_exacto'] == pytest.approx(0.5, abs=1e-6) and r['T'] <= 0.5 and r['lado'] >= r['lado_exacto']
+    assert r['lado'] - r['lado_exacto'] < 5 and r['lado'] % 5 == 0
+    # con la sección exacta, el periodo del modelo completo es el pedido
+    d2 = dim._con_lados(dim._base(d), {1: r['lado_exacto'], 2: r['lado_exacto'], 3: r['lado_exacto']}, 'Cuadrada', 1.0)
+    assert ame.calcular(ame.preparar_modelo(d2))['T'][0] == pytest.approx(0.5, abs=1e-6)
+
+
+@pytest.mark.parametrize('llamada, texto', [
+    (lambda d: dim.dimensionar_distorsion(d, [], limite=0.01), 'al menos un nivel'),
+    (lambda d: dim.dimensionar_distorsion(d, [9], limite=0.01), 'El nivel 9 no existe'),
+    (lambda d: dim.dimensionar_distorsion(d, [1, 2, 3], forma='Hexagonal', limite=0.01), 'Forma no válida'),
+    (lambda d: dim.dimensionar_distorsion(d, [1, 2, 3], paso=0, limite=0.01), 'paso debe ser mayor'),
+    (lambda d: dim.dimensionar_distorsion(d, [1, 2, 3], forma='Rectangular', rel=0, limite=0.01), 'relación h/b'),
+    (lambda d: dim.dimensionar_periodo(d, [1, 2, 3], 0.001), 'no se puede llegar a'),
+    (lambda d: dim.dimensionar_periodo(d, [1, 2, 3], -1), 'mayor que cero'),
+    (lambda d: dim.dimensionar_distorsion(dict(d, unidad_seccion='m'), [1, 2, 3], limite=0.01), 'secciones en cm'),
+    (lambda d: dim.dimensionar_distorsion(dict(d, modo='matrices'), [1, 2, 3], limite=0.01), 'matrices K y M'),
+])
+def test_dimensionado_errores(llamada, texto):
+    with pytest.raises(ValueError, match=texto):
+        llamada(con_columnas_25x50())
+
+
+def test_dimensionado_critico_fuera_de_los_niveles_elegidos():
+    d = con_columnas_25x50()
+    d['niveles'][1]['seccion'] = '15x15'                                    # el nivel 2 es el flexible y no se dimensiona
+    with pytest.raises(ValueError, match='entrepiso crítico es el 2'):
+        dim.dimensionar_distorsion(d, [1, 3], limite=0.005)
+
+
+def test_dimensionado_con_captura_por_columna_y_el_ejemplo_de_la_tarea():
+    r = dim.dimensionar_distorsion(EJ13, [1, 2], limite=0.02)
+    assert r['cumple'] and set(r['lados']) == {1, 2}
+    with pytest.raises(ValueError, match='entrepiso crítico es el 4'):       # el nivel 4 es de acero y no se dimensiona
+        dim.dimensionar_distorsion(EJ13, [1, 2], limite=0.005)
+
+
+def test_el_pdf_ya_no_trae_la_seccion_final_de_alcances():
+    pymupdf = pytest.importorskip('pymupdf')
+    buf = io.BytesIO()
+    ame_pdf.memoria_pdf(correr(EJ2), buf, proyecto='Prueba', autor='Pruebas')
+    texto = ''.join(pg.get_text() for pg in pymupdf.open(stream=buf.getvalue(), filetype='pdf'))
+    assert 'Alcances y limitaciones' not in texto and 'revisión de un ingeniero' not in texto
+    assert 'Avisos de coherencia' in texto
+
+
+def test_pagina_organizada_en_tabs_y_errores_no_la_rompen():
+    pytest.importorskip('streamlit')
+    from streamlit.testing.v1 import AppTest
+    raiz = Path(__file__).resolve().parents[1]
+    at = AppTest.from_file(str(raiz / 'app_web.py'), default_timeout=120).run()
+    etiquetas = [t_.label for t_ in at.tabs]
+    assert etiquetas[:3] == ['1 · Estructura', '2 · Sismo y norma', '3 · Resultados']
+    assert {'Resumen', 'Calculadora de EI', 'Dimensionar · resolver al revés', '4 · Herramientas'} <= set(etiquetas)
+    assert sorted({w.key for w in at.sidebar.text_input}) == ['autor', 'proyecto']          # la barra lateral solo trae el proyecto
+    # datos inválidos: el error aparece, las demás pestañas siguen disponibles y la calculadora funciona
+    at.text_input(key='crujias').set_value('x').run()
+    assert not at.exception and any('Revisa los datos' in e.value for e in at.error)
+    assert 'Calculadora de EI' in [t_.label for t_ in at.tabs] and at.text_input(key='calc_sec').value
+    at.text_input(key='crujias').set_value('4 5').run()
+    assert not at.exception and not any('Revisa los datos' in e.value for e in at.error)
+
+
 # ---------------------------------------------------------------- exportación
 def test_excel_y_pdf_se_generan():
     from openpyxl import load_workbook
@@ -1308,23 +1479,36 @@ def test_pagina_web_corre_con_todos_los_ejemplos():
     at.sidebar.selectbox(key='ejemplo').select(list(EJ)[1])
     at.sidebar.button[0].click()
     at.run()
-    at.sidebar.selectbox(key='combinacion').select('CQC').run()
-    at.sidebar.radio(key='unidad_espectro').set_value('g').run()                 # solo cambia las unidades
+    at.selectbox(key='combinacion').select('CQC').run()
+    at.radio(key='unidad_espectro').set_value('g').run()                 # solo cambia las unidades
     assert at.error and not at.exception                                           # a0 y c quedan enormes: alerta de captura
-    at.sidebar.radio(key='unidad_espectro').set_value('cm/s²').run()
-    at.sidebar.selectbox(key='modos').select('Los primeros N').run()
-    at.sidebar.text_input(key='modos_n').set_value('2').run()
+    at.radio(key='unidad_espectro').set_value('cm/s²').run()
+    at.selectbox(key='modos').select('Los primeros N').run()
+    at.text_input(key='modos_n').set_value('2').run()
     assert not at.exception
-    at.sidebar.selectbox(key='modos').select('Todos los modos').run()
-    at.sidebar.selectbox(key='R_dist').select('Del periodo fundamental (estricto)').run()
+    at.selectbox(key='modos').select('Todos los modos').run()
+    at.selectbox(key='R_dist').select('Del periodo fundamental (estricto)').run()
     assert not at.exception
-    at.sidebar.selectbox(key='estado').select('Limitación de daños').run()
-    at.sidebar.radio(key='direccion').set_value('Y').run()
-    at.sidebar.selectbox(key='material').select('Acero').run()
+    at.selectbox(key='estado').select('Limitación de daños').run()
+    at.radio(key='direccion').set_value('Y').run()
+    at.selectbox(key='material').select('Acero').run()
     assert not at.exception
     # objetivo de diseño: grupo A / base -> ocupación inmediata; infrecuente exige su propio espectro
-    at.sidebar.selectbox(key='subgrupo').select('A1').run()
+    at.selectbox(key='subgrupo').select('A1').run()
     assert not at.exception and not any('Revisa los datos' in e.value for e in at.error)
+    # captura por columna y dimensionado
+    at.sidebar.selectbox(key='ejemplo').select(list(EJ)[12])
+    at.sidebar.button[0].click()
+    at.run()
+    assert not at.exception and at.radio(key='captura').value.startswith('Por columna')
+    assert 'Dimensionar' in [t.label for t in at.tabs]
+    at.sidebar.selectbox(key='ejemplo').select(list(EJ)[1])
+    at.sidebar.button[0].click()
+    at.run()
+    [b for b in at.button if b.key == 'dim_ir'][0].click()
+    at.run()
+    assert not at.exception and any('Todos los entrepisos cumplen' in s_.value for s_ in at.success)
+    at.text_input(key='crujias').set_value('4 5').run()
     # apoyos de la base: un selector por eje
     at.sidebar.selectbox(key='ejemplo').select(list(EJ)[1])
     at.sidebar.button[0].click()
@@ -1345,17 +1529,17 @@ def test_pagina_web_corre_con_todos_los_ejemplos():
     assert {'Resumen', 'Análisis estático', 'Análisis elástico'} <= {t.label for t in at.tabs}
     at.radio(key='modo').set_value('Por secciones y cargas').run()
     assert not at.exception and at.text_input(key='crujias').value
-    at.sidebar.selectbox(key='intensidad').select('Infrecuente').run()
+    at.selectbox(key='intensidad').select('Infrecuente').run()
     assert at.error and 'espectro SASID' in at.error[0].value and not at.exception
     for k, v in dict(a0='300', c='1300', Ta='0.8', Tb='1.7', k='0.445', Ts='1.0').items():
         at.sidebar.text_input(key=k).set_value(v)
     at.run()
     assert not at.exception and not any('Revisa los datos' in e.value for e in at.error)
-    at.sidebar.selectbox(key='intensidad').select('Base de diseño').run()
-    assert at.sidebar.text_input(key='a0').value == '80'         # el espectro base (el del ejemplo 6 cargado antes) se conservó
-    at.sidebar.multiselect(key='irreg').set_value(['5.3.2']).run()
-    at.sidebar.text_input(key='b_planta').set_value('12').run()
-    at.sidebar.selectbox(key='zona').select('III').run()
+    at.selectbox(key='intensidad').select('Base de diseño').run()
+    assert at.text_input(key='a0').value == '80'         # el espectro base (el del ejemplo 6 cargado antes) se conservó
+    at.multiselect(key='irreg').set_value(['5.3.2']).run()
+    at.text_input(key='b_planta').set_value('12').run()
+    at.selectbox(key='zona').select('III').run()
     assert not at.exception
     at.text_input(key='crujias').set_value('').run()
     assert at.error and not at.exception  # mensaje claro, sin caerse

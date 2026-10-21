@@ -50,6 +50,15 @@ def _sec(tipo, texto, A, Ix, Iy, dx, dy, **forma):
     return dict(tipo=tipo, texto=texto, A=A, Ix=Ix, Iy=Iy, dx=dx, dy=dy, forma=forma)
 
 
+def tokens_seccion(texto):
+    """Secciones escritas en una celda -> lista de textos (normalizados y en minúsculas), una por sección."""
+    t = str(texto).lower().replace('×', 'x').replace('=', ':')
+    t = re.sub(r'\s*x\s*', 'x', t)
+    t = re.sub(r'([øo⌀dht]:?)\s+(?=\d)', r'\1', t)
+    t = re.sub(r':\s+', ':', t)
+    return _tokens(t)
+
+
 def _girar(sec):
     """La misma sección girada 90° en planta: intercambia las inercias y las dimensiones X/Y."""
     f = dict(sec['forma'])

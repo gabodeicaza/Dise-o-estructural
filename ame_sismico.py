@@ -24,7 +24,7 @@ import ame_ntc as ntc
 from ame_marco import rigidez_marco
 from ame_revision import (COMBINACIONES, avisos as _avisos, combinar, derivas_modales, irregularidades,
                           theta_pdelta)
-from ame_secciones import AYUDA_SECCIONES, ancho_en_direccion, dibujar_seccion, inercia, parse_secciones
+from ame_secciones import AYUDA_SECCIONES, ancho_en_direccion, dibujar_seccion, inercia, parse_secciones, tokens_seccion
 
 G = 981.0  # cm/s^2
 AZULES = ['#0B2545', '#3E7CB1', '#1D4E89', '#81A4CD', '#13315C']
@@ -478,6 +478,113 @@ def _E_nivel(r, d, E, nom):
     return _a_kgcm2(parse_num(txt, f'{nom} - E de columnas'), d.get('unidad_E'), f'{nom} - E de columnas')
 
 
+_SI = ('x', 'si', 'sí', 'true', '1', 'yes', 'y', '✓')
+
+
+def _si(v):
+    return v is True or str(v).strip().lower() in _SI
+
+
+def _apoyo_de(v, nom):
+    t = str(v).strip().lower()
+    if t in ('', 'nan', 'none'):
+        return 'Empotrado'
+    for a_ in APOYOS:
+        if t.startswith(a_.lower()[:3]):
+            return a_
+    raise ValueError(f'{nom}: apoyo no válido "{v}". Usa Empotrado, Articulado o Rodillo.')
+
+
+def niveles_desde_columnas(d):
+    """Pasa la captura POR COLUMNA a la captura por nivel que usa preparar_modelo.
+
+    d['columnas']: lista de dicts con eje, desde (nivel, 1 por defecto), hasta (nivel, el último por defecto), seccion, E
+    (vacío = E general), apoyo (Empotrado / Articulado / Rodillo en la base de esa columna) y art_sup (articulada arriba,
+    en el nivel 'hasta'). d['niveles'] conserva solo los datos del nivel: h, viga, E_viga, sin_losa, volados, cargas, W."""
+    niv = [dict(r) for r in d['niveles']]
+    n = len(niv)
+    nb = len(parse_vector(d['crujias'], 'Crujías'))
+    por_nivel = [[] for _ in range(n)]
+    for idx, r in enumerate(d.get('columnas') or [], 1):
+        if all(not str(v).strip() or str(v).strip().lower() in ('nan', 'none', 'false') for v in r.values()):
+            continue                                                           # fila vacía
+        nom = f'Columna {idx}'
+        eje = int(parse_num(r.get('eje', ''), f'{nom} - eje'))
+        if not 1 <= eje <= nb + 1:
+            raise ValueError(f'{nom}: el eje {eje} no existe (hay {nb + 1} ejes, del 1 al {nb + 1}).')
+        txt_d, txt_h = str(r.get('desde', '')).strip(), str(r.get('hasta', '')).strip()
+        desde = int(parse_num(txt_d, f'{nom} - desde')) if txt_d and txt_d.lower() != 'nan' else 1
+        hasta = int(parse_num(txt_h, f'{nom} - hasta')) if txt_h and txt_h.lower() != 'nan' else n
+        if not 1 <= desde <= hasta <= n:
+            raise ValueError(f'{nom}: los niveles deben cumplir 1 ≤ desde ≤ hasta ≤ {n} (escribiste {desde} y {hasta}).')
+        toks = tokens_seccion(r.get('seccion', ''))
+        if len(toks) != 1:
+            raise ValueError(f'{nom} - sección: escribe exactamente una sección (por ejemplo 50x50 o I:3688/A:26.8).')
+        E_txt = str(r.get('E', '')).strip()
+        E_txt = 'general' if E_txt.lower() in ('', 'nan', 'none') else E_txt
+        apoyo = _apoyo_de(r.get('apoyo', ''), nom)
+        if apoyo == 'Rodillo' and desde != 1:
+            raise ValueError(f'{nom}: los apoyos de rodillos solo aplican en la base (columnas que empiezan en el nivel 1).')
+        sup = _si(r.get('art_sup', False))
+        for k in range(desde, hasta + 1):
+            por_nivel[k - 1].append(dict(eje=eje, sec=toks[0], E=E_txt, artic=apoyo == 'Articulado' and k == desde,
+                                         rod=apoyo == 'Rodillo' and k == desde, sup=sup and k == hasta))
+    for k, lst in enumerate(por_nivel):
+        ejes = [c['eje'] for c in lst]
+        dup = sorted({e for e in ejes if ejes.count(e) > 1})
+        if dup:
+            raise ValueError(f'Nivel {k + 1}: el eje {dup[0]} tiene dos columnas; revisa los niveles "desde" y "hasta".')
+        if not lst:
+            raise ValueError(f'Nivel {k + 1}: no tiene ninguna columna; revisa los niveles "desde" y "hasta" de la tabla.')
+        lst.sort(key=lambda c: c['eje'])
+        niv[k].update(ejes=' '.join(str(c['eje']) for c in lst), seccion=' '.join(c['sec'] for c in lst),
+                      E_col=' '.join(c['E'] for c in lst) if any(c['E'] != 'general' for c in lst) else '',
+                      artic=' '.join(str(c['eje']) for c in lst if c['artic']),
+                      rod=' '.join(str(c['eje']) for c in lst if c['rod']),
+                      art_sup=' '.join(str(c['eje']) for c in lst if c['sup']))
+    nuevo = dict(d)
+    nuevo['niveles'] = niv
+    nuevo.pop('columnas', None)
+    return nuevo
+
+
+def columnas_desde_niveles(d):
+    """Inverso de niveles_desde_columnas: une los niveles consecutivos de cada eje que tienen la misma sección y E."""
+    nejes = len(parse_vector(d['crujias'], 'Crujías')) + 1
+    por_eje = {}
+    for k, r in enumerate(d['niveles'], 1):
+        nom = f'Nivel {k}'
+        ejes = parse_ejes(r.get('ejes', ''), nejes, f'{nom} - ejes', range(1, nejes + 1))
+        secs = tokens_seccion(r.get('seccion', ''))
+        if not secs:
+            raise ValueError(f'{nom} - sección: falta la sección.')
+        secs = secs * len(ejes) if len(secs) == 1 else secs
+        Es = _tokens(str(r.get('E_col', '')).strip().lower()) or ['general']
+        Es = Es * len(ejes) if len(Es) == 1 else Es
+        if len(secs) != len(ejes) or len(Es) != len(ejes):
+            raise ValueError(f'{nom}: las secciones o los E no coinciden con el número de columnas ({len(ejes)}).')
+        artic = set(parse_ejes(r.get('artic', ''), nejes, f'{nom} - articuladas', []))
+        rod = set(parse_ejes(r.get('rod', ''), nejes, f'{nom} - rodillos', []))
+        sup = set(parse_ejes(r.get('art_sup', ''), nejes, f'{nom} - articuladas arriba', []))
+        for e, sec, E_ in zip(ejes, secs, Es):
+            por_eje.setdefault(e, []).append((k, sec, E_, e in artic, e in rod, e in sup))
+    filas = []
+    for e in sorted(por_eje):
+        fila = None
+        for k, sec, E_, art, roll, sup in por_eje[e]:
+            if fila and k == fila['hasta'] + 1 and sec == fila['seccion'] and E_ == fila['_E'] and not art and not roll \
+                    and not fila['art_sup']:
+                fila['hasta'], fila['art_sup'] = k, sup
+            else:
+                fila = dict(eje=e, desde=k, hasta=k, seccion=sec, _E=E_,
+                            apoyo='Rodillo' if roll else ('Articulado' if art else 'Empotrado'), art_sup=sup)
+                filas.append(fila)
+    for f in filas:
+        e_txt = f.pop('_E')
+        f['E'] = '' if e_txt == 'general' else e_txt
+    return filas
+
+
 def _E_columnas(r, d, E, nom, ncol):
     """E de cada columna de un nivel: vacío = E general; un valor para todas o uno por columna.
     Cada valor va en la unidad de E; las palabras 'acero' (2,040,000 kg/cm²) y 'general' también valen."""
@@ -570,7 +677,8 @@ def preparar_modelo(d):
     """Arma K, M y la geometría a partir de ejes y niveles.
 
     d['crujias']: anchos de crujía (m) de izquierda a derecha, p. ej. "4 5" -> ejes 1, 2 y 3.
-    d['volado_izq'], d['volado_der']: volados (m) más allá del primer y del último eje; "cargas" admite entonces un valor
+    d['columnas'] (opcional): captura por columna (ver niveles_desde_columnas).
+    d['volado_izq'], d['volado_der']: volados (m) más allá del primer y del último eje (cada nivel puede poner los suyos); "cargas" admite entonces un valor
         por tramo de izquierda a derecha (volado izq., crujías, volado der.), con 0 donde no hay losa.
     d['direccion']: 'X' (por defecto) o 'Y': dirección del sismo. En una sección b x h, h va en X y b en Y.
     d['vigas']: 'rigidas' (marco de cortante) o 'flexibles' (marco plano con vigas y columnas).
@@ -592,19 +700,26 @@ def preparar_modelo(d):
     d['T_medido']: periodo fundamental medido (s), opcional. Los pesos pasan a ser solo la distribución relativa entre
         niveles (si se omiten, todos iguales) y se escalan para que T1 sea el medido: así se obtiene el peso total.
     """
+    if d.get('columnas'):                                   # captura por columna: se pasa a la captura por nivel
+        d = niveles_desde_columnas(d)
     bays = parse_vector(d['crujias'], 'Crujías')
     if (bays <= 0).any():
         raise ValueError('Las crujías deben ser mayores que cero.')
     nb = len(bays)
     nejes = nb + 1
     xs = np.concatenate([[0.0], np.cumsum(bays)])
-    vi = _num_opc(d, 'volado_izq', None) or 0.0      # volados (voladizos) más allá del primer y último eje
-    vd = _num_opc(d, 'volado_der', None) or 0.0
-    if vi < 0 or vd < 0:
+    vi0 = _num_opc(d, 'volado_izq', None) or 0.0     # volados (voladizos) más allá del primer y último eje: valor por
+    vd0 = _num_opc(d, 'volado_der', None) or 0.0     # defecto de todos los niveles (cada nivel puede poner el suyo)
+    if vi0 < 0 or vd0 < 0:
         raise ValueError('Los volados no pueden ser negativos.')
-    spans = ([(-vi, 0.0)] if vi > 0 else []) + [(float(xs[j]), float(xs[j + 1])) for j in range(nb)] \
-        + ([(float(xs[-1]), float(xs[-1] + vd))] if vd > 0 else [])
-    lon_spans = np.array([b_ - a_ for a_, b_ in spans])
+
+    def _spans_de(vi_, vd_):
+        sp = ([(-vi_, 0.0)] if vi_ > 0 else []) + [(float(xs[j]), float(xs[j + 1])) for j in range(nb)] \
+            + ([(float(xs[-1]), float(xs[-1] + vd_))] if vd_ > 0 else [])
+        return sp, np.array([b_ - a_ for a_, b_ in sp])
+    vi, vd = vi0, vd0
+    spans, lon_spans = _spans_de(vi, vd)
+    vimax = vdmax = 0.0
     direccion = (str(d.get('direccion') or 'X').strip().upper() or 'X')[0]
     if direccion not in 'XY':
         raise ValueError('La dirección del sismo debe ser X o Y.')
@@ -623,6 +738,12 @@ def preparar_modelo(d):
     notas = []
     for i, r in enumerate(niv, 1):
         nom = f'Nivel {i}'
+        v_i, v_d = _num_opc(r, 'volado_izq', None), _num_opc(r, 'volado_der', None)
+        vi, vd = (vi0 if v_i is None else v_i), (vd0 if v_d is None else v_d)       # volados de este nivel
+        if vi < 0 or vd < 0:
+            raise ValueError(f'{nom}: los volados no pueden ser negativos.')
+        spans, lon_spans = _spans_de(vi, vd)
+        vimax, vdmax = max(vimax, vi), max(vdmax, vd)
         h = parse_num(r.get('h', ''), f'{nom} - h')
         if h <= 0:
             raise ValueError(f'{nom}: la altura debe ser mayor que cero.')
@@ -721,6 +842,9 @@ def preparar_modelo(d):
             conectado.add(nejes)
         geom_niv.append(dict(h=h, W=Wi, w_bays=w_bays, w_spans=w_spans, ext=ext, cols=cols, viga=viga, sin=sin, segs=segs,
                              conectado=sorted(conectado), viga_h=viga['alto'] if flexibles else 30.0))
+
+    vi, vd = vimax, vdmax                                    # para el dibujo: el volado mayor de todos los niveles
+    spans, lon_spans = _spans_de(vi, vd)
 
     # columnas que cruzan un piso sin viga ni losa en su eje: se vuelven una sola columna de varios entrepisos
     for k in range(n - 1):
@@ -2195,6 +2319,23 @@ EJEMPLOS_MODELO = {
                       viga='I:3688/A:26.8', E_viga='2100', sin_losa='3', cargas='2'),
                  dict(h='3.5', ejes='todos', seccion='I:3688/A:26.8', E_col='2100', viga='I:3688/A:26.8', E_viga='2100',
                       cargas='1.8')],
+        fc='', subgrupo='A2', intensidad='Base de diseño', Q='1', k1='0.8', zeta='0.05',
+        a0='242', c='1062', Ta='0.8', Tb='1.7', k='0.430', Ts='1.0', factor_Fu='1.1', mult_V='1'),
+    # El mismo problema del Ejemplo 12, capturado por columna (una fila por columna, con los niveles que abarca).
+    'Ejemplo 13 (tarea capturada por columna)': dict(
+        crujias='5 4 4.5', vigas='rigidas', material='Concreto', direccion='X', unidad_E='t/cm²', E='221.35944',
+        columnas=[dict(eje='1', desde='1', hasta='3', seccion='50x50', E='', apoyo='Empotrado', art_sup=False),
+                  dict(eje='1', desde='4', hasta='4', seccion='I:3688/A:26.8', E='2100', apoyo='Empotrado', art_sup=False),
+                  dict(eje='2', desde='1', hasta='3', seccion='50x50', E='', apoyo='Articulado', art_sup=False),
+                  dict(eje='2', desde='4', hasta='4', seccion='I:3688/A:26.8', E='2100', apoyo='Empotrado', art_sup=False),
+                  dict(eje='3', desde='1', hasta='3', seccion='50x50', E='', apoyo='Articulado', art_sup=False),
+                  dict(eje='3', desde='4', hasta='4', seccion='I:3688/A:26.8', E='2100', apoyo='Empotrado', art_sup=False),
+                  dict(eje='4', desde='1', hasta='2', seccion='50x50', E='', apoyo='Empotrado', art_sup=False),
+                  dict(eje='4', desde='3', hasta='4', seccion='I:3688/A:26.8', E='2100', apoyo='Empotrado', art_sup=False)],
+        niveles=[dict(h='4.5', viga='25x50', cargas='1.4'),
+                 dict(h='3.5', viga='25x50', cargas='2'),
+                 dict(h='3.5', viga='I:3688/A:26.8', E_viga='2100', sin_losa='3', cargas='2'),
+                 dict(h='3.5', viga='I:3688/A:26.8', E_viga='2100', cargas='1.8')],
         fc='', subgrupo='A2', intensidad='Base de diseño', Q='1', k1='0.8', zeta='0.05',
         a0='242', c='1062', Ta='0.8', Tb='1.7', k='0.430', Ts='1.0', factor_Fu='1.1', mult_V='1'),
 }

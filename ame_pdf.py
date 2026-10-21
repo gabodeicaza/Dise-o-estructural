@@ -435,15 +435,5 @@ def memoria_pdf(res, destino, proyecto='', autor=''):
     else:
         E.append(P('Sin avisos.'))
 
-    # ------------------------------------------------------------------ alcances
-    E += [P('14. Alcances y limitaciones', 'h1')]
-    for txt in ('Marco plano en una dirección: un grado de libertad lateral por nivel, masas concentradas y diafragmas rígidos.',
-                'La torsión accidental es solo informativa (momentos eₐ·Fu); no se calcula la excentricidad estática, el sismo '
-                'bidireccional, la interacción suelo-estructura ni zonas rígidas en los nudos.',
-                'Las reglas de NTC-S 2023 vienen de los apuntes de clase. Los límites γmáx (tablas 4.3.x), Ks y los parámetros '
-                'del espectro SASID son datos del proyecto; los criterios de P-Δ e irregularidades de masa y rigidez son generales (ASCE 7).',
-                'Este documento no sustituye la revisión de un ingeniero responsable.'):
-        E.append(P('• ' + txt))
-
     doc.build(E)
     return destino
