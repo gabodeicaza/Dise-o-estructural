@@ -26,6 +26,14 @@ from ame_secciones import parse_secciones  # noqa: E402
 
 EJ = ame.EJEMPLOS_MODELO
 EJ1, EJ2, EJ3, EJ4, EJ5, EJ6, EJ7, EJ8, EJ9, EJ10, EJ11, EJ12, EJ13 = list(EJ.values())
+# Los ejemplos 12 y 13 vienen con el acero articulado (3EI/h³, como la solución del examen); EJ12 y EJ13 son su variante empotrada.
+EJ12_SOL, EJ13_SOL = EJ12, EJ13
+EJ12 = copy.deepcopy(EJ12_SOL)
+EJ12['niveles'][2]['artic'] = EJ12['niveles'][3]['artic'] = ''
+EJ13 = copy.deepcopy(EJ13_SOL)
+for _f in EJ13['columnas']:
+    if _f['seccion'].startswith('I:'):
+        _f['apoyo'] = 'Empotrado'
 
 
 def correr(d):
@@ -1652,3 +1660,32 @@ def test_dibujo_de_columnas_capturadas_marca_niveles_sin_columnas_y_se_completa(
     assert hechos == [3]
     d['columnas'] = nuevas
     assert ame.niveles_desde_columnas(d)['niveles'][2]['ejes'] == '1 2 3'
+
+
+def test_solucion_del_examen_2_problema_1_coincide_con_el_pdf():
+    """Periodos, Sa, γ, fuerzas modales, Fu/Vu/Mvu, cs y factor de escala de la solución del segundo examen parcial."""
+    for ej in (EJ12_SOL, EJ13_SOL):
+        r = ame.calcular(ame.preparar(copy.deepcopy(ej)))
+        assert r['T'] == pytest.approx([0.79109, 0.27385, 0.076919, 0.051217], abs=2e-5)
+        assert r['Sa_modal'][:, 0] == pytest.approx([1000.735, 433.5606, 245.1572, 221.4075], abs=0.01)
+        assert r['gam'] == pytest.approx([0.055138, 0.77573, 0.11784, 0.051296], abs=2e-5)
+        assert r['F'][0] == pytest.approx([1063.1, 6479.7, 556.57, 218.81], abs=0.05)
+        assert r['F_final'] == pytest.approx([6593.5, 11426, 8347.3, 28586], abs=0.5)
+        t = r['tabla_din']
+        assert t['Vu'] * 1000 == pytest.approx([31444, 40626, 53194, 60447], abs=1)
+        assert t['Mvu'] * 1e5 == pytest.approx([4.7166e7, 1.0559e7, 1.0055e7, 3.2638e6], rel=1e-4)
+        assert r['estatico']['C'] == pytest.approx(1.03102, abs=1e-5)
+        assert r['factor_escala'] == pytest.approx(1.6548, abs=1e-4)
+        assert r['tabla_din_esc']['Vu'][-1] == pytest.approx(100.0294, abs=1e-3)
+
+
+def test_detalle_completo_muestra_las_matrices_y_las_tablas_de_la_solucion():
+    r = ame.calcular(ame.preparar(copy.deepcopy(EJ12_SOL)))
+    txt = ame.reporte_texto(r)
+    for frase in ('m = diag([19.266', 'k = [', 'EIGENVALORES', 'Modos normalizados', 'Aceleraciones espectrales',
+                  'Factores de participación modal', 'Suma de los factores', 'Fuerzas sísmicas modales',
+                  'MOMENTO DE VOLTEO DE DISEÑO = 71044', 'FACTOR DE ESCALA = 90.9358 / 54.9521 = 1.654818', 'STORY4'):
+        assert frase in txt, frase
+    # también con K y M capturadas directamente (sin secciones)
+    r6 = ame.calcular(ame.preparar(copy.deepcopy(EJ6)))
+    assert 'm = diag(' in ame.reporte_texto(r6) or 'm = [' in ame.reporte_texto(r6)

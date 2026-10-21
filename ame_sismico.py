@@ -1611,6 +1611,132 @@ def texto_elastico(res):
     return s
 
 
+def _fila(v, fmt='{:>14.5g}'):
+    return ''.join(fmt.format(x) for x in v)
+
+
+def _texto_matrices(res):
+    """Matrices K y M como en la solución (formato MATLAB: m = diag([...]); k = [...];)."""
+    p, n = res['p'], res['p']['n']
+    K, M = np.asarray(p['K'], float), np.asarray(p['M'], float)
+    s = ['=== MATRICES DEL MODELO ===']
+    if np.allclose(M, np.diag(np.diag(M))):
+        s.append(f'm = diag([{" ".join(f"{x:.5g}" for x in np.diag(M))}]);        % kg·s²/cm  (m = W/g)')
+    else:
+        s.append('m = [      % kg·s²/cm')
+        s.extend('   ' + _fila(M[i], '{:>14.5g}') for i in range(n))
+        s.append('];')
+    s.append('k = [        % kg/cm')
+    s.extend('   ' + _fila(K[i], '{:>16.9g}') for i in range(n))
+    s.append('];\n')
+    return s
+
+
+def _texto_modal(res):
+    """Bloques de la solución: eigenvalores, formas modales, Sa, participación, fuerzas modales y SRSS."""
+    p, n = res['p'], res['p']['n']
+    arr = np.arange(n, 0, -1)                                   # niveles de arriba hacia abajo, como en la solución
+    s = ['=== EIGENVALORES · "frecs", "frecshz" y "periodos" ===',
+         f'{"N°":>5}{"Eigv.(r/s)^2":>16}{"Frec.(r/seg)":>16}{"Frec.(Hz)":>14}{"Periodo(seg)":>16}']
+    for j in range(n):
+        s.append(f'{j + 1:>5d}{res["lam"][j]:>16.5g}{res["w"][j]:>16.5g}{res["f"][j]:>14.5g}{res["T"][j]:>16.5g}')
+    fi = np.asarray(res['fi'], float)
+    s.append('\nEIGENVECTORES · formas modales (columnas = modos, primera fila = nivel 1):')
+    s.extend('  ' + _fila(fi[i], '{:>13.5g}') for i in range(n))
+    base = np.where(np.abs(fi[0]) > 1e-12, fi[0], 1.0)
+    s.append('\nModos normalizados (nivel 1 = 1; niveles de arriba hacia abajo):')
+    s.append(f'{"Nivel":>8}' + ''.join(f'{"Modo " + str(j + 1):>13}' for j in range(n)))
+    for i in range(n - 1, -1, -1):
+        s.append(f'{"Story" + str(i + 1):>8}' + _fila(fi[i] / base, '{:>13.5g}'))
+    sa = np.asarray(res['Sa_modal'], float)[:, 0]
+    s.append("\nAceleraciones espectrales Sa/(Q'R') calculadas para cada modo:")
+    s.extend(f'  {sa[j] / G:.5f} g = {sa[j]:.7f} cm/s²' for j in range(n))
+    s.append(f'  a_mínima = {res["a_min"]:.6f} cm/s²  ({res["a_min_g"]:.6f} g)   Ts = {p["Ts"]:g}')
+    s.append('\nFactores de participación modal:')
+    s.append(f'{"Forma modal":>14}{"Factor":>12}')
+    s.extend(f'{j + 1:>14d}{res["gam"][j]:>12.5g}' for j in range(n))
+    s.append(f'Suma de los factores = {res["gam"].sum():.5g}')
+    s.append('\nDesplazamientos modales δ [cm] (columnas = modos):')
+    s.extend(f'  nivel {arr[k]}' + _fila(res['d'][n - 1 - k], '{:>14.6g}') for k in range(n))
+    F = np.asarray(res['F'], float)
+    s.append('\nFuerzas sísmicas modales [kg] (las columnas son los modos):')
+    s.append(f'{"Nivel":>8}' + ''.join(f'{"Modo " + str(j + 1):>14}' for j in range(n)))
+    s.extend(f'{arr[k]:>8d}' + _fila(F[n - 1 - k], '{:>14.5g}') for k in range(n))
+    Ff = np.asarray(res['F_final'], float)
+    V = np.cumsum(Ff[::-1])[::-1]
+    s.append('\nCombinación (' + p['combinacion'] + ') sin factor de carga [kg]:')
+    s.append(f'{"Nivel":>8}{"Fuerza":>14}{"Cortante":>14}')
+    s.extend(f'{arr[k]:>8d}{Ff[n - 1 - k]:>14.5g}{V[n - 1 - k]:>14.5g}' for k in range(n))
+    s.append('')
+    return s
+
+
+def _texto_fuerzas_dinamicas(res):
+    """Tabla 'FUERZAS SÍSMICAS CON EL ANÁLISIS MODAL ESPECTRAL NTC-SISMO' (kg y kg·cm, como la solución)."""
+    p, n = res['p'], res['p']['n']
+    t = res['tabla_din']
+    arr = np.arange(n, 0, -1)
+    s = ['=== FUERZAS SÍSMICAS CON EL ANÁLISIS MODAL ESPECTRAL NTC-SISMO ===',
+         f'Factor de carga = {p["factor_Fu"]:g}   (fuerzas en kg, momentos en kg·cm)',
+         f'{"NIVEL":>8}{"FUERZA":>14}{"CORTANTE":>14}{"Fu":>14}{"Vu":>14}{"Mvu":>14}']
+    Vk = np.cumsum(t['F']) * 1000                       # las tablas por nivel ya vienen de arriba hacia abajo
+    for k in range(n):
+        j = k
+        s.append(f'{arr[k]:>8d}{t["F"][j] * 1000:>14.5g}{Vk[j]:>14.5g}{t["Fu"][j] * 1000:>14.5g}{t["Vu"][j] * 1000:>14.5g}'
+                 f'{t["Mvu"][j] * 1e5:>14.5g}')
+    s.append(f'MOMENTO DE VOLTEO DE DISEÑO = {t["Mv"][-1] * 1e5:.4f} kg·cm  ({t["Mv"][-1]:.4f} t·m)')
+    s.append('\n=== TABLA DE FUERZAS POR NIVEL (DINÁMICO, en t y t·m) ===')
+    s.append(_tabla_txt(['Nivel', 'h(m)', 'F(t)', 'Fu(t)', 'Vu(t)', 'Mvu(t-m)'],
+                        zip(t['nivel'], t['h'], t['F'], t['Fu'], t['Vu'], t['Mvu'])))
+    s.append(f'Σ Mvu = {t["Mvu"].sum():.6f} t-m')
+    return s
+
+
+def _tabla_resumen(nivel, Wi, dh, H, F, Fu, Vu):
+    """Tabla de la solución: Nivel, Wi, altura de entrepiso, Hi, WiHi, Fi, Vi, Mv = Fi·Hi, Fu, Vu, Mvu (con fila Σ)."""
+    Vi = np.cumsum(F)                                            # arreglos de arriba hacia abajo
+    enc = ['Nivel', 'Peso Wi[t]', 'h entrep.(m)', 'Hi (m)', 'WiHi', 'Fi [t]', 'Vi [t]', 'Mv [t-m]', 'Fu [t]', 'Vu [t]', 'Mvu [t-m]']
+    filas = [[f'STORY{int(nivel[j])}', Wi[j], dh[j], H[j], Wi[j] * H[j], F[j], Vi[j], F[j] * H[j], Fu[j], Vu[j], Fu[j] * H[j]]
+             for j in range(len(nivel))]
+    filas.append(['Σ', Wi.sum(), '', '', (Wi * H).sum(), F.sum(), '', (F * H).sum(), Fu.sum(), '', (Fu * H).sum()])
+    return enc, filas
+
+
+def _texto_estatico(res):
+    p = res['p']
+    if 'tabla_est' not in res:
+        return ['\n(Sin cargas/longitudes: no se calculó el método estático ni el factor de escala.)']
+    e, se = res['tabla_est'], res['estatico']
+    h_ent = np.asarray(p['alturas'], float)[::-1]
+    s = ['\n=== MÉTODO ESTÁTICO (apuntes p. 20-21) ===',
+         'Fi = C · (Wi·hi / Σ Wi·hi) · ΣWi,  C = máx { c/(Q′R′) en el plato ; a0/(Q′R′) en T = 0 }\n']
+    enc, filas = tabla_derivacion_estatica(res)
+    s.append(_tabla_txt(enc, filas))
+    s.append(f'cs = {se["C"]:.6f} g · gobierna: {se["gobierna"]}')
+    enc, filas = _tabla_resumen(e['nivel'], e['Wi'], h_ent, e['h'], e['Fi'], e['Fu'], e['Vu'])
+    s.append(_tabla_txt(enc, filas))
+    s.append(f'Comprobación: ΣFi = C·ΣWi = {se["C"]:.6f}·{se["W_T"]:.4f} = {se["C"] * se["W_T"]:.6f} t '
+             f'(= {e["Fi"].sum():.6f})')
+    s.append(f'V estático  = {res["V_est"]:.6f} t' + (f'  (× {p["mult_V"]:g} = {res["V_est"] * p["mult_V"]:.6f})'
+                                                   if p['mult_V'] != 1 else ''))
+    s.append(f'V dinámico  = {res["V_din"]:.6f} t')
+    Vi_est, Vi_din = float(e['Fi'].sum()), float(res['tabla_din']['F'].sum())
+    s.append(f'FACTOR DE ESCALA = {Vi_est:.4f} / {Vi_din:.4f} = {res["factor_escala"]:.6f}'
+             + ('   (V dinámico ya cumple, factor < 1)' if res['factor_escala'] < 1 else ''))
+    te = res['tabla_din_esc']
+    s.append(f'\nFuerzas dinámicas escaladas al 100% del estático (× {res["factor_escala"]:.4f}):')
+    enc, filas = _tabla_resumen(te['nivel'], np.asarray(e['Wi'], float), h_ent, te['h'], te['F'], te['Fu'], te['Vu'])
+    quitar = (1, 2, 3, 4)
+    s.append(_tabla_txt([c for i, c in enumerate(enc) if i not in quitar],
+                        [[c for i, c in enumerate(f) if i not in quitar] for f in filas]))
+    enc, filas = tabla_distorsiones_estatico(res)
+    s.append(f'\nDistorsiones del método estático ({p["estado"]}; desplazamientos × '
+             + ('1' if res['clave'] == 'DL' else f'FC·Q·R′ = {se["amp"]:.4f}') + '):')
+    s.append(_tabla_txt(enc[:-1], [f[:-1] for f in filas]))
+    s.append('Cumple (estático / dinámico): ' + '; '.join(f'N{f[0]}: {f[-1]}' for f in filas))
+    return s
+
+
 def reporte_texto(res):
     p, n = res['p'], res['p']['n']
     np.set_printoptions(linewidth=200, suppress=True, precision=5)
@@ -1625,65 +1751,13 @@ def reporte_texto(res):
         s.append(_tabla_txt(['Nivel', 'h(m)', 'Nº col', 'Nº art', 'Sección(cm)', 'ΣI(cm4)', 'K nivel', 'W(t)', 'm'],
                             [[r['nivel'], r['h'], r['ncol'], r['nart'], r['seccion'], r['I'], r['k'], r['W'], r['m']]
                              for r in p['info']]))
-        s.append('Matriz K [kg/cm]:')
-        for i in range(n):
-            s.append('  ' + ''.join(f'{x:>14.2f}' for x in p['K'][i]))
-        s.append('Matriz M [kg·s²/cm]:')
-        for i in range(n):
-            s.append('  ' + ''.join(f'{x:>14.4f}' for x in p['M'][i]))
         s.append('')
-    s.append('=== RESULTADOS MODALES ===\n')
-    s.append('Modo            ' + ''.join(f'{j + 1:>14d}' for j in range(n)))
-    for nombre, v in (('λ [rad/s]²', res['lam']), ('ω [rad/s]', res['w']), ('f [Hz]', res['f']),
-                      ('T [s]', res['T']), ('γ (partic.)', res['gam'])):
-        s.append(f'{nombre:<16}' + ''.join(f'{x:>14.5f}' for x in v))
-    s.append(f'Σγ = {res["gam"].sum():.5f}')
-    s.append('\nEigenvectores normalizados (columnas = modos):')
-    for i in range(n):
-        s.append('  ' + ''.join(f'{x:>12.5f}' for x in res['fi'][i]))
-    s.append('\nAceleraciones espectrales Sa/(Q\'R\') [cm/s²]:')
-    s.append(_tabla_txt(['Modo', 'T(s)'] + [f'Q={q:g}' for q in res['Qs']],
-                        [[j + 1, res['T'][j]] + list(res['Sa_modal'][j]) for j in range(n)]))
-    s.append(f'a_mínima = {res["a_min"]:.6f} cm/s²  ({res["a_min_g"]:.6f} g)   Ts = {p["Ts"]:g}')
-    s.append('\nDesplazamientos modales δ [cm] (columnas = modos):')
-    for i in range(n):
-        s.append('  ' + ''.join(f'{x:>14.6f}' for x in res['d'][i]))
-    s.append('\nFuerzas modales F [kg] (columnas = modos):')
-    for i in range(n):
-        s.append('  ' + ''.join(f'{x:>14.4f}' for x in res['F'][i]))
-    s.append('\nRaíz de la suma de cuadrados de F (SRSS) [kg]:')
-    s.append('  ' + '  '.join(f'{x:.4f}' for x in res['F_final']))
+    s.extend(_texto_matrices(res))
+    s.extend(_texto_modal(res))
     s.append('\n=== R\' y Q·R\' POR MODO ===')
     s.append(_tabla_txt(['Modo', 'T(s)', 'Q', 'k2', "R'", "Q·R'"], res['QR']))
-    t = res['tabla_din']
-    s.append('=== TABLA DE FUERZAS POR NIVEL (DINÁMICO) ===')
-    s.append(_tabla_txt(['Nivel', 'h(m)', 'F(t)', 'Fu(t)', 'Vu(t)', 'Mvu(t-m)'],
-                        zip(t['nivel'], t['h'], t['F'], t['Fu'], t['Vu'], t['Mvu'])))
-    s.append(f'Σ Mvu = {t["Mvu"].sum():.6f} t-m')
-    if 'tabla_est' in res:
-        e, se = res['tabla_est'], res['estatico']
-        s.append('\n=== MÉTODO ESTÁTICO (apuntes p. 20-21) ===')
-        s.append('Fi = C · (Wi·hi / Σ Wi·hi) · ΣWi,  C = máx { c/(Q′R′) en el plato ; a0/(Q′R′) en T = 0 }\n')
-        enc, filas = tabla_derivacion_estatica(res)
-        s.append(_tabla_txt(enc, filas))
-        s.append(f'C = {se["C"]:.6f} g · gobierna: {se["gobierna"]}')
-        s.append(_tabla_txt(['Nivel', 'h(m)', 'Wi(t)', 'Wihi(t-m)', 'Fi(t)', 'Fu(t)', 'Vu(t)', 'Mvu(t-m)'],
-                            zip(e['nivel'], e['h'], e['Wi'], e['hWi'], e['Fi'], e['Fu'], e['Vu'], e['Mvu'])))
-        s.append(f'ΣWi = {e["Wi"].sum():.6f}   ΣWihi = {e["hWi"].sum():.6f}   ΣMvu = {e["Mvu"].sum():.6f}')
-        s.append(f'Comprobación: ΣFi = C·ΣWi = {se["C"]:.6f}·{se["W_T"]:.4f} = {se["C"] * se["W_T"]:.6f} t '
-                 f'(= {e["Fi"].sum():.6f})')
-        s.append(f'V estático  = {res["V_est"]:.6f} t' + (f'  (× {p["mult_V"]:g} = {res["V_est"] * p["mult_V"]:.6f})'
-                                                       if p['mult_V'] != 1 else ''))
-        s.append(f'V dinámico  = {res["V_din"]:.6f} t')
-        s.append(f'FACTOR DE ESCALA = {res["factor_escala"]:.6f}'
-                 + ('   (V dinámico ya cumple, factor < 1)' if res['factor_escala'] < 1 else ''))
-        enc, filas = tabla_distorsiones_estatico(res)
-        s.append(f'\nDistorsiones del método estático ({p["estado"]}; desplazamientos × '
-                 + ('1' if res['clave'] == 'DL' else f'FC·Q·R′ = {se["amp"]:.4f}') + '):')
-        s.append(_tabla_txt(enc[:-1], [f[:-1] for f in filas]))
-        s.append('Cumple (estático / dinámico): ' + '; '.join(f'N{f[0]}: {f[-1]}' for f in filas))
-    else:
-        s.append('\n(Sin cargas/longitudes: no se calculó el método estático ni el factor de escala.)')
+    s.extend(_texto_fuerzas_dinamicas(res))
+    s.extend(_texto_estatico(res))
     s.extend(texto_elastico(res))
     s.extend(texto_normativa(res))
     rev = res['revision']
@@ -2471,28 +2545,28 @@ EJEMPLOS_MODELO = {
         niveles=[dict(h='4.5', ejes='todos', seccion='50x50', viga='25x50', artic='2 3', cargas='1.4'),
                  dict(h='3.5', ejes='todos', seccion='50x50', viga='25x50', cargas='2'),
                  dict(h='3.5', ejes='todos', seccion='50x50 50x50 50x50 I:3688/A:26.8', E_col='221.35944 221.35944 221.35944 2100',
-                      viga='I:3688/A:26.8', E_viga='2100', sin_losa='3', cargas='2'),
+                      viga='I:3688/A:26.8', E_viga='2100', sin_losa='3', artic='4', cargas='2'),
                  dict(h='3.5', ejes='todos', seccion='I:3688/A:26.8', E_col='2100', viga='I:3688/A:26.8', E_viga='2100',
-                      cargas='1.8')],
+                      artic='1 2 3', cargas='1.8')],
         fc='', subgrupo='A2', intensidad='Base de diseño', Q='1', k1='0.8', zeta='0.05',
-        a0='242', c='1062', Ta='0.8', Tb='1.7', k='0.430', Ts='1.0', factor_Fu='1.1', mult_V='1'),
+        a0='242', c='1062', Ta='0.8', Tb='1.7', k='0.420', Ts='1.0', factor_Fu='1.1', mult_V='1'),
     # El mismo problema del Ejemplo 12, capturado por columna (una fila por columna, con los niveles que abarca).
     'Ejemplo 13 (tarea capturada por columna)': dict(
         crujias='5 4 4.5', vigas='rigidas', material='Concreto', direccion='X', unidad_E='t/cm²', E='221.35944',
         columnas=[dict(eje='1', desde='1', hasta='3', seccion='50x50', E='', apoyo='Empotrado', art_sup=False),
-                  dict(eje='1', desde='4', hasta='4', seccion='I:3688/A:26.8', E='2100', apoyo='Empotrado', art_sup=False),
+                  dict(eje='1', desde='4', hasta='4', seccion='I:3688/A:26.8', E='2100', apoyo='Articulado', art_sup=False),
                   dict(eje='2', desde='1', hasta='3', seccion='50x50', E='', apoyo='Articulado', art_sup=False),
-                  dict(eje='2', desde='4', hasta='4', seccion='I:3688/A:26.8', E='2100', apoyo='Empotrado', art_sup=False),
+                  dict(eje='2', desde='4', hasta='4', seccion='I:3688/A:26.8', E='2100', apoyo='Articulado', art_sup=False),
                   dict(eje='3', desde='1', hasta='3', seccion='50x50', E='', apoyo='Articulado', art_sup=False),
-                  dict(eje='3', desde='4', hasta='4', seccion='I:3688/A:26.8', E='2100', apoyo='Empotrado', art_sup=False),
+                  dict(eje='3', desde='4', hasta='4', seccion='I:3688/A:26.8', E='2100', apoyo='Articulado', art_sup=False),
                   dict(eje='4', desde='1', hasta='2', seccion='50x50', E='', apoyo='Empotrado', art_sup=False),
-                  dict(eje='4', desde='3', hasta='4', seccion='I:3688/A:26.8', E='2100', apoyo='Empotrado', art_sup=False)],
+                  dict(eje='4', desde='3', hasta='4', seccion='I:3688/A:26.8', E='2100', apoyo='Articulado', art_sup=False)],
         niveles=[dict(h='4.5', viga='25x50', cargas='1.4'),
                  dict(h='3.5', viga='25x50', cargas='2'),
                  dict(h='3.5', viga='I:3688/A:26.8', E_viga='2100', sin_losa='3', cargas='2'),
                  dict(h='3.5', viga='I:3688/A:26.8', E_viga='2100', cargas='1.8')],
         fc='', subgrupo='A2', intensidad='Base de diseño', Q='1', k1='0.8', zeta='0.05',
-        a0='242', c='1062', Ta='0.8', Tb='1.7', k='0.430', Ts='1.0', factor_Fu='1.1', mult_V='1'),
+        a0='242', c='1062', Ta='0.8', Tb='1.7', k='0.420', Ts='1.0', factor_Fu='1.1', mult_V='1'),
 }
 
 
