@@ -1543,7 +1543,7 @@ def test_pagina_web_corre_con_todos_los_ejemplos():
     at.sidebar.button[0].click()
     at.run()
     assert not at.exception and at.radio(key='captura').value.startswith('Por columna')
-    assert 'Dimensionar' in [t.label for t in at.tabs]
+    assert 'Dimensionar · resolver al revés' in [t.label for t in at.tabs]
     at.sidebar.selectbox(key='ejemplo').select(list(EJ)[1])
     at.sidebar.button[0].click()
     at.run()
@@ -1574,7 +1574,7 @@ def test_pagina_web_corre_con_todos_los_ejemplos():
     at.selectbox(key='intensidad').select('Infrecuente').run()
     assert at.error and 'espectro SASID' in at.error[0].value and not at.exception
     for k, v in dict(a0='300', c='1300', Ta='0.8', Tb='1.7', k='0.445', Ts='1.0').items():
-        at.sidebar.text_input(key=k).set_value(v)
+        at.text_input(key=k).set_value(v)
     at.run()
     assert not at.exception and not any('Revisa los datos' in e.value for e in at.error)
     at.selectbox(key='intensidad').select('Base de diseño').run()
