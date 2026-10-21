@@ -2567,6 +2567,17 @@ EJEMPLOS_MODELO = {
                  dict(h='3.5', viga='I:3688/A:26.8', E_viga='2100', cargas='1.8')],
         fc='', subgrupo='A2', intensidad='Base de diseño', Q='1', k1='0.8', zeta='0.05',
         a0='242', c='1062', Ta='0.8', Tb='1.7', k='0.420', Ts='1.0', factor_Fu='1.1', mult_V='1'),
+    # Examen: marco de 2 niveles, rodillo en el eje 4 (que solo llega al nivel 1) y el techo sin la crujía de 2 m. Las secciones
+    # son b x h con h en la dirección del sismo. Los parámetros del espectro son los del ejemplo anterior: captura los de tu predio.
+    'Ejemplo 14 (examen: 2 niveles, rodillo en el eje 4, secciones distintas)': dict(
+        crujias='4 4 2', vigas='rigidas', material='Concreto', direccion='X', unidad_E='t/cm²', E='158',
+        columnas=[dict(eje='1', desde='1', hasta='2', seccion='20x40', E='', apoyo='Empotrado', art_sup=False),
+                  dict(eje='2', desde='1', hasta='2', seccion='30x30', E='', apoyo='Articulado', art_sup=False),
+                  dict(eje='3', desde='1', hasta='2', seccion='20x40', E='', apoyo='Empotrado', art_sup=False),
+                  dict(eje='4', desde='1', hasta='1', seccion='30x60', E='', apoyo='Rodillo', art_sup=False)],
+        niveles=[dict(h='3', cargas='2 2 2'), dict(h='3', cargas='1 1 0')],
+        fc='', subgrupo='B', intensidad='Base de diseño', Q='2', k1='0.8', zeta='0.05',
+        a0='242', c='1062', Ta='0.8', Tb='1.7', k='0.420', Ts='1.0', factor_Fu='1.1', mult_V='1'),
 }
 
 

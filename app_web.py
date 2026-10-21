@@ -2,6 +2,9 @@
 import hashlib
 import io
 import json
+import re
+import uuid
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
@@ -185,8 +188,29 @@ def cambiar_intensidad():
     st.session_state['_int_prev'] = nueva
 
 
+AUTOGUARDADO = Path(__file__).parent / '.autoguardado'      # copia de tu captura; sobrevive a reconexiones de la página
+
+
+def ruta_auto(pid):
+    return AUTOGUARDADO / f'{pid}.json'
+
+
 if 'df' not in st.session_state:
-    cargar(next(iter(EJEMPLOS.values())))
+    pid_ = str(st.query_params.get('p', ''))
+    if not re.fullmatch(r'[0-9a-f]{12}', pid_):
+        pid_ = uuid.uuid4().hex[:12]
+    st.session_state['_pid'] = pid_
+    st.query_params['p'] = pid_                  # la dirección de la página identifica tu proyecto
+    recuperado_ = False
+    try:
+        if ruta_auto(pid_).exists():
+            cargar(json.loads(ruta_auto(pid_).read_text(encoding='utf-8')))
+            recuperado_ = True
+    except (OSError, ValueError, KeyError, TypeError, AttributeError):
+        recuperado_ = False
+    if not recuperado_:
+        cargar(next(iter(EJEMPLOS.values())))
+    st.session_state['_recuperado'] = recuperado_
 manual = st.session_state.get('modo') == MODOS[1]
 
 # ------------------------------------------------------------------ barra lateral
@@ -204,6 +228,10 @@ with st.sidebar:
             st.rerun()
         except (ValueError, KeyError, TypeError, AttributeError):
             st.error('No se pudo leer ese archivo de proyecto.')
+    if st.session_state.get('_recuperado'):
+        st.success('Recuperé tu captura anterior: la página se había reiniciado.')
+    st.caption('Tu captura se guarda sola mientras trabajas: si la página se reinicia, vuelve a abrir la misma dirección '
+               '(termina en ?p=…) y se recupera. Para un respaldo seguro usa «Guardar proyecto (.json)» en Resultados.')
     st.divider()
     st.caption('Flujo: 1 · Estructura → 2 · Sismo y norma → 3 · Resultados. Las herramientas (calculadora de EI y '
                'dimensionado) están en la pestaña 4.')
@@ -487,6 +515,13 @@ st.session_state['_ult_niveles'] = [dict(r) for r in datos['niveles']]          
 if edit_cols is not None:
     st.session_state['_ult_cols'] = filas_de(edit_cols)
 firma = hashlib.md5(json.dumps(datos, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
+if st.session_state.get('_firma_auto') != firma and st.session_state.get('_pid'):
+    try:                                          # autoguardado de lo que llevas capturado (aunque tenga errores)
+        AUTOGUARDADO.mkdir(exist_ok=True)
+        ruta_auto(st.session_state['_pid']).write_text(json.dumps(datos, ensure_ascii=False), encoding='utf-8')
+        st.session_state['_firma_auto'] = firma
+    except OSError:
+        pass
 
 modelo = res = error_modelo = None
 try:

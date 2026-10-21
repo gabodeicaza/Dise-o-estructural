@@ -25,7 +25,7 @@ from ame_revision import combinar, irregularidades, rho_cqc, theta_pdelta  # noq
 from ame_secciones import parse_secciones  # noqa: E402
 
 EJ = ame.EJEMPLOS_MODELO
-EJ1, EJ2, EJ3, EJ4, EJ5, EJ6, EJ7, EJ8, EJ9, EJ10, EJ11, EJ12, EJ13 = list(EJ.values())
+EJ1, EJ2, EJ3, EJ4, EJ5, EJ6, EJ7, EJ8, EJ9, EJ10, EJ11, EJ12, EJ13, EJ14 = list(EJ.values())
 # Los ejemplos 12 y 13 vienen con el acero articulado (3EI/h³, como la solución del examen); EJ12 y EJ13 son su variante empotrada.
 EJ12_SOL, EJ13_SOL = EJ12, EJ13
 EJ12 = copy.deepcopy(EJ12_SOL)
@@ -1689,3 +1689,30 @@ def test_detalle_completo_muestra_las_matrices_y_las_tablas_de_la_solucion():
     # también con K y M capturadas directamente (sin secciones)
     r6 = ame.calcular(ame.preparar(copy.deepcopy(EJ6)))
     assert 'm = diag(' in ame.reporte_texto(r6) or 'm = [' in ame.reporte_texto(r6)
+
+
+def test_ejemplo_14_examen_con_rodillo_y_columnas_de_distinta_seccion():
+    p = ame.preparar(copy.deepcopy(EJ14))
+    assert p['cargas'] == pytest.approx([20.0, 8.0])                    # techo con 1 T/m solo en las dos primeras crujías
+    k_emp = 12 * 158000 * (20 * 40 ** 3 / 12) / 300 ** 3                    # columnas de 20x40, empotradas
+    k_30 = 12 * 158000 * (30 ** 4 / 12) / 300 ** 3
+    assert p['info'][0]['k'] == pytest.approx(2 * k_emp + k_30 / 4)    # eje 2 articulado abajo (3EI/h³); eje 4 sobre rodillo: 0
+    assert p['info'][1]['k'] == pytest.approx(2 * k_emp + k_30)
+    r = ame.calcular(p)
+    assert r['T'] == pytest.approx([0.27427, 0.10395], abs=2e-5)
+    assert 'Eje 4' in ' '.join(t for _, t in r['avisos'])
+
+
+def test_pagina_recupera_la_captura_con_la_misma_direccion(tmp_path):
+    from streamlit.testing.v1 import AppTest
+    at = AppTest.from_file(str(Path(ame.__file__).parent / 'app_web.py'), default_timeout=180).run()
+    pid = at.query_params['p'][0] if isinstance(at.query_params['p'], list) else at.query_params['p']
+    at.selectbox(key='ejemplo').select(list(ame.EJEMPLOS_MODELO)[13])
+    at.sidebar.button[0].click()
+    at.run()
+    at2 = AppTest.from_file(str(Path(ame.__file__).parent / 'app_web.py'), default_timeout=180)
+    at2.query_params['p'] = pid
+    at2.run()
+    assert at2.radio(key='captura').value == at.radio(key='captura').value
+    assert at2.text_input(key='crujias').value == '4 4 2'
+    assert not at2.exception
