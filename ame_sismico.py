@@ -1753,6 +1753,90 @@ NOMBRE_SECCION = {'rect': 'Rect.', 'hrect': 'Rect. hueca', 'circ': 'Circ.', 'hci
                   'T': 'Sección T', 'gen': 'Propiedades'}
 
 
+def _entero(v, defecto):
+    try:
+        return int(float(str(v).strip()))
+    except ValueError:
+        return defecto
+
+
+def cobertura_columnas(d):
+    """Borrador tolerante de la captura POR COLUMNA: por cada nivel, los ejes que tienen columna.
+    Devuelve (xs, hs, filas, faltan) con filas = [(eje, desde, hasta, texto)] y faltan = niveles sin columnas."""
+    try:
+        xs = np.concatenate([[0.0], np.cumsum(parse_vector(d['crujias'], 'Crujías'))])
+    except ValueError:
+        xs = np.array([0.0, 5.0])
+    hs = []
+    for r in d['niveles']:
+        try:
+            hs.append(float(parse_num(r.get('h', ''), 'h')))
+        except ValueError:
+            hs.append(3.0)
+    n = len(hs)
+    filas = []
+    for r in d.get('columnas') or []:
+        eje = _entero(r.get('eje', ''), 0)
+        if not 1 <= eje <= len(xs):
+            continue
+        desde, hasta = max(1, _entero(r.get('desde', ''), 1)), min(n, _entero(r.get('hasta', ''), n))
+        if desde > hasta:
+            continue
+        txt = _vacio(r.get('seccion', '')) or (f'I = {_vacio(r.get("I", ""))}' if _vacio(r.get('I', '')) else '')
+        filas.append((eje, desde, hasta, txt))
+    faltan = [k for k in range(1, n + 1) if not any(f[1] <= k <= f[2] for f in filas)]
+    return xs, hs, filas, faltan
+
+
+def completar_columnas(filas, n):
+    """Extiende hasta cada nivel sin columnas las que terminan en el nivel de abajo (copia la sección hacia arriba).
+    Devuelve las filas nuevas (listas de dicts) y los niveles que completó."""
+    filas = [dict(f) for f in filas]
+    hechos = []
+    for k in range(1, n + 1):
+        if any(_entero(f.get('desde', ''), 1) <= k <= _entero(f.get('hasta', ''), n) for f in filas):
+            continue
+        previas = [f for f in filas if _entero(f.get('hasta', ''), n) == k - 1 and _vacio(f.get('hasta', ''))]
+        for f in previas:
+            f['hasta'] = str(k)
+            f['art_sup'] = False
+        if previas:
+            hechos.append(k)
+    return filas, hechos
+
+
+def fig_captura_columnas(d):
+    """Dibujo de lo capturado en la tabla de columnas, aunque el modelo todavía esté incompleto:
+    cada columna se pinta en los niveles que abarca y los niveles sin columnas se marcan en rojo."""
+    from matplotlib.patches import Rectangle
+    xs, hs, filas, faltan = cobertura_columnas(d)
+    zs = np.concatenate([[0.0], np.cumsum(hs)])
+    fig = Figure(figsize=(max(5.0, 1.1 * len(xs) + 3), max(3.0, 0.55 * zs[-1] + 1.2)))
+    ax = fig.subplots()
+    ax.set_title('Columnas capturadas por nivel', color=AZULES[2], fontsize=10.5, fontweight='bold', loc='left')
+    ax.plot([xs[0] - 0.6, xs[-1] + 0.6], [0, 0], color=AZULES[0], lw=1.6)
+    for k, h in enumerate(hs, 1):
+        z0, z1 = zs[k - 1], zs[k]
+        if k in faltan:
+            ax.add_patch(Rectangle((xs[0] - 0.6, z0), xs[-1] - xs[0] + 1.2, h, fc='#F8D7DA', ec='#B02A37', lw=1, ls='--', zorder=1))
+            ax.text((xs[0] + xs[-1]) / 2, (z0 + z1) / 2, f'Nivel {k}: sin columnas', ha='center', va='center',
+                    color='#B02A37', fontsize=9, fontweight='bold', zorder=6)
+        ax.plot([xs[0] - 0.6, xs[-1] + 0.6], [z1, z1], color=AZULES[3], lw=1.2, zorder=2)
+        ax.text(xs[0] - 0.7, (z0 + z1) / 2, f'N{k}', ha='right', va='center', fontsize=8, color=AZULES[0])
+    for eje, desde, hasta, txt in filas:
+        x, z0, z1 = xs[eje - 1], zs[desde - 1], zs[hasta]
+        ax.add_patch(Rectangle((x - 0.1, z0), 0.2, z1 - z0, fc=AZULES[2], ec=AZULES[0], lw=0.8, zorder=4))
+        ax.text(x + 0.17, (z0 + z1) / 2, txt, fontsize=7.5, color=AZULES[0], va='center', zorder=6)
+    for i, x in enumerate(xs, 1):
+        ax.text(x, -0.35, f'Eje {i}', ha='center', va='top', fontsize=8, color=AZULES[0])
+    ax.set_xlim(xs[0] - 1.3, xs[-1] + 1.3)
+    ax.set_ylim(-0.9, zs[-1] + 0.3)
+    ax.set_aspect('equal')
+    ax.axis('off')
+    fig.tight_layout()
+    return fig
+
+
 def fig_estructura(p):
     """Vista previa a escala (elevación): ejes, columnas con su sección, vigas, apoyos y cargas por crujía."""
     from matplotlib.patches import Circle, Polygon, Rectangle

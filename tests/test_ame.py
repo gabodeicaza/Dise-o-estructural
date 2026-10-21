@@ -1641,3 +1641,14 @@ def test_pagina_web_corre_con_todos_los_ejemplos():
     assert not at.exception
     at.text_input(key='crujias').set_value('').run()
     assert at.error and not at.exception  # mensaje claro, sin caerse
+
+
+def test_dibujo_de_columnas_capturadas_marca_niveles_sin_columnas_y_se_completa():
+    d = dict(crujias='5 5', niveles=[dict(h='4'), dict(h='3'), dict(h='3')],
+             columnas=[dict(eje=str(e), desde=str(k), hasta=str(k), seccion='30x30') for e in (1, 2, 3) for k in (1, 2)])
+    assert ame.cobertura_columnas(d)[3] == [3]
+    assert ame.fig_captura_columnas(d) is not None
+    nuevas, hechos = ame.completar_columnas(d['columnas'], 3)
+    assert hechos == [3]
+    d['columnas'] = nuevas
+    assert ame.niveles_desde_columnas(d)['niveles'][2]['ejes'] == '1 2 3'

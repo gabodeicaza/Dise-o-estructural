@@ -514,6 +514,22 @@ def mostrar(df, dec=4):
 with T_est:
     if error_modelo:
         st.error(error_modelo)
+        if por_columna and not manual:
+            borrador = dict(crujias=st.session_state['crujias'], niveles=datos['niveles'], columnas=datos.get('columnas'))
+            _, _, _, faltan = ame.cobertura_columnas(borrador)
+            with st.expander('Dibujo de las columnas capturadas', expanded=True):
+                st.pyplot(ame.fig_captura_columnas(borrador))
+                if faltan:
+                    st.caption('Los niveles en rojo no tienen columnas en la tabla: agrega filas con ese nivel en «Desde / Hasta», '
+                               'o extiende las columnas existentes.')
+            if faltan and st.button('Extender las columnas hasta los niveles sin columnas'):
+                nuevas, hechos = ame.completar_columnas(datos['columnas'], len(datos['niveles']))
+                if hechos:
+                    st.session_state['df_cols'] = df_cols_de(nuevas)
+                    st.session_state['ver_cols'] += 1
+                    st.rerun()
+                else:
+                    st.warning('No hay columnas que terminen justo debajo de esos niveles; agrega las filas a mano.')
     elif manual:
         st.info('Con matrices no hay geometría que dibujar: revisa K, M, las alturas y los pesos derivados en la pestaña '
                 '«Resultados».')
