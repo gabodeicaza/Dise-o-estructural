@@ -31,8 +31,9 @@ def rigidez_marco(E, alturas_cm, xs_cm, columnas, vigas):
     alturas_cm : altura de cada entrepiso (cm), de abajo hacia arriba.
     xs_cm      : posición de cada eje (cm).
     columnas   : por nivel, lista de dicts con eje (1..), A, I (cm², cm4), artic (articulada en su base),
-                 artic_sup (articulada arriba) y rodillo (apoyo de rodillos en la base, solo nivel 1).
-    vigas      : por piso 1..n, dict con I y A de la viga que une todos los ejes en ese piso.
+                 artic_sup (articulada arriba) y rodillo (apoyo de rodillos en la base, solo nivel 1). Opcionales:
+                 hasta (piso donde termina una columna que cruza pisos sin viga) y omitir (continuación ya incluida).
+    vigas      : por piso 1..n, dict con I, A, E (opcional) y sin (tramos sin viga, opcional).
     """
     n, ne = len(alturas_cm), len(xs_cm)
     # numeración de grados de libertad: laterales primero
@@ -65,18 +66,27 @@ def rigidez_marco(E, alturas_cm, xs_cm, columnas, vigas):
                 if gj >= 0:
                     K[gi, gj] += kg[i, j]
 
-    for i, cols in enumerate(columnas):  # nivel i+1: del piso i al piso i+1
-        L = alturas_cm[i]
+    for i, cols in enumerate(columnas):  # nivel i+1: del piso i al piso i+1 (o hasta 'hasta' si cruza pisos sin viga)
         for c in cols:
+            if c.get('omitir'):  # continuación de una columna que ya se ensambló completa
+                continue
+            top = c.get('hasta', i + 1)
+            L = zs[top] - zs[i]
             ensamblar(_k_barra(c.get('E', E), c['A'], c['I'], L), _rot(0.0, 1.0),
-                      list(idx[(i, c['eje'])]) + list(idx[(i + 1, c['eje'])]), c['artic'], c.get('artic_sup', False))
+                      list(idx[(i, c['eje'])]) + list(idx[(top, c['eje'])]), c['artic'], c.get('artic_sup', False))
     for k in range(1, n + 1):
         v = vigas[k - 1]
+        sin = v.get('sin', ())  # tramos (0, 1, …) sin viga en este piso
         for e in range(1, ne):
+            if (e - 1) in sin:
+                continue
             L = xs_cm[e] - xs_cm[e - 1]
             ensamblar(_k_barra(v.get('E', E), v['A'], v['I'], L), _rot(1.0, 0.0), list(idx[(k, e)]) + list(idx[(k, e + 1)]))
 
-    Kaa, Kab, Kbb = K[:n, :n], K[:n, n:], K[n:, n:]
+    usado = np.abs(np.diag(K)) > 0          # los nodos sin ningún elemento (piso omitido por una columna) se descartan
+    usado[:n] = True
+    ub = usado[n:]
+    Kaa, Kab, Kbb = K[:n, :n], K[:n, n:][:, ub], K[n:, n:][np.ix_(ub, ub)]
     try:
         Kred = Kaa - Kab @ np.linalg.solve(Kbb, Kab.T)
     except np.linalg.LinAlgError:

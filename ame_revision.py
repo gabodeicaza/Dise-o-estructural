@@ -84,6 +84,9 @@ def avisos(res):
     def add(sev, txt):
         out.append((sev, txt))
 
+    for nota in p.get('notas_modelo', []):
+        add('info', nota)
+
     # --- Espectro y parámetros
     if p['Ta'] >= p['Tb']:
         add('alerta', f'Ta ({p["Ta"]:g} s) debe ser menor que Tb ({p["Tb"]:g} s).')

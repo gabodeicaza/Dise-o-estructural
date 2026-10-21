@@ -16,9 +16,9 @@ from ame_secciones import AYUDA_SECCIONES
 NAVY, AZUL_OSC, AZUL, AZUL_MED, AZUL_CLARO, PALE, BG = (
     '#0B2545', '#13315C', '#1D4E89', '#3E7CB1', '#81A4CD', '#DCE9F7', '#F1F6FC')
 
-COLS = ['h', 'ejes', 'seccion', 'E_col', 'viga', 'artic', 'rod', 'art_sup', 'cargas', 'W']
+COLS = ['h', 'ejes', 'seccion', 'E_col', 'viga', 'E_viga', 'artic', 'rod', 'art_sup', 'sin_losa', 'cargas', 'W']
 ETIQ = {'h': 'h entrepiso (m)', 'ejes': 'Columnas en ejes', 'seccion': 'Sección de columnas (cm)',
-        'E_col': 'E de las columnas', 'viga': 'Viga (cm)', 'artic': 'Articuladas en la base (ejes)', 'rod': 'Rodillos en la base (ejes)',
+        'E_col': 'E de las columnas', 'viga': 'Viga (cm)', 'E_viga': 'E de la viga', 'sin_losa': 'Tramos sin losa', 'artic': 'Articuladas abajo (ejes)', 'rod': 'Rodillos en la base (ejes)',
         'art_sup': 'Articuladas arriba (ejes)', 'cargas': 'Carga por crujía (t/m)',
         'W': 'o Peso W (t)'}
 AYUDA = {'h': 'Altura del entrepiso en metros.',
@@ -26,9 +26,13 @@ AYUDA = {'h': 'Altura del entrepiso en metros.',
          'seccion': AYUDA_SECCIONES + '. Una sola para todo el nivel o una por columna: "25x50 Ø40 25x50". '
                     'Para girar una sección 90° (otra orientación en planta) agrega @90: "20x40@90".',
          'viga': 'Viga de este piso (solo con vigas flexibles). b x h con h vertical: 30x60. También T:50x10x60x15 o H:...',
-         'artic': 'Ejes cuya columna está articulada en su base (normalmente solo en el nivel 1): "2". Vacío = todas empotradas.',
-         'E_col': 'Solo si las columnas de este nivel son de otro material: su E en la unidad de E (o "acero"). '
-                  'Vacío = el E general, que usan las vigas. Ej.: 2100 con t/cm².',
+         'artic': 'Solo para niveles superiores: ejes cuya columna está articulada en su extremo inferior. Los apoyos de la '
+                  'base se eligen en "Apoyos en la base", arriba de esta tabla.',
+         'E_col': 'E de las columnas de este nivel, en la unidad de E (o "acero"). Un valor para todas o uno por columna, '
+                  'en el orden de los ejes: "221.36 221.36 221.36 2100". Vacío = el E general.',
+         'E_viga': 'E de las vigas de este piso (solo con vigas flexibles), en la unidad de E o "acero". Vacío = el E general.',
+         'sin_losa': 'Crujías (1, 2, 3… de izquierda a derecha) sin viga ni losa en este piso, por ejemplo "3". Su carga se '
+                     'ignora. Si un eje queda sin viga en este piso, su columna lo cruza como una sola columna de varios entrepisos.',
          'rod': 'Ejes con apoyo de rodillos en la base (solo nivel 1): no transmite cortante, la columna no aporta '
                 'rigidez lateral. Ej.: "4".',
          'art_sup': 'Ejes con la columna articulada en su parte superior (3EI/h³ si la base es empotrada).',
@@ -47,6 +51,8 @@ NORM_OPC = ['Primer nivel = 1 (apuntes)', 'Último nivel (azotea) = 1', 'Valor m
 CLAVES_MANUAL = ['K_txt', 'M_txt', 'alturas_txt', 'pesos_txt']
 SOLO_SECCIONES = ('crujias', 'volado_izq', 'volado_der', 'E', 'fc', 'clase', 'vigas', 'direccion', 'unidad_E', 'unidad_fc', 'unidad_seccion')  # no aplican al modo de matrices
 ESPECTRO = ['a0', 'c', 'Ta', 'Tb', 'k', 'Ts']
+SIMBOLO_APOYO = {'Empotrado': '▬  Empotrado', 'Articulado': '△  Articulado', 'Rodillo': '◬  Rodillo (sin cortante)'}
+MAX_EJES = 20
 DEFECTOS = dict(crujias='', volado_izq='', volado_der='', subgrupo='B1', intensidad='Base de diseño', direccion='X', estado='Automático', Ks='0.25',
                 Q='4', k1='1.0', combinacion='SRSS', zeta='', material='Concreto', E='', fc='', clase=CLASES[0],
                 vigas=VIGAS[0], factor_Fu='1.1', mult_V='1', lim_dl='0.004', lim_sv='0.03', lim_oi='0.005',
@@ -113,6 +119,15 @@ def cargar(d):
         st.session_state[k] = (esp.get(fuente) or esp.get(st.session_state['intensidad']) or {}).get(k, '')
     if isinstance(d.get('niveles'), list):
         st.session_state['df'] = df_de(d['niveles'])
+        for i in range(1, MAX_EJES + 1):
+            st.session_state[f'apoyo_{i}'] = 'Empotrado'
+        try:                                     # los apoyos de la base del proyecto pasan a los selectores
+            nej_ = len(ame.parse_vector(d.get('crujias', ''), 'Crujías')) + 1
+            n1_ = d['niveles'][0] if d['niveles'] else {}
+            for i, est in enumerate(ame.estados_apoyo(n1_.get('artic', ''), n1_.get('rod', ''), nej_), 1):
+                st.session_state[f'apoyo_{i}'] = est
+        except (ValueError, KeyError, TypeError):
+            pass
     st.session_state['ver'] = st.session_state.get('ver', 0) + 1
 
 
@@ -252,6 +267,42 @@ with st.sidebar:
     c3.text_input('Ocup.', key='lim_oi', help='Vacío = sin límite')
 
 # ------------------------------------------------------------------ estructura
+for _k, _v in dict(calc_sec='I:3688/A:26.8/I2:98', calc_E='2.1e6', calc_uE='kg/cm²', calc_h='', calc_us='cm',
+                   calc_dir='Eje fuerte en la dirección del sismo (Ix)').items():
+    st.session_state.setdefault(_k, _v)
+with st.expander('Calculadora de EI (E·I de un miembro)'):
+    st.caption('Escribe los datos de la sección (por ejemplo los de la tabla del IR) y el E del material: obtienes I, EI y, '
+               'si das la altura, la rigidez lateral de la columna. Copia el texto de la sección a la tabla de niveles.')
+    c1, c2, c3 = st.columns([2, 1, 1])
+    c1.text_input('Sección(es)', key='calc_sec',
+                  help='Misma sintaxis de la tabla: 50x50, Ø60, I:3688/A:26.8/I2:98 (inercia en cm⁴, área en cm²), H:…, T:…. '
+                       'Varias separadas por espacio. Agrega @90 para girarla.')
+    c2.text_input('E', key='calc_E')
+    c3.selectbox('Unidad de E', list(ame.FACTOR_ESFUERZO), key='calc_uE')
+    c1, c2, c3 = st.columns([2, 1, 1])
+    c1.radio('Orientación respecto al sismo', ['Eje fuerte en la dirección del sismo (Ix)', 'Eje débil (Iy)'],
+             key='calc_dir', horizontal=True)
+    c2.text_input('Altura h (m), opcional', key='calc_h')
+    c3.radio('Unidades de la sección', ['cm', 'm'], key='calc_us', horizontal=True)
+    try:
+        h_calc = float(st.session_state['calc_h'].replace(',', '.')) if st.session_state.get('calc_h', '').strip() else None
+        filas_calc = ame.propiedades_miembros(st.session_state['calc_sec'], st.session_state['calc_E'],
+                                              st.session_state['calc_uE'],
+                                              'X' if st.session_state['calc_dir'].startswith('Eje fuerte') else 'Y',
+                                              st.session_state['calc_us'], h_calc)
+        tabla_calc = pd.DataFrame([{
+            'Sección': f['seccion'], 'I (cm⁴)': f['I'], 'I otra dirección (cm⁴)': f['I_otra'],
+            'A (cm²)': f['A'] if f['A'] else np.nan, 'r (cm)': f['r'] if f['r'] else np.nan,
+            'EI (kg·cm²)': f['EI'], 'EI (t·cm²)': f['EI_tcm2'], 'EI (t·m²)': f['EI_tm2'],
+            **({'12EI/h³ (t/cm)': f['k12_tcm'], '3EI/h³ (t/cm)': f['k3_tcm'], '12EI/h³ (kg/cm)': f['k12'],
+                '3EI/h³ (kg/cm)': f['k3']} if h_calc else {})} for f in filas_calc])
+        st.dataframe(tabla_calc, hide_index=True, width='stretch',
+                     column_config={c: st.column_config.NumberColumn(format='%.6g') for c in tabla_calc.columns[1:]})
+        st.caption('E en kg/cm² = ' + f'{filas_calc[0]["E"]:,.1f}' + '. Rigidez lateral: 12EI/h³ si la columna está empotrada '
+                   'arriba y abajo (vigas rígidas), 3EI/h³ si está articulada en un extremo.')
+    except ValueError as e_calc:
+        st.warning(str(e_calc))
+
 st.radio('¿Cómo defines la estructura?', MODOS, key='modo', horizontal=True,
          help='Por secciones y cargas el programa arma K y M. Si el ejercicio ya te da K y M, usa las matrices.')
 manual = st.session_state['modo'] == MODOS[1]
@@ -283,10 +334,30 @@ with st.expander('Estructura por secciones y cargas (niveles de abajo hacia arri
     c1.text_input('Volado izquierdo (m)', key='volado_izq',
                   help='Voladizo más allá del primer eje. Solo aporta peso; no cambia la rigidez lateral.')
     c2.text_input('Volado derecho (m)', key='volado_der', help='Voladizo más allá del último eje.')
+    try:
+        nej = len(ame.parse_vector(st.session_state['crujias'], 'Crujías')) + 1
+    except ValueError:
+        nej = 0
+    for _i in range(1, MAX_EJES + 1):
+        st.session_state.setdefault(f'apoyo_{_i}', 'Empotrado')
+    st.markdown('**Apoyos en la base** · uno por eje, de izquierda a derecha')
+    if 2 <= nej <= MAX_EJES:
+        por_fila = min(nej, 6)
+        for ini in range(1, nej + 1, por_fila):
+            cols_ap = st.columns(por_fila)
+            for i in range(ini, min(ini + por_fila, nej + 1)):
+                cols_ap[i - ini].selectbox(f'Eje {i}', list(ame.APOYOS), key=f'apoyo_{i}',
+                                           format_func=SIMBOLO_APOYO.get)
+        st.caption('Empotrado: 12EI/h³ · Articulado: 3EI/h³ · Rodillo: no transmite cortante, la columna solo carga peso. '
+                   'La vista previa dibuja cada apoyo para que confirmes.')
+    else:
+        st.caption('Escribe las crujías para elegir los apoyos de cada eje.')
     flexibles = st.session_state['vigas'].startswith('Flex')
     conf = {k: st.column_config.TextColumn(ETIQ[k], help=AYUDA[k]) for k in COLS}
+    conf['rod'] = None  # los rodillos se eligen en "Apoyos en la base"
     if not flexibles:
-        conf['viga'] = None  # oculta la columna
+        conf['viga'] = None  # oculta las columnas de viga
+        conf['E_viga'] = None
     edit = st.data_editor(st.session_state['df'], key=f'niv_{st.session_state["ver"]}', num_rows='dynamic',
                           width='stretch', column_config=conf)
     st.caption('Una fila por nivel (la primera es la base; agrega filas con el + de la tabla). Las columnas se ubican '
@@ -303,6 +374,14 @@ esp[ntc.espectro_fuente(st.session_state['intensidad'])] = {k: st.session_state[
 datos['espectros'] = esp
 datos['niveles'] = [{k: ('' if v is None or (isinstance(v, float) and np.isnan(v)) else str(v)) for k, v in fila.items()}
                     for _, fila in edit.dropna(how='all').iterrows()]
+if datos['niveles'] and 2 <= nej <= MAX_EJES and not manual:       # los selectores mandan sobre los apoyos del nivel 1
+    try:
+        ejes1 = ame.parse_ejes(datos['niveles'][0].get('ejes', ''), nej, 'nivel 1', range(1, nej + 1))
+    except ValueError:
+        ejes1 = list(range(1, nej + 1))
+    art_, rod_ = ame.apoyos_a_texto([st.session_state.get(f'apoyo_{i}', 'Empotrado') for i in range(1, nej + 1)])
+    datos['niveles'][0]['artic'] = ' '.join(str(e) for e in art_ if e in ejes1)
+    datos['niveles'][0]['rod'] = ' '.join(str(e) for e in rod_ if e in ejes1)
 firma = hashlib.md5(json.dumps(datos, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
 
 try:

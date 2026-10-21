@@ -290,8 +290,11 @@ def _volteo_entrepiso(Fu_arriba, alturas):
 
 def apoyo_txt(c):
     """Texto del apoyo de una columna (para tablas)."""
+    if c.get('k_cont'):
+        return 'Continuación de la columna del nivel inferior'
     base = 'Rodillo' if c.get('rodillo') else ('Articulado' if c['artic'] else 'Empotrado')
-    return base + (' · articulada arriba' if c.get('artic_sup') else '')
+    extra = f' · cruza hasta el piso {c["hasta"]}' if c.get('hasta') else ''
+    return base + (' · articulada arriba' if c.get('artic_sup') else '') + extra
 
 
 def _periodo_medido(d):
@@ -475,6 +478,94 @@ def _E_nivel(r, d, E, nom):
     return _a_kgcm2(parse_num(txt, f'{nom} - E de columnas'), d.get('unidad_E'), f'{nom} - E de columnas')
 
 
+def _E_columnas(r, d, E, nom, ncol):
+    """E de cada columna de un nivel: vacío = E general; un valor para todas o uno por columna.
+    Cada valor va en la unidad de E; las palabras 'acero' (2,040,000 kg/cm²) y 'general' también valen."""
+    txt = str(r.get('E_col', '')).strip()
+    if not txt:
+        return [E] * ncol
+    vals = []
+    for t in _tokens(txt):
+        tl = t.lower()
+        if tl.startswith('acero'):
+            vals.append(2_040_000.0)
+        elif tl in ('general', 'concreto', '-'):
+            vals.append(E)
+        else:
+            vals.append(_a_kgcm2(parse_num(t, f'{nom} - E de columnas'), d.get('unidad_E'), f'{nom} - E de columnas'))
+    if len(vals) == 1:
+        return vals * ncol
+    if len(vals) != ncol:
+        raise ValueError(f'{nom}: tiene {ncol} columna(s) y escribiste {len(vals)} valores de E. '
+                         'Escribe uno solo o uno por columna.')
+    return vals
+
+
+def _E_viga(r, d, E, nom):
+    """E de las vigas de un piso (solo importa con vigas flexibles): vacío = E general."""
+    txt = str(r.get('E_viga', '')).strip()
+    if not txt:
+        return E
+    if txt.lower().startswith('acero'):
+        return 2_040_000.0
+    return _a_kgcm2(parse_num(txt, f'{nom} - E de la viga'), d.get('unidad_E'), f'{nom} - E de la viga')
+
+
+def _tramos(texto, nb, nom):
+    """Tramos (crujías 1..nb, de izquierda a derecha) sin viga ni losa en un piso: "3", "1 3", "todos"."""
+    try:
+        return parse_ejes(texto, nb, f'{nom} - tramos sin losa', [])
+    except ValueError as e:
+        raise ValueError(str(e).replace('ejes', 'tramos').replace('eje', 'tramo'))
+
+
+APOYOS = ('Empotrado', 'Articulado', 'Rodillo')
+
+
+def estados_apoyo(artic, rod, nejes):
+    """Apoyo de cada eje en la base ('Empotrado' por defecto) a partir de las listas de ejes articulados y con rodillos."""
+    art = set(parse_ejes(artic, nejes, 'apoyos articulados', []))
+    rodillos = set(parse_ejes(rod, nejes, 'apoyos con rodillos', []))
+    return ['Rodillo' if e in rodillos else ('Articulado' if e in art else 'Empotrado') for e in range(1, nejes + 1)]
+
+
+def apoyos_a_texto(estados):
+    """Inverso de estados_apoyo: ejes articulados y ejes con rodillos (listas de enteros)."""
+    for e in estados:
+        if e not in APOYOS:
+            raise ValueError(f'Apoyo no válido: {e}. Usa {", ".join(APOYOS)}.')
+    return ([i for i, e in enumerate(estados, 1) if e == 'Articulado'], [i for i, e in enumerate(estados, 1) if e == 'Rodillo'])
+
+
+def propiedades_miembros(texto, E, unidad_E='kg/cm²', direccion='X', unidad_seccion='cm', h_m=None):
+    """Calculadora de EI: propiedades de una o varias secciones con un E dado.
+
+    texto: secciones con la misma sintaxis de la tabla de niveles (25x50, Ø60, I:3688/A:26.8/I2:98, H:..., T:...).
+    Devuelve una fila por sección con I (en la dirección del análisis), A, radio de giro, EI y, si se da la altura,
+    las rigideces laterales 12EI/h³ (empotrada-empotrada) y 3EI/h³ (articulada en un extremo)."""
+    esc = {'cm': 1.0, 'm': 100.0}.get(str(unidad_seccion).strip().lower())
+    if esc is None:
+        raise ValueError('Las unidades de las secciones deben ser cm o m.')
+    secs = parse_secciones(_escalar_texto(texto, esc, 'Calculadora'), 'Calculadora')
+    E_kg = _a_kgcm2(parse_num(E, 'E'), unidad_E, 'E')
+    if E_kg <= 0:
+        raise ValueError('E debe ser mayor que cero.')
+    otra = 'Y' if direccion == 'X' else 'X'
+    filas = []
+    for sec in secs:
+        I = inercia(sec, direccion)
+        A = sec['A'] if sec['A'] < 1e8 else None            # sin área capturada
+        EI = E_kg * I
+        fila = dict(seccion=sec['texto'], E=E_kg, I=I, I_otra=inercia(sec, otra), A=A,
+                    r=float(np.sqrt(I / A)) if A else None, EI=EI, EI_tcm2=EI / 1000.0, EI_tm2=EI / 1e7, EA=E_kg * A if A else None)
+        if h_m:
+            hcm = h_m * 100
+            fila.update(k12=12 * EI / hcm ** 3, k3=3 * EI / hcm ** 3, k12_tcm=12 * EI / hcm ** 3 / 1000.0,
+                        k3_tcm=3 * EI / hcm ** 3 / 1000.0)
+        filas.append(fila)
+    return filas
+
+
 def preparar_modelo(d):
     """Arma K, M y la geometría a partir de ejes y niveles.
 
@@ -492,7 +583,11 @@ def preparar_modelo(d):
         art_sup ejes con la columna articulada en su parte superior (opcional)
         viga    sección de la viga de ese piso (solo con vigas flexibles): "30x60"
         cargas  carga por crujía (t/m): un valor para todas o uno por crujía, p. ej. "4.7 3.2"
-        E_col   E de las columnas de ese nivel (en la unidad de E; o 'acero'); vacío = el E general (que usan las vigas)
+        E_col   E de las columnas del nivel (en la unidad de E; o 'acero'): un valor para todas o uno por columna;
+                vacío = el E general
+        E_viga  E de las vigas de ese piso (vigas flexibles); vacío = el E general
+        sin_losa tramos (crujías 1, 2, … de izquierda a derecha) sin viga ni losa en ese piso: su carga se ignora; si un
+                eje queda sin viga en ese piso, su columna lo cruza (una sola columna de varios entrepisos)
         W       peso del nivel (t), opcional: sustituye a la carga
     d['T_medido']: periodo fundamental medido (s), opcional. Los pesos pasan a ser solo la distribución relativa entre
         niveles (si se omiten, todos iguales) y se escalan para que T1 sea el medido: así se obtiene el peso total.
@@ -525,6 +620,7 @@ def preparar_modelo(d):
         raise ValueError('Las unidades de las secciones deben ser cm o m.')
 
     filas, detalle, geom_niv, ks, m, W, alturas = [], [], [], [], [], [], []
+    notas = []
     for i, r in enumerate(niv, 1):
         nom = f'Nivel {i}'
         h = parse_num(r.get('h', ''), f'{nom} - h')
@@ -551,9 +647,11 @@ def preparar_modelo(d):
             raise ValueError(f'{nom}: el eje {doble[0]} está marcado como articulado y como rodillo; elige uno.')
 
         hcm = h * 100
-        E_n = _E_nivel(r, d, E, nom)
+        E_cols = _E_columnas(r, d, E, nom, len(ejes))
+        E_v = _E_viga(r, d, E, nom)
+        sin = [j - 1 for j in _tramos(r.get('sin_losa', ''), nb, nom)]          # tramos sin viga (0-based)
         cols, kn = [], 0.0
-        for e, sec in zip(ejes, secs):
+        for (e, sec), E_n in zip(zip(ejes, secs), E_cols):
             art, roll, arriba = e in artic, e in rod, e in art_sup
             I = inercia(sec, direccion)
             if roll or (art and arriba):  # sin restricción horizontal o articulada en ambos extremos: no resiste cortante
@@ -565,12 +663,12 @@ def preparar_modelo(d):
                              eq=ancho_en_direccion(sec, direccion)))
         detalle.append(cols)
 
-        viga = dict(I=None, A=None, texto='', alto=30.0)
+        viga = dict(I=None, A=None, texto='', alto=30.0, E=E_v)
         if flexibles:
             vs = parse_secciones(_escalar_texto(r.get('viga', ''), esc_sec, f'{nom} - viga'), f'{nom} - viga')
             if len(vs) != 1:
                 raise ValueError(f'{nom} - viga: escribe una sola sección de viga (por ejemplo 30x60).')
-            viga = dict(I=vs[0]['Ix'], A=vs[0]['A'], texto=vs[0]['texto'], alto=vs[0]['dx'])
+            viga = dict(I=vs[0]['Ix'], A=vs[0]['A'], texto=vs[0]['texto'], alto=vs[0]['dx'], E=E_v)
 
         if str(r.get('W', '')).strip():
             Wi, w_bays = parse_num(r['W'], f'{nom} - W'), None
@@ -584,6 +682,12 @@ def preparar_modelo(d):
                 desc = ('volado izq. + ' if vi > 0 else '') + f'{nb} crujía(s)' + (' + volado der.' if vd > 0 else '')
                 raise ValueError(f'{nom}: hay {len(spans)} tramo(s) con carga ({desc}, de izquierda a derecha) y escribiste '
                                  f'{len(v)} cargas. Escribe una sola o una por tramo (0 si no hay carga).')
+            v = np.array(v, float)
+            for j in sin:                                   # sin losa: no hay carga en ese tramo
+                jj = j + (1 if vi > 0 else 0)
+                if v[jj] != 0:
+                    notas.append(f'{nom}: el tramo {j + 1} no tiene losa; se ignoró su carga de {v[jj]:g} t/m.')
+                v[jj] = 0.0
             Wi, w_bays = float(v @ lon_spans), v
         ks.append(kn); alturas.append(h); W.append(Wi); m.append(Wi * 1000 / G)
         textos = list(dict.fromkeys(c['texto'] for c in cols))
@@ -597,27 +701,91 @@ def preparar_modelo(d):
                 ext[0] = float(xs[0])
             if vd > 0 and w_spans[-1][2] == 0:
                 ext[1] = float(xs[-1])
-        geom_niv.append(dict(h=h, W=Wi, w_bays=w_bays, w_spans=w_spans, ext=ext, cols=cols, viga=viga,
-                             viga_h=viga['alto'] if flexibles else 30.0))
+        segs = []                                           # tramos de losa/viga que se dibujan (y unen los ejes)
+
+        def _unir(a_, b_):
+            if segs and abs(segs[-1][1] - a_) < 1e-9:
+                segs[-1] = (segs[-1][0], b_)
+            else:
+                segs.append((a_, b_))
+        conectado = set()                                   # ejes cuyo nodo está unido a la losa de este piso
+        if vi > 0 and (w_spans is None or w_spans[0][2] != 0):
+            _unir(-vi, 0.0)
+            conectado.add(1)
+        for j in range(nb):
+            if j not in sin:
+                _unir(float(xs[j]), float(xs[j + 1]))
+                conectado |= {j + 1, j + 2}
+        if vd > 0 and (w_spans is None or w_spans[-1][2] != 0):
+            _unir(float(xs[-1]), float(xs[-1] + vd))
+            conectado.add(nejes)
+        geom_niv.append(dict(h=h, W=Wi, w_bays=w_bays, w_spans=w_spans, ext=ext, cols=cols, viga=viga, sin=sin, segs=segs,
+                             conectado=sorted(conectado), viga_h=viga['alto'] if flexibles else 30.0))
+
+    # columnas que cruzan un piso sin viga ni losa en su eje: se vuelven una sola columna de varios entrepisos
+    for k in range(n - 1):
+        cn = set(geom_niv[k]['conectado'])
+        for e in range(1, nejes + 1):
+            if e in cn:
+                continue
+            cb = next((c for c in detalle[k] if c['eje'] == e), None)
+            ca = next((c for c in detalle[k + 1] if c['eje'] == e), None)
+            if cb and ca:
+                cb['cont_sup'], ca['cont_inf'] = True, True
+            elif cb or ca:
+                raise ValueError(f'Eje {e}: en el piso del nivel {k + 1} no hay viga ni losa y la columna no continúa '
+                                 f'{"hacia arriba" if cb else "hacia abajo"}: quedaría sin arriostrar. '
+                                 'Agrega la columna del otro nivel o la viga.')
+    for i in range(n):
+        for c in detalle[i]:
+            if not c.get('cont_sup') or c.get('cont_inf'):
+                continue
+            j, ultimo = i, c
+            while ultimo.get('cont_sup'):
+                j += 1
+                ultimo = next(x for x in detalle[j] if x['eje'] == c['eje'])
+                ultimo['k_cont'], ultimo['k'] = True, 0.0
+            L_cm = sum(alturas[i:j + 1]) * 100
+            c['hasta'], c['fin_nivel'], c['artic_sup'] = j + 1, j, ultimo['artic_sup']
+            if c['rodillo'] or (c['artic'] and c['artic_sup']):
+                c['k'] = 0.0
+            else:
+                c['k'] = (3 if (c['artic'] or c['artic_sup']) else 12) * c['E'] * c['I'] / L_cm ** 3
+            notas.append(f'Eje {c["eje"]}: no hay viga ni losa en el piso del nivel {i + 1}'
+                         + (f' (hasta el {j})' if j > i + 1 else '') + f'; la columna cruza esos pisos como una sola de '
+                         f'{L_cm / 100:g} m (secc. {c["texto"]}, E = {c["E"]:,.0f} kg/cm² del nivel {i + 1}).')
+            if ultimo['texto'] != c['texto'] or abs(ultimo['E'] - c['E']) > 1e-6:
+                notas.append(f'Eje {c["eje"]}: la columna que cruza tiene secciones o E distintos en cada nivel; '
+                             f'se usó el del nivel {i + 1}.')
+    for i, f in enumerate(filas):
+        f['k'] = sum(c['k'] for c in detalle[i])
 
     if flexibles:
         K = rigidez_marco(E, [x * 100 for x in alturas], xs * 100,
                           [[dict(eje=c['eje'], A=c['A'], I=c['I'], E=c['E'], artic=c['artic'], artic_sup=c['artic_sup'],
-                            rodillo=c['rodillo']) for c in cols] for cols in detalle],
-                          [dict(I=l['viga']['I'], A=l['viga']['A'], E=E) for l in geom_niv])
+                                 rodillo=c['rodillo'], hasta=c.get('hasta', i + 1), omitir=c.get('k_cont', False))
+                            for c in cols] for i, cols in enumerate(detalle)],
+                          [dict(I=l['viga']['I'], A=l['viga']['A'], E=l['viga']['E'], sin=set(l['sin'])) for l in geom_niv])
     else:
         K = np.zeros((n, n))
-        for i in range(n):
-            K[i, i] = ks[i] + (ks[i + 1] if i + 1 < n else 0)
-            if i + 1 < n:
-                K[i, i + 1] = K[i + 1, i] = -ks[i + 1]
+        for i, cols in enumerate(detalle):
+            for c in cols:
+                if c.get('k_cont'):
+                    continue
+                a_, b_ = i, c.get('hasta', i + 1)          # pisos (0 = suelo)
+                k_ = c['k']
+                if a_ >= 1:
+                    K[a_ - 1, a_ - 1] += k_
+                    K[a_ - 1, b_ - 1] -= k_
+                    K[b_ - 1, a_ - 1] -= k_
+                K[b_ - 1, b_ - 1] += k_
     mat = d.get('material') or 'Concreto'
     obj = _objetivo_de(d)
     modelo = dict(M=np.diag(m), K=K, n=n, alturas=np.array(alturas), cargas=np.array(W), dist_x=np.ones(n),
                   grupo=obj['grupo'], sismo=obj['sismo'], subgrupo=obj['subgrupo'], intensidad=obj['intensidad'],
                   objetivo=obj['objetivo'], E=E, info=filas, material=mat, direccion=direccion,
                   vigas='flexibles' if flexibles else 'rigidas', R_legacy=False,
-                  geom=dict(bays=bays, xs=xs, niveles=geom_niv, volados=(vi, vd), spans=spans),
+                  geom=dict(bays=bays, xs=xs, niveles=geom_niv, volados=(vi, vd), spans=spans), notas_modelo=notas,
                   **_params_norma(d, mat), **_params_espectro(d, obj['estado_auto'], mat, obj['intensidad']))
     return _ajustar_periodo(modelo, T_med) if T_med else modelo
 
@@ -1399,6 +1567,7 @@ def fig_estructura(p):
     direccion = p.get('direccion', 'X')
     flexibles = p.get('vigas') == 'flexibles'
     zs = np.concatenate([[0.0], np.cumsum([l['h'] for l in niv])])
+    tvs = [l_['viga_h'] / 100 for l_ in niv]
     L, H = xs[-1], zs[-1]
     fig = Figure(figsize=(10, min(11, max(5.2, 0.36 * (H + 4.4) + 1))), dpi=100)
     gs = fig.add_gridspec(1, 2, width_ratios=[3.4, 1], wspace=0.04)
@@ -1420,14 +1589,20 @@ def fig_estructura(p):
         z0, z1 = zs[i], zs[i + 1]
         tv = l['viga_h'] / 100  # peralte de la viga (m)
         xl, xr = l.get('ext', [xs[0], xs[-1]])
-        ax.add_patch(Rectangle((xl - 0.3, z1 - tv), (xr - xl) + 0.6, tv, fc='#DCE9F7', ec=AZULES[1], lw=1, zorder=3))
+        for xa_, xb_ in l.get('segs', [(xl, xr)]):          # losa/viga solo donde existe (puede haber tramos sin losa)
+            ax.add_patch(Rectangle((xa_ - 0.3, z1 - tv), (xb_ - xa_) + 0.6, tv, fc='#DCE9F7', ec=AZULES[1], lw=1, zorder=3))
         for c in l['cols']:
+            if c.get('k_cont'):                              # continuación: ya se dibujó con la columna del nivel inferior
+                continue
+            fin = c.get('fin_nivel', i)
+            zt = zs[fin + 1] - tvs[fin]                      # tope de la columna (cruza pisos si fin > i)
             w = max(c['eq'] / 100, 0.14)
             circular = c['tipo'] in ('circ', 'hcirc')
-            ax.add_patch(Rectangle((c['x'] - w / 2, z0), w, z1 - tv - z0, fc=AZULES[1] if circular else AZULES[2],
+            ax.add_patch(Rectangle((c['x'] - w / 2, z0), w, zt - z0, fc=AZULES[1] if circular else AZULES[2],
                                    ec=AZULES[0], lw=0.8, zorder=4))
-            ax.text(c['x'] + w / 2 + 0.1, (z0 + z1) / 2, c['texto'], fontsize=7.5, color=AZULES[0], va='center',
-                    zorder=6)
+            cruza = fin > i                                  # la etiqueta de una columna que cruza va a su izquierda
+            ax.text(c['x'] + (-1 if cruza else 1) * (w / 2 + 0.1), (z0 + zs[fin + 1]) / 2, c['texto'], fontsize=7.5,
+                    color=AZULES[0], va='center', ha='right' if cruza else 'left', zorder=6)
             if c.get('rodillo'):  # apoyo de rodillos: triángulo sobre dos ruedas
                 ax.add_patch(Polygon([(c['x'], 0), (c['x'] - 0.25, -0.32), (c['x'] + 0.25, -0.32)],
                                      fc='white', ec=AZULES[0], lw=1, zorder=5))
@@ -1442,7 +1617,7 @@ def fig_estructura(p):
             elif i == 0:
                 ax.add_patch(Rectangle((c['x'] - w / 2 - 0.1, -0.12), w + 0.2, 0.12, fc=AZULES[0], zorder=5))
             if c.get('artic_sup'):
-                ax.add_patch(Circle((c['x'], z1 - tv), 0.13, fc='white', ec=AZULES[0], lw=1, zorder=6))
+                ax.add_patch(Circle((c['x'], zt), 0.13, fc='white', ec=AZULES[0], lw=1, zorder=6))
         # cargas
         if l['w_bays'] is None:
             ax.text(L / 2, z1 + 0.2, f'W = {l["W"]:g} t', ha='center', fontsize=8, color=AZULES[2], fontweight='bold')
@@ -2008,6 +2183,20 @@ EJEMPLOS_MODELO = {
                  dict(h='3.5', ejes='1 3', seccion='40x40', cargas='0 3 3 0')],
         fc='', subgrupo='B1', intensidad='Base de diseño', Q='2', k1='1.0', zeta='0.05',
         a0='114', c='320', Ta='0.9', Tb='2.2', k='0.390', Ts='0.5', factor_Fu='1.1', mult_V='1'),
+    # Problema de tarea: 4 niveles; C1 50x50 de concreto (E = 221.35944 t/cm²) y C2 = IR 305x21.1 de acero (E = 2.1e6 kg/cm²).
+    # En el piso del nivel 3 no hay losa en la crujía 3, así que la columna del eje 4 es una sola de 7 m (del piso 2 al 4).
+    # Vigas: 25x50 de concreto en los pisos 1 y 2; IR 305x21.1 de acero en los pisos 3 y 4 (la ampliación).
+    # Espectro: valores de la captura del problema (grupo A, ocupación inmediata, sismo base de diseño).
+    'Ejemplo 12 (tarea: columnas mixtas y piso sin losa en una crujía)': dict(
+        crujias='5 4 4.5', vigas='rigidas', material='Concreto', direccion='X', unidad_E='t/cm²', E='221.35944',
+        niveles=[dict(h='4.5', ejes='todos', seccion='50x50', viga='25x50', artic='2 3', cargas='1.4'),
+                 dict(h='3.5', ejes='todos', seccion='50x50', viga='25x50', cargas='2'),
+                 dict(h='3.5', ejes='todos', seccion='50x50 50x50 50x50 I:3688/A:26.8', E_col='221.35944 221.35944 221.35944 2100',
+                      viga='I:3688/A:26.8', E_viga='2100', sin_losa='3', cargas='2'),
+                 dict(h='3.5', ejes='todos', seccion='I:3688/A:26.8', E_col='2100', viga='I:3688/A:26.8', E_viga='2100',
+                      cargas='1.8')],
+        fc='', subgrupo='A2', intensidad='Base de diseño', Q='1', k1='0.8', zeta='0.05',
+        a0='242', c='1062', Ta='0.8', Tb='1.7', k='0.430', Ts='1.0', factor_Fu='1.1', mult_V='1'),
 }
 
 

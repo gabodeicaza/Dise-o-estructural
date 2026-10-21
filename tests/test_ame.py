@@ -23,7 +23,7 @@ from ame_revision import combinar, irregularidades, rho_cqc, theta_pdelta  # noq
 from ame_secciones import parse_secciones  # noqa: E402
 
 EJ = ame.EJEMPLOS_MODELO
-EJ1, EJ2, EJ3, EJ4, EJ5, EJ6, EJ7, EJ8, EJ9, EJ10, EJ11 = list(EJ.values())
+EJ1, EJ2, EJ3, EJ4, EJ5, EJ6, EJ7, EJ8, EJ9, EJ10, EJ11, EJ12 = list(EJ.values())
 
 
 def correr(d):
@@ -1129,6 +1129,127 @@ def test_volados_se_dibujan_y_se_exportan():
     assert out.getvalue()[:2] == b'PK' and pdf.getvalue().startswith(b'%PDF')
 
 
+# ---------------------------------------------------------------- columnas con distinto EI, piso sin losa en una crujía
+K_HOJA = np.array([[167028.5680, -129072.5598, 0, 0], [-129072.5598, 225944.7184, -96804.4198, -67.7388],
+                   [0, -96804.4198, 98430.1504, -1625.7306], [0, -67.7388, -1625.7306, 1693.4694]])
+
+
+def con_acero_en_3EI(d):
+    d = copy.deepcopy(d)
+    d['niveles'][2]['artic'] = '4'          # columna 12, que cruza del piso 2 al 4
+    d['niveles'][3]['artic'] = '1 2 3'      # columnas 13, 14 y 15
+    return d
+
+
+def test_tarea_masas_y_K_como_la_hoja():
+    p = ame.preparar_modelo(EJ12)
+    assert p['cargas'] == pytest.approx([18.9, 27.0, 18.0, 24.3])      # el piso 3 solo lleva losa en las crujías 1 y 2
+    assert np.diag(p['M']) == pytest.approx([19.2661, 27.5229, 18.34862, 24.7706], abs=2e-4)
+    p2 = ame.preparar_modelo(con_acero_en_3EI(EJ12))
+    assert p2['K'] == pytest.approx(K_HOJA, rel=2e-5, abs=0.05)         # K de la hoja (acero con 3EI/h³)
+
+
+def test_columna_que_cruza_un_piso_sin_viga():
+    p = ame.preparar_modelo(EJ12)
+    cols3 = {c['eje']: c for c in p['geom']['niveles'][2]['cols']}
+    cols4 = {c['eje']: c for c in p['geom']['niveles'][3]['cols']}
+    L = 700.0
+    assert cols3[4]['hasta'] == 4 and cols4[4]['k_cont'] and cols4[4]['k'] == 0
+    assert cols3[4]['k'] == pytest.approx(12 * 2.1e6 * 3688 / L ** 3)    # una sola columna de 7 m, 12EI/L³
+    assert ame.apoyo_txt(cols4[4]) == 'Continuación de la columna del nivel inferior'
+    assert 'cruza hasta el piso 4' in ame.apoyo_txt(cols3[4])
+    K = p['K']
+    assert K[1, 3] == pytest.approx(-cols3[4]['k'])
+    assert K[2, 3] == pytest.approx(-sum(c['k'] for c in cols4.values() if c['eje'] != 4))
+    assert any('cruza esos pisos' in n for n in p['notas_modelo'])
+    assert any('se ignoró su carga' in n for n in p['notas_modelo'])
+
+
+def test_E_por_columna_y_por_viga():
+    p = ame.preparar_modelo(EJ12)
+    Ec, Es = 221_359.44, 2.1e6
+    assert [c['E'] for c in p['geom']['niveles'][2]['cols']] == pytest.approx([Ec, Ec, Ec, Es])
+    assert [c['E'] for c in p['geom']['niveles'][3]['cols']] == pytest.approx([Es] * 4)
+    assert [l['viga']['E'] for l in p['geom']['niveles']] == pytest.approx([Ec, Ec, Es, Es])
+    d = copy.deepcopy(EJ12)
+    d['niveles'][2]['E_col'] = 'general general general acero'
+    assert ame.preparar_modelo(d)['geom']['niveles'][2]['cols'][3]['E'] == pytest.approx(2_040_000)
+    d['niveles'][2]['E_col'] = '221 221'
+    with pytest.raises(ValueError, match='escribiste 2 valores de E'):
+        ame.preparar_modelo(d)
+
+
+def test_tramo_sin_losa_pone_la_carga_en_cero_y_valida():
+    d = copy.deepcopy(EJ2)
+    d['niveles'][1]['sin_losa'] = '2'
+    p = ame.preparar_modelo(d)
+    assert p['cargas'][1] == pytest.approx(4.6667 * 4)                 # solo la crujía 1 (4 m) tiene losa
+    d['niveles'][1]['sin_losa'] = '9'
+    with pytest.raises(ValueError, match='el tramo 9 no existe'):
+        ame.preparar_modelo(d)
+
+
+def test_columna_sin_arriostrar_da_error_claro():
+    d = copy.deepcopy(EJ12)
+    d['niveles'][3]['ejes'] = '1 2 3'                                  # el eje 4 termina en un piso sin viga
+    with pytest.raises(ValueError, match='Eje 4: en el piso del nivel 3 no hay viga ni losa'):
+        ame.preparar_modelo(d)
+
+
+def test_columna_que_cruza_con_vigas_flexibles_coincide_en_el_limite_de_vigas_rigidas():
+    d = copy.deepcopy(EJ12)
+    d['vigas'] = 'flexibles'
+    for n in d['niveles']:
+        n['viga'], n['E_viga'] = 'I:100000000000/A:100000000000', '221.35944'
+        n['seccion'] = n['seccion'].replace('50x50', 'I:520833.3333/A:100000000').replace('I:3688/A:26.8', 'I:3688/A:100000000')
+    flex = ame.preparar_modelo(d)['K']
+    rig = ame.preparar_modelo(dict(d, vigas='rigidas'))['K']
+    assert flex == pytest.approx(rig, rel=1e-4, abs=1.0)
+    real = ame.preparar_modelo(dict(EJ12, vigas='flexibles'))
+    assert real['K'] == pytest.approx(real['K'].T) and np.all(np.linalg.eigvalsh(real['K']) > 0)
+    assert correr(dict(EJ12, vigas='flexibles'))['T'][0] > correr(EJ12)['T'][0]
+
+
+def test_calculadora_de_EI():
+    ir = ame.propiedades_miembros('I:3688/A:26.8/I2:98', '2.1e6', 'kg/cm²', 'X', 'cm', 3.5)[0]
+    assert ir['EI'] == pytest.approx(2.1e6 * 3688) and ir['EI_tm2'] == pytest.approx(774.48)
+    assert ir['I_otra'] == 98 and ir['r'] == pytest.approx(np.sqrt(3688 / 26.8))          # rx = 11.7 cm
+    assert ir['k12'] == pytest.approx(12 * ir['EI'] / 350 ** 3) and ir['k3'] == pytest.approx(ir['k12'] / 4)
+    giro = ame.propiedades_miembros('I:3688/A:26.8/I2:98', '2100', 't/cm²', 'Y')[0]
+    assert giro['I'] == 98 and giro['EI'] == pytest.approx(2.1e6 * 98) and 'k12' not in giro
+    c = ame.propiedades_miembros('50x50 Ø60', '221.35944', 't/cm²', 'X')
+    assert c[0]['EI_tm2'] == pytest.approx(221359.44 * 50 ** 4 / 12 / 1e7) and c[1]['I'] == pytest.approx(np.pi * 60 ** 4 / 64)
+    assert ame.propiedades_miembros('0.5x0.5', '221.35944', 't/cm²', 'X', 'm')[0]['I'] == pytest.approx(50 ** 4 / 12)
+    with pytest.raises(ValueError, match='E debe ser mayor que cero'):
+        ame.propiedades_miembros('50x50', '0')
+
+
+def test_tarea_dibuja_y_exporta():
+    r = correr(EJ12)
+    buf = io.BytesIO()
+    ame.fig_estructura(r['p']).savefig(buf, format='png')
+    assert len(buf.getvalue()) > 5_000
+    out, pdf = io.BytesIO(), io.BytesIO()
+    ame.exportar_excel(r, out)
+    ame_pdf.memoria_pdf(r, pdf, proyecto='Tarea', autor='Pruebas')
+    assert out.getvalue()[:2] == b'PK' and pdf.getvalue().startswith(b'%PDF')
+
+
+def test_apoyos_de_la_base_por_eje():
+    assert ame.estados_apoyo('3', '1', 3) == ['Rodillo', 'Empotrado', 'Articulado']
+    assert ame.estados_apoyo('', '', 4) == ['Empotrado'] * 4
+    assert ame.estados_apoyo('todos', '', 2) == ['Articulado', 'Articulado']
+    assert ame.apoyos_a_texto(['Rodillo', 'Empotrado', 'Articulado']) == ([3], [1])
+    with pytest.raises(ValueError, match='Apoyo no válido'):
+        ame.apoyos_a_texto(['Fijo'])
+    # el ida y vuelta reproduce el modelo del pizarrón
+    n1 = EJ11['niveles'][0]
+    art, rod = ame.apoyos_a_texto(ame.estados_apoyo(n1['artic'], n1['rod'], 3))
+    d = copy.deepcopy(EJ11)
+    d['niveles'][0].update(artic=' '.join(map(str, art)), rod=' '.join(map(str, rod)))
+    assert ame.preparar_modelo(d)['K'] == pytest.approx(ame.preparar_modelo(EJ11)['K'])
+
+
 # ---------------------------------------------------------------- exportación
 def test_excel_y_pdf_se_generan():
     from openpyxl import load_workbook
@@ -1204,6 +1325,18 @@ def test_pagina_web_corre_con_todos_los_ejemplos():
     # objetivo de diseño: grupo A / base -> ocupación inmediata; infrecuente exige su propio espectro
     at.sidebar.selectbox(key='subgrupo').select('A1').run()
     assert not at.exception and not any('Revisa los datos' in e.value for e in at.error)
+    # apoyos de la base: un selector por eje
+    at.sidebar.selectbox(key='ejemplo').select(list(EJ)[1])
+    at.sidebar.button[0].click()
+    at.run()
+    assert at.selectbox(key='apoyo_1').value == 'Empotrado'
+    at.selectbox(key='apoyo_1').select('Rodillo').run()
+    at.selectbox(key='apoyo_2').select('Articulado').run()
+    assert not at.exception and not any('Revisa los datos' in e.value for e in at.error)
+    at.sidebar.selectbox(key='ejemplo').select(list(EJ)[10])
+    at.sidebar.button[0].click()
+    at.run()
+    assert [at.selectbox(key=f'apoyo_{i}').value for i in (1, 2, 3)] == ['Rodillo', 'Empotrado', 'Articulado']
     # modo matrices: se puede alternar sin perder los datos de secciones
     at.sidebar.selectbox(key='ejemplo').select(list(EJ)[5])
     at.sidebar.button[0].click()
