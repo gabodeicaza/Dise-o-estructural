@@ -1760,3 +1760,41 @@ def test_ejemplo_15_pizarron_columnas_que_faltan_y_eje_de_13_m():
     r = ame.calcular(p)
     assert r['clave'] == 'DL' and r['p']['Ks'] == pytest.approx(1 / 6)
     assert r['Sa_modal'][:, 0].max() <= 400 / 6 + 1e-9                  # nunca pasa de c·Ks
+
+
+def test_pagina_abre_un_proyecto_json_desde_el_cargador_sin_error():
+    import json
+    from streamlit.testing.v1 import AppTest
+    at = AppTest.from_file(str(Path(ame.__file__).parent / 'app_web.py'), default_timeout=180).run()
+    ejemplo = list(ame.EJEMPLOS_MODELO.values())[13]
+    at.sidebar.file_uploader[0].upload('proyecto.json', json.dumps(ejemplo, ensure_ascii=False).encode('utf-8')).run()
+    assert not at.exception
+    assert at.text_input(key='crujias').value == '4 4 2'
+    assert at.radio(key='captura').value == at.radio(key='captura').options[1]          # el ejemplo 14 es por columna
+    at.sidebar.file_uploader[0].upload('malo.json', b'esto no es json').run()
+    assert not at.exception and any('No se pudo leer' in e.value for e in at.error)
+
+
+def test_estructura_A_de_la_hoja_de_excel_de_un_companero_coincide_en_las_dos_versiones():
+    """Hoja 19 (K y M dadas): ordenadas de la hoja con SASID y, en la segunda versión, ordenadas dadas a mano."""
+    r = correr(copy.deepcopy(EJ6))
+    assert r['T'] == pytest.approx([2.17897, 0.99388, 0.57350, 0.50195], abs=2e-5)
+    assert r['Sa_modal'][:, 0] == pytest.approx([210.02, 476.19, 476.19, 476.19], abs=0.01)
+    assert r['gam'] == pytest.approx([0.413132716, 0.33423369, 0.17398604, 0.078647486], abs=2e-6)
+    assert r['d'][:, 0] == pytest.approx([10.4350, 19.1347, 30.1699, 36.1878], abs=1e-3)
+    assert r['F'][:, 0] == pytest.approx([260296.08, 477314.09, 376289.14, 451349.22], rel=1e-4)
+    assert r['F_final'] == pytest.approx([608390.70, 763306.42, 426319.26, 601005.68], rel=1e-5)
+    t = r['tabla_din']
+    assert t['Fu'] == pytest.approx([661.11, 468.95, 839.64, 669.23], abs=0.01)                 # niveles 4, 3, 2, 1
+    assert t['Vu'] == pytest.approx([661.11, 1130.06, 1969.69, 2638.93], abs=0.01)   # acumulado (la hoja de Excel suma mal el Vu)
+    assert t['Mvu'].sum() == pytest.approx(31998.9123, rel=1e-6)
+    d2 = copy.deepcopy(EJ6)
+    d2.update(Sa_modos='41.44 87.50 87.50 87.50', unidad_espectro='cm/s²')
+    r2 = correr(d2)
+    assert r2['d'][:, 0] == pytest.approx([2.0590, 3.7756, 5.9530, 7.1404], abs=1e-3)
+    assert r2['F'][:, 0] == pytest.approx([51360.34, 94181.26, 74247.52, 89058.00], rel=1e-4)
+    assert r2['F_final'] == pytest.approx([113347.42, 144394.84, 82876.27, 115103.81], rel=1e-5)
+    t2 = r2['tabla_din']
+    assert t2['Fu'] == pytest.approx([126.61, 91.16, 158.83, 124.68], abs=0.01)
+    assert t2['Vu'] == pytest.approx([126.61, 217.78, 376.61, 501.29], abs=0.01)
+    assert t2['Mvu'].sum() == pytest.approx(6111.4964, rel=1e-5)

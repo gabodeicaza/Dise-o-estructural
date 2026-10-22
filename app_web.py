@@ -195,6 +195,19 @@ def ruta_auto(pid):
     return AUTOGUARDADO / f'{pid}.json'
 
 
+
+def abrir_archivo():
+    """Callback del cargador de archivos: corre antes de dibujar los campos, así puede cambiar su valor."""
+    arch = st.session_state.get('archivo')
+    st.session_state.pop('_error_archivo', None)
+    if arch is None:
+        return
+    try:
+        cargar(json.loads(arch.getvalue().decode('utf-8')))
+    except (ValueError, KeyError, TypeError, AttributeError, UnicodeDecodeError):
+        st.session_state['_error_archivo'] = 'No se pudo leer ese archivo de proyecto.'
+
+
 if 'df' not in st.session_state:
     pid_ = str(st.query_params.get('p', ''))
     if not re.fullmatch(r'[0-9a-f]{12}', pid_):
@@ -220,14 +233,9 @@ with st.sidebar:
     st.text_input('Elaboró', key='autor')
     st.selectbox('Ejemplo', list(EJEMPLOS), key='ejemplo')
     st.button('Cargar ejemplo', on_click=lambda: cargar(EJEMPLOS[st.session_state['ejemplo']]), width='stretch')
-    arch = st.file_uploader('o abrir proyecto (.json)', type='json')
-    if arch is not None and st.session_state.get('_arch') != arch.file_id:
-        st.session_state['_arch'] = arch.file_id
-        try:
-            cargar(json.load(arch))
-            st.rerun()
-        except (ValueError, KeyError, TypeError, AttributeError):
-            st.error('No se pudo leer ese archivo de proyecto.')
+    st.file_uploader('o abrir proyecto (.json)', type='json', key='archivo', on_change=abrir_archivo)
+    if st.session_state.get('_error_archivo'):
+        st.error(st.session_state['_error_archivo'])
     if st.session_state.get('_recuperado'):
         st.success('Recuperé tu captura anterior: la página se había reiniciado.')
     st.caption('Tu captura se guarda sola mientras trabajas: si la página se reinicia, vuelve a abrir la misma dirección '
