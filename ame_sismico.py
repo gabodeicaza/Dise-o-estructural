@@ -207,7 +207,14 @@ def _params_espectro(d, estado_auto=None, material='Concreto', intensidad='Base 
     zeta = _num_opc(d, 'zeta', zeta_defecto)
     sp = _spec_dict(d, intensidad)
     fu = _factor_espectro(d)
-    ks_base = _num_opc(d, 'Ks', 0.25) or 0.25
+    ks_txt = str(d.get('Ks', '')).strip().lower()
+    Ts_bd = parse_num(sp['Ts'], 'Ts')
+    try:                                          # Ks se calcula con el Ts del espectro de base de diseño del sitio
+        Ts_bd = parse_num(_spec_dict(d, 'Base de diseño')['Ts'], 'Ts')
+    except (ValueError, KeyError):
+        pass
+    ks_auto = ks_txt in ('', 'auto', 'automático', 'automatico')
+    ks_base = ntc.ks_norma(Ts_bd) if ks_auto else (parse_num(d['Ks'], 'Ks') or ntc.ks_norma(Ts_bd))
     sa_txt = str(d.get('Sa_modos') or '').strip()
     return dict(Q=parse_vector(d['Q'], 'Q'), unidad_espectro='g' if fu == G else 'cm/s²',
                 Sa_manual=parse_vector(sa_txt, 'Ordenadas Sa por modo') * fu if sa_txt else None,
@@ -217,6 +224,7 @@ def _params_espectro(d, estado_auto=None, material='Concreto', intensidad='Base 
                 factor_Fu=parse_num(d.get('factor_Fu', '1.1') or '1.1', 'Factor Fu'),
                 mult_V=parse_num(d.get('mult_V', '1') or '1', 'Multiplicador V estático'),
                 estado=estado, Ks=ks_base * (ntc.FACTOR_KS_OCASIONAL if intensidad == 'Ocasional' else 1.0), Ks_base=ks_base,
+                Ks_auto=ks_auto, Ks_zona=ntc.zona_ks(Ts_bd), Ks_Ts=Ts_bd,
                 combinacion=comb,
                 zeta=zeta if zeta is not None else zeta_defecto,
                 lim_dl=_num_opc(d, 'lim_dl', 0.004), lim_sv=_num_opc(d, 'lim_sv', 0.03),
@@ -1190,7 +1198,7 @@ def _normativa(p, res):
     fila('Estado de cálculo', p['estado'], '')
     fila('Amortiguamiento ζ', f'{p["zeta"]:g}', 'Concreto 0.05 · acero 0.03 (p. 14)')
     if clave == 'DL':
-        fila('Ks', f'{p["Ks_base"]:g}' + (f' × {ntc.FACTOR_KS_OCASIONAL:g} (sismo ocasional) = {p["Ks"]:g}'
+        fila('Ks', f'{p["Ks_base"]:.5g}' + (f' (ec. 3.1.1, zona {p["Ks_zona"]}, Ts = {p["Ks_Ts"]:g} s)' if p['Ks_auto'] else ' (dado)') + (f' × {ntc.FACTOR_KS_OCASIONAL:g} (sismo ocasional) = {p["Ks"]:g}'
                                           if p['Ks'] != p['Ks_base'] else ''), 'Sa(BD)·Ks, sin factor de carga')
     else:
         r0 = _r0(Q0)

@@ -15,6 +15,20 @@ ETIQUETA_INTENSIDAD = {'Infrecuente': 'Infrecuente (MC)', 'Base de diseño': 'Ba
 FACTOR_KS_OCASIONAL = 2.5        # Sa(BD)·2.5·Ks en operación continua con sismo ocasional (p. 12)
 
 
+def ks_norma(Ts):
+    """Factor Ks de la ecuación 3.1.1 (frecuente = base de diseño × Ks): zona A 1/6, zona B 1/[6 − 4(Ts − 0.5)], zona C 1/4.
+    Las tres zonas se distinguen por Ts (0.5 s y 1.0 s) y la fórmula es continua entre ellas."""
+    if Ts <= 0.5:
+        return 1.0 / 6.0
+    if Ts >= 1.0:
+        return 0.25
+    return 1.0 / (6.0 - 4.0 * (Ts - 0.5))
+
+
+def zona_ks(Ts):
+    return 'A' if Ts <= 0.5 else ('C' if Ts >= 1.0 else 'B')
+
+
 def normalizar_intensidad(texto):
     """Acepta 'MC', 'Infrecuente (MC)', 'bd'… y devuelve el nombre canónico (o el mismo texto si no lo reconoce)."""
     t = str(texto or '').strip()

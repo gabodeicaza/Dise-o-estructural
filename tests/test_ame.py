@@ -688,7 +688,7 @@ def test_estatico_limitacion_de_danos_sin_FC_ni_QR():
                                                                                   k='0.505', Ts='0.9')}))
     se = r['estatico']
     assert r['clave'] == 'DL' and se['FC'] == 1.0 and se['amp'] == 1.0
-    assert se['C'] == pytest.approx(0.25 * 636 / 981)                       # Sa(BD)·Ks, sin reducción
+    assert se['C'] == pytest.approx(636 / 981 / 4.4)                      # Sa(BD)·Ks con Ks = 1/[6-4(0.9-0.5)] (Ts = 0.9)
     assert r['tabla_est']['Fu'] == pytest.approx(r['tabla_est']['Fi'])
 
 
@@ -1716,3 +1716,17 @@ def test_pagina_recupera_la_captura_con_la_misma_direccion(tmp_path):
     assert at2.radio(key='captura').value == at.radio(key='captura').value
     assert at2.text_input(key='crujias').value == '4 4 2'
     assert not at2.exception
+
+
+def test_Ks_de_la_ecuacion_3_1_1_y_valor_dado_a_mano():
+    assert [ntc.ks_norma(t) for t in (0.3, 0.5, 1.0, 1.8)] == pytest.approx([1 / 6, 1 / 6, 0.25, 0.25])
+    assert ntc.ks_norma(0.75) == pytest.approx(1 / 5.0) and ntc.ks_norma(0.9) == pytest.approx(1 / 4.4)
+    assert [ntc.zona_ks(t) for t in (0.4, 0.8, 1.2)] == ['A', 'B', 'C']
+    d = dict(EJ2, intensidad='Frecuente')
+    d['espectros'] = {'Base de diseño': dict(a0='114', c='320', Ta='0.9', Tb='2.2', k='0.39', Ts='0.5')}
+    auto = correr(dict(d, Ks=''))
+    assert auto['p']['Ks'] == pytest.approx(1 / 6) and auto['p']['Ks_auto'] and auto['p']['Ks_zona'] == 'A'
+    a_mano = correr(dict(d, Ks='0.25'))
+    assert a_mano['p']['Ks'] == 0.25 and not a_mano['p']['Ks_auto']
+    assert a_mano['V_din'] == pytest.approx(auto['V_din'] * 0.25 * 6)
+    assert 'ec. 3.1.1' in ' '.join(f[1] for f in auto['normativa']['factores'] if f[0] == 'Ks')

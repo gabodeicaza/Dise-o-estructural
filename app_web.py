@@ -65,7 +65,7 @@ SOLO_SECCIONES = ('crujias', 'volado_izq', 'volado_der', 'E', 'fc', 'clase', 'vi
 ESPECTRO = ['a0', 'c', 'Ta', 'Tb', 'k', 'Ts']
 SIMBOLO_APOYO = {'Empotrado': '▬  Empotrado', 'Articulado': '△  Articulado', 'Rodillo': '◬  Rodillo (sin cortante)'}
 MAX_EJES = 20
-DEFECTOS = dict(captura=CAPTURAS[0], crujias='', volado_izq='', volado_der='', subgrupo='B', intensidad='Base de diseño', direccion='X', estado='Automático', Ks='0.25',
+DEFECTOS = dict(captura=CAPTURAS[0], crujias='', volado_izq='', volado_der='', subgrupo='B', intensidad='Base de diseño', direccion='X', estado='Automático', Ks='',
                 Q='4', k1='1.0', combinacion='SRSS', zeta='', material='Concreto', E='', fc='', clase=CLASES[0],
                 vigas=VIGAS[0], factor_Fu='1.1', mult_V='1', lim_dl='0.004', lim_sv='0.03', lim_oi='0.005',
                 irreg=[], fuerte_torsion=False, fuerte_elev=False, zona='', regularidad='Regular', b_planta='',
@@ -414,7 +414,18 @@ with T_sismo:
         st.caption(objetivo['nota'])
     st.selectbox('Estado de cálculo', ['Automático', *ame.ESTADOS], key='estado',
                  help='Automático: el que corresponde al objetivo de diseño. Puedes forzar otro estado.')
-    st.text_input('Ks (limitación de daños)', key='Ks', help='Sa(BD)·Ks. En tus hojas Ks = 0.25.')
+    st.text_input('Ks (limitación de daños)', key='Ks',
+                  help='Sa(BD)·Ks. Vacío = automático con la ecuación 3.1.1 de la norma (según Ts). Escribe un valor si el '
+                       'ejercicio te da otro (en tus hojas, 0.25).')
+    try:
+        _ts_txt = (st.session_state['Ts'] if ntc.espectro_fuente(st.session_state['intensidad']) == 'Base de diseño'
+                   else st.session_state['_esp'].get('Base de diseño', {}).get('Ts', ''))
+        _ts_ks = ame.parse_num(_ts_txt, 'Ts')
+        st.caption(f'Ks automático = {ntc.ks_norma(_ts_ks):.4f} (zona {ntc.zona_ks(_ts_ks)}, Ts = {_ts_ks:g} s): '
+                   '1/6 si Ts ≤ 0.5 · 1/[6 − 4(Ts − 0.5)] entre 0.5 y 1.0 · 1/4 si Ts ≥ 1.0. '
+                   'Si escribes un valor arriba, se usa ese.')
+    except (ValueError, KeyError):
+        pass
     st.text_input('Q (varios valores separados por espacio)', key='Q',
                   help='Se usa el primero para las fuerzas. En ocupación inmediata se usa Q = 1.')
     st.caption('Q: 4 ductilidad alta (daño severo) · 3 media (daño importante) · 2 media (daño medio) · '
