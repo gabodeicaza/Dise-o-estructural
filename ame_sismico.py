@@ -1619,6 +1619,11 @@ def texto_elastico(res):
     return s
 
 
+def rotulo_sa(res):
+    """Cómo se llama la ordenada espectral de cálculo: en limitación de daño es Sa(BD)·Ks (no se divide entre Q′R′)."""
+    return 'Sa(BD)·Ks' if res['clave'] == 'DL' else "Sa/(Q'R')"
+
+
 def _fila(v, fmt='{:>14.5g}'):
     return ''.join(fmt.format(x) for x in v)
 
@@ -1657,7 +1662,8 @@ def _texto_modal(res):
     for i in range(n - 1, -1, -1):
         s.append(f'{"Story" + str(i + 1):>8}' + _fila(fi[i] / base, '{:>13.5g}'))
     sa = np.asarray(res['Sa_modal'], float)[:, 0]
-    s.append("\nAceleraciones espectrales Sa/(Q'R') calculadas para cada modo:")
+    s.append(f"\nAceleraciones espectrales {rotulo_sa(res)} calculadas para cada modo"
+             + (' (limitación de daño: sin dividir entre Q′R′ ni factor de carga):' if res['clave'] == 'DL' else ':'))
     s.extend(f'  {sa[j] / G:.5f} g = {sa[j]:.7f} cm/s²' for j in range(n))
     s.append(f'  a_mínima = {res["a_min"]:.6f} cm/s²  ({res["a_min_g"]:.6f} g)   Ts = {p["Ts"]:g}')
     s.append('\nFactores de participación modal:')
@@ -1685,7 +1691,8 @@ def _texto_fuerzas_dinamicas(res):
     t = res['tabla_din']
     arr = np.arange(n, 0, -1)
     s = ['=== FUERZAS SÍSMICAS CON EL ANÁLISIS MODAL ESPECTRAL NTC-SISMO ===',
-         f'Factor de carga = {p["factor_Fu"]:g}   (fuerzas en kg, momentos en kg·cm)',
+         (f'Factor de carga = {p["factor_Fu"]:g}' if res['clave'] != 'DL' else 'Sin factor de carga (limitación de daño: Fu = F)')
+         + '   (fuerzas en kg, momentos en kg·cm)',
          f'{"NIVEL":>8}{"FUERZA":>14}{"CORTANTE":>14}{"Fu":>14}{"Vu":>14}{"Mvu":>14}']
     Vk = np.cumsum(t['F']) * 1000                       # las tablas por nivel ya vienen de arriba hacia abajo
     for k in range(n):
@@ -1762,8 +1769,11 @@ def reporte_texto(res):
         s.append('')
     s.extend(_texto_matrices(res))
     s.extend(_texto_modal(res))
-    s.append('\n=== R\' y Q·R\' POR MODO ===')
-    s.append(_tabla_txt(['Modo', 'T(s)', 'Q', 'k2', "R'", "Q·R'"], res['QR']))
+    if res['clave'] == 'DL':
+        s.append('\n=== Q′ y R′ ===\nNo se usan: en limitación de daño el espectro es Sa(BD)·Ks, sin reducir por Q′ ni R′.\n')
+    else:
+        s.append('\n=== R\' y Q·R\' POR MODO ===')
+        s.append(_tabla_txt(['Modo', 'T(s)', 'Q', 'k2', "R'", "Q·R'"], res['QR']))
     s.extend(_texto_fuerzas_dinamicas(res))
     s.extend(_texto_estatico(res))
     s.extend(texto_elastico(res))
@@ -1823,7 +1833,7 @@ def fig_espectro(res):
             ln, = ax.plot(res['serie'], res[clave][i], lw=2, color=AZULES[i % len(AZULES)], label=f'Q = {q:g}')
             ax.plot(res['T'], _interp(res['T'], res['serie'], res[clave][i]), 'o', color=ln.get_color())
         ax.set_xlabel('T (s)')
-        ax.set_ylabel(f"Sa / (Q'R')  [{unidad}]")
+        ax.set_ylabel(f"{rotulo_sa(res)}  [{unidad}]")
         ax.set_title('Espectro de diseño ' + ('(dinámico)' if k == 0 else '(estático)'))
         ax.grid(alpha=0.3)
         ax.legend(loc='upper right')
@@ -2056,7 +2066,7 @@ def fig_elastico(res):
     fig = Figure(figsize=(10, 4.2), dpi=100)
     ax = fig.add_subplot(1, 2, 1)
     ax.plot(res['serie'], el['curva'] / G, color=AZULES[3], lw=2, ls='--', label='Sa elástico (sin reducir)')
-    ax.plot(res['serie'], res['curvas_g'][0], color=AZULES[2], lw=2, label="Sa/(Q′R′) de diseño")
+    ax.plot(res['serie'], res['curvas_g'][0], color=AZULES[2], lw=2, label=rotulo_sa(res).replace("'", "′") + ' de diseño')
     ax.plot(res['T'], el['Sa'] / G, 'o', color=AZULES[3])
     ax.plot(res['T'], res['Sa_modal'][:, 0] / G, 'o', color=AZULES[2])
     ax.set_xlabel('T (s)')
@@ -2310,12 +2320,13 @@ def exportar_excel(res, ruta):
 
     # Espectro
     ws = hoja('Espectro')
-    titulo(ws, "Sa/(Q'R') por modo [cm/s²]")
+    titulo(ws, f"{rotulo_sa(res)} por modo [cm/s²]")
     tabla(ws, ['Modo', 'T (s)'] + [f'Q = {q:g}' for q in res['Qs']],
           [[j + 1, res['T'][j]] + list(res['Sa_modal'][j]) for j in range(n)], '0.0000')
     tabla(ws, ['a_mínima [cm/s²]', 'a_mínima [g]'], [[res['a_min'], res['a_min_g']]], '0.000000')
-    titulo(ws, "R' y Q·R' por modo")
-    tabla(ws, ['Modo', 'T (s)', 'Q', 'k2', "R'", "Q·R'"], res['QR'], '0.00000')
+    if res['clave'] != 'DL':
+        titulo(ws, "R' y Q·R' por modo")
+        tabla(ws, ['Modo', 'T (s)', 'Q', 'k2', "R'", "Q·R'"], res['QR'], '0.00000')
     ancho(ws)
 
     # Fuerzas dinámicas

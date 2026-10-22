@@ -246,14 +246,17 @@ def memoria_pdf(res, destino, proyecto='', autor=''):
           P("R = k₁·R₀ + k₂ (R₀ = 1.75 si Q<3, 2 si Q≥3; k₂ = 0.5·(1−√(T/Tₐ)) ≥ 0) · "
             "R′ = R (grupo B o sismo infrecuente) · 0.75·R (grupo A, sismo base)", 'formula')]
     E.append(_imagen(ame.fig_espectro(res), 15))
-    E += [P("Ordenadas espectrales de diseño Sa/(Q′R′) (cm/s²)", 'h2'),
+    E += [P("Ordenadas espectrales de diseño " + ame.rotulo_sa(res).replace("'", "′") + " (cm/s²)", 'h2'),
           _tabla(st, ['Modo', 'T (s)'] + [f'Q = {q:g}' for q in res['Qs']],
                  [[j + 1, res['T'][j]] + list(res['Sa_modal'][j]) for j in range(n)], dec=4)]
     if res['a_min']:
         E.append(P(f"Ordenada mínima: a_min = {res['a_min']:.4f} cm/s² ({res['a_min_g']:.5f} g), con Ts = {p['Ts']:g} s.",
                    'nota'))
-    E += [P("Factores de reducción por modo", 'h2'),
-          _tabla(st, ['Modo', 'T (s)', 'Q', 'k₂', "R′", "Q·R′"], res['QR'], dec=4)]
+    if res['clave'] == 'DL':
+        E.append(P('Limitación de daños: el espectro es Sa(BD)·Ks, sin reducir por Q′ ni R′ y sin factor de carga.', 'nota'))
+    else:
+        E += [P("Factores de reducción por modo", 'h2'),
+              _tabla(st, ['Modo', 'T (s)', 'Q', 'k₂', "R′", "Q·R′"], res['QR'], dec=4)]
 
     # ------------------------------------------------------------------ 6. marco normativo
     nm = res['normativa']

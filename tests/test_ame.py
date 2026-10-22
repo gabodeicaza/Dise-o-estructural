@@ -1730,3 +1730,17 @@ def test_Ks_de_la_ecuacion_3_1_1_y_valor_dado_a_mano():
     assert a_mano['p']['Ks'] == 0.25 and not a_mano['p']['Ks_auto']
     assert a_mano['V_din'] == pytest.approx(auto['V_din'] * 0.25 * 6)
     assert 'ec. 3.1.1' in ' '.join(f[1] for f in auto['normativa']['factores'] if f[0] == 'Ks')
+
+
+def test_en_limitacion_de_dano_los_rotulos_dicen_Sa_por_Ks_y_no_Q_R():
+    import io
+    import ame_pdf
+    r = correr(dict(EJ11, intensidad='Frecuente', Ks=''))
+    assert r['clave'] == 'DL' and ame.rotulo_sa(r) == 'Sa(BD)·Ks'
+    txt = ame.reporte_texto(r)
+    assert 'Aceleraciones espectrales Sa(BD)·Ks' in txt and "Sa/(Q'R')" not in txt
+    assert 'No se usan' in txt and 'Sin factor de carga' in txt and 'Factor de carga = 1.1' not in txt
+    ame.exportar_excel(r, io.BytesIO())
+    ame_pdf.memoria_pdf(r, io.BytesIO(), proyecto='x', autor='y')
+    sv = correr(dict(EJ11, intensidad='Base de diseño'))
+    assert ame.rotulo_sa(sv) == "Sa/(Q'R')" and "Sa/(Q'R') calculadas" in ame.reporte_texto(sv)

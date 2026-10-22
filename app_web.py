@@ -818,9 +818,13 @@ with T_res:
                        'el 95% o todos los modos con T ≥ 0.4 s.')
         with tab['Modos']:
             qr = {f[0]: f[-1] for f in res['QR'][::len(res['Qs'])]}
-            mostrar(pd.DataFrame({'Modo': np.arange(1, n + 1), 'T (s)': res['T'], 'f (Hz)': res['f'], 'ω (rad/s)': res['w'],
-                                  'γ': res['gam'], "Sa/(Q'R') (cm/s²)": res['Sa_modal'][:, 0],
-                                  "Q·R'": [qr[j + 1] for j in range(n)]}))
+            tabla_modos = {'Modo': np.arange(1, n + 1), 'T (s)': res['T'], 'f (Hz)': res['f'], 'ω (rad/s)': res['w'],
+                           'γ': res['gam'], f'{ame.rotulo_sa(res)} (cm/s²)': res['Sa_modal'][:, 0]}
+            if res['clave'] != 'DL':
+                tabla_modos["Q·R'"] = [qr[j + 1] for j in range(n)]
+            else:
+                st.caption('Limitación de daño: Sa(BD)·Ks, sin dividir entre Q′R′ ni factor de carga.')
+            mostrar(pd.DataFrame(tabla_modos))
         with tab['Detalle completo']:
             st.code(ame.reporte_texto(res), language=None)
         with tab['Formas modales']:
