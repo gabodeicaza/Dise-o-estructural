@@ -2597,6 +2597,20 @@ EJEMPLOS_MODELO = {
         niveles=[dict(h='3', cargas='2 2 2'), dict(h='3', cargas='1 1 0')],
         fc='', subgrupo='B', intensidad='Base de diseño', Q='2', k1='0.8', zeta='0.05',
         a0='242', c='1062', Ta='0.8', Tb='1.7', k='0.420', Ts='1.0', factor_Fu='1.1', mult_V='1'),
+    # Pizarrón: grupo B, sismo frecuente (limitación de daño, Ks automático). Los ejes 2 y 3 no tienen columna en el entrepiso de 5 m,
+    # el eje 5 cruza los dos primeros niveles sin viga (13 m) y el techo vuela 5 m más allá del eje 4. Secciones b x h con h en X.
+    'Ejemplo 15 (pizarrón: 3 niveles, columnas que faltan en un piso, eje 5 de 13 m, voladizo)': dict(
+        crujias='4 5 3 5', vigas='rigidas', material='Concreto', direccion='X', unidad_E='t/cm²', E='150',
+        columnas=[dict(eje='1', desde='1', hasta='3', seccion='50x30', E='', apoyo='Articulado', art_sup=False),
+                  dict(eje='2', desde='1', hasta='1', seccion='40x10', E='', apoyo='Empotrado', art_sup=False),
+                  dict(eje='2', desde='3', hasta='3', seccion='40x10', E='', apoyo='Empotrado', art_sup=False),
+                  dict(eje='3', desde='1', hasta='1', seccion='40x10', E='', apoyo='Empotrado', art_sup=False),
+                  dict(eje='3', desde='3', hasta='3', seccion='40x10', E='', apoyo='Empotrado', art_sup=False),
+                  dict(eje='4', desde='1', hasta='3', seccion='50x30', E='', apoyo='Articulado', art_sup=False),
+                  dict(eje='5', desde='1', hasta='2', seccion='50x30', E='', apoyo='Articulado', art_sup=False)],
+        niveles=[dict(h='8', sin_losa='4', cargas='2 2 2 0'), dict(h='5', cargas='4 3 2 4'), dict(h='4', cargas='4 4 4 2')],
+        fc='', subgrupo='B', intensidad='Frecuente', Q='1', k1='1', zeta='0.05',
+        a0='104', c='400', Ta='0.4', Tb='1.9', k='0.82', Ts='0.5', factor_Fu='1.1', mult_V='1'),
 }
 
 

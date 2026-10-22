@@ -25,7 +25,7 @@ from ame_revision import combinar, irregularidades, rho_cqc, theta_pdelta  # noq
 from ame_secciones import parse_secciones  # noqa: E402
 
 EJ = ame.EJEMPLOS_MODELO
-EJ1, EJ2, EJ3, EJ4, EJ5, EJ6, EJ7, EJ8, EJ9, EJ10, EJ11, EJ12, EJ13, EJ14 = list(EJ.values())
+EJ1, EJ2, EJ3, EJ4, EJ5, EJ6, EJ7, EJ8, EJ9, EJ10, EJ11, EJ12, EJ13, EJ14, EJ15 = list(EJ.values())
 # Los ejemplos 12 y 13 vienen con el acero articulado (3EI/h³, como la solución del examen); EJ12 y EJ13 son su variante empotrada.
 EJ12_SOL, EJ13_SOL = EJ12, EJ13
 EJ12 = copy.deepcopy(EJ12_SOL)
@@ -1744,3 +1744,19 @@ def test_en_limitacion_de_dano_los_rotulos_dicen_Sa_por_Ks_y_no_Q_R():
     ame_pdf.memoria_pdf(r, io.BytesIO(), proyecto='x', autor='y')
     sv = correr(dict(EJ11, intensidad='Base de diseño'))
     assert ame.rotulo_sa(sv) == "Sa/(Q'R')" and "Sa/(Q'R') calculadas" in ame.reporte_texto(sv)
+
+
+def test_ejemplo_15_pizarron_columnas_que_faltan_y_eje_de_13_m():
+    p = ame.preparar(copy.deepcopy(EJ15))
+    assert p['cargas'] == pytest.approx([24.0, 57.0, 58.0])             # incluye el voladizo del techo (2 T/m × 5 m)
+    I50, I40 = 50 * 30 ** 3 / 12, 40 * 10 ** 3 / 12
+    E = 150_000.0
+    k = lambda I, h, f: f * E * I / (h * 100) ** 3
+    assert p['info'][1]['k'] == pytest.approx(2 * k(I50, 5, 12))      # solo los ejes 1 y 4 (el 5 pasa de largo)
+    assert p['info'][2]['k'] == pytest.approx(2 * k(I50, 4, 12) + 2 * k(I40, 4, 12))
+    assert p['K'][0, 1] == pytest.approx(-p['info'][1]['k'])
+    col5 = [t for t in ame.tabla_columnas(p) if t['eje'] == 5][0]
+    assert col5['L'] == 13.0 and col5['hasta'] == 2 and col5['k'] == pytest.approx(k(I50, 13, 3))
+    r = ame.calcular(p)
+    assert r['clave'] == 'DL' and r['p']['Ks'] == pytest.approx(1 / 6)
+    assert r['Sa_modal'][:, 0].max() <= 400 / 6 + 1e-9                  # nunca pasa de c·Ks
