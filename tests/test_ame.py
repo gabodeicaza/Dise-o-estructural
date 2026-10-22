@@ -734,12 +734,12 @@ def test_estatico_se_exporta_y_se_grafica():
     ame.exportar_excel(r, buf)
     ws = load_workbook(io.BytesIO(buf.getvalue()))['Estático']
     texto = ' '.join(str(c.value) for fila in ws.iter_rows() for c in fila if c.value is not None)
-    assert 'derivación del coeficiente' in texto and 'Fuerzas dinámicas escaladas' in texto
+    assert 'Coeficiente sísmico C' in texto and 'Fuerzas dinámicas escaladas' in texto and 'PASO 7' in texto
     fig = ame.fig_diagramas(r, 'estatico')
     buf2 = io.BytesIO()
     fig.savefig(buf2, format='png')
     assert len(buf2.getvalue()) > 5_000
-    assert 'MÉTODO ESTÁTICO' in ame.reporte_texto(r) and 'Comprobación: ΣFi' in ame.reporte_texto(r)
+    assert 'ANÁLISIS ESTÁTICO' in ame.reporte_texto(r) and 'Σ F_i' in ame.reporte_texto(r)
 
 
 def test_aviso_de_distorsion_estatica_y_criterio_matlab():
@@ -795,7 +795,10 @@ def test_comparacion_de_metodos():
         buf = io.BytesIO()
         fig.savefig(buf, format='png')
         assert len(buf.getvalue()) > 5_000
-    assert 'ANÁLISIS ELÁSTICO' in ame.reporte_texto(r) and 'COMPARACIÓN DE MÉTODOS' in ame.reporte_texto(r)
+    import ame_detalle
+    enc, filas = ame_detalle.resumen_metodos(r)
+    assert [f[0] for f in filas] == ['Modal espectral', 'Estático', 'Modal espectral escalado']
+    assert 'ELÁSTICO' not in ame.reporte_texto(r).upper()
 
 
 # ---------------------------------------------------------------- unidades y opciones contra "trampas"
@@ -1532,7 +1535,8 @@ def test_excel_y_pdf_se_generan():
         buf = io.BytesIO()
         ame.exportar_excel(r, buf)
         hojas = load_workbook(io.BytesIO(buf.getvalue())).sheetnames
-        assert {'Datos', 'Modal', 'Espectro', 'Dinámico', 'Estático', 'Elástico', 'Comparación', 'Normativa', 'Revisiones', 'Gráficas'} <= set(hojas)
+        assert {'Datos', 'Modal espectral', 'Estático', 'Normativa', 'Revisiones', 'Gráficas'} <= set(hojas)
+        assert not {'Elástico', 'Comparación'} & set(hojas)
         pdf = io.BytesIO()
         ame_pdf.memoria_pdf(r, pdf, proyecto='Prueba', autor='Pruebas')
         assert pdf.getvalue().startswith(b'%PDF') and len(pdf.getvalue()) > 30_000
@@ -1544,8 +1548,10 @@ def test_pdf_con_formulas_y_letras_griegas():
     ame_pdf.memoria_pdf(correr(EJ2), buf, proyecto='Torre Ø', autor='Á')
     texto = ''.join(pg.get_text() for pg in pymupdf.open(stream=buf.getvalue(), filetype='pdf'))
     for esperado in ('Memoria de cálculo', 'λ', 'γ', 'Σ', 'T < Tₐ', 'Torre Ø', 'Marco normativo (NTC-S 2023)',
-                     'Cortante basal mínimo', 'Cimentación', 'Análisis elástico (sin reducir)', 'Comparación de métodos'):
+                     'Cortante basal mínimo', 'Cimentación', 'ANÁLISIS MODAL ESPECTRAL', 'ANÁLISIS ESTÁTICO',
+                     'Matriz de rigidez K', 'Factores de participación modal'):
         assert esperado in texto
+    assert 'elástico' not in texto.lower()
 
 
 def test_figuras_se_dibujan():
@@ -1632,7 +1638,8 @@ def test_pagina_web_corre_con_todos_los_ejemplos():
     at.sidebar.button[0].click()
     at.run()
     assert not at.exception and at.radio(key='modo').value.startswith('Matrices')
-    assert {'Resumen', 'Análisis estático', 'Análisis elástico'} <= {t.label for t in at.tabs}
+    assert {'Resumen', 'Detalle paso a paso', 'Modal espectral', 'Estático'} <= {t.label for t in at.tabs}
+    assert not {'Análisis elástico', 'Análisis estático'} & {t.label for t in at.tabs}
     at.radio(key='modo').set_value('Por secciones y cargas').run()
     assert not at.exception and at.text_input(key='crujias').value
     at.selectbox(key='intensidad').select('Infrecuente').run()
@@ -1679,16 +1686,31 @@ def test_solucion_del_examen_2_problema_1_coincide_con_el_pdf():
         assert r['tabla_din_esc']['Vu'][-1] == pytest.approx(100.0294, abs=1e-3)
 
 
-def test_detalle_completo_muestra_las_matrices_y_las_tablas_de_la_solucion():
+def test_detalle_completo_muestra_las_matrices_y_los_pasos_de_la_solucion():
+    import ame_detalle
     r = ame.calcular(ame.preparar(copy.deepcopy(EJ12_SOL)))
+    modal = ame_detalle.detalle_modal(r)
+    pasos = [b['texto'] for b in modal if b['t'] == 'paso']
+    assert pasos == ['Datos del problema', 'Matriz de masas M', 'Matriz de rigidez K', 'Periodos y formas modales',
+                     'Factores de participación modal', 'Ordenadas espectrales de cada modo', 'Desplazamientos modales',
+                     'Fuerzas modales', 'Combinación modal', 'Fuerzas sísmicas de diseño']
+    assert all(len(b['expl']) == 2 for b in modal if b['t'] == 'paso')            # explicación en dos líneas
+    nombres = [b['nombre'] for b in modal if b['t'] == 'matriz']
+    assert {'M', 'K', 'K (simbólica)', 'A = M⁻¹K', 'M⁻¹'} <= set(nombres)
+    sim = [b for b in modal if b['t'] == 'matriz' and b['simbolica'] is not None][0]['simbolica']
+    assert sim[0][0] == 'k_{1}+k_{2}' and sim[1][3] == '-k_{c4}'                    # la columna del eje 4 cruza del nivel 3 al 4
+    K = [b for b in modal if b['t'] == 'matriz' and b['nombre'] == 'K'][0]['datos']
+    assert K == pytest.approx(r['p']['K'])
     txt = ame.reporte_texto(r)
-    for frase in ('m = diag([19.266', 'k = [', 'EIGENVALORES', 'Modos normalizados', 'Aceleraciones espectrales',
-                  'Factores de participación modal', 'Suma de los factores', 'Fuerzas sísmicas modales',
-                  'MOMENTO DE VOLTEO DE DISEÑO = 71044', 'FACTOR DE ESCALA = 90.9358 / 54.9521 = 1.654818', 'STORY4'):
+    for frase in ('PASO 3 · MATRIZ DE RIGIDEZ K', 'k_{1}+k_{2}', 'Valores propios', 'Σγ = 1.000000', 'PASO 8 · FUERZAS MODALES',
+                  'Σ Mvu = 710.4410', 'ANÁLISIS ESTÁTICO', 'Factor = 90.9358 / 54.9521 = 1.654818'):
         assert frase in txt, frase
-    # también con K y M capturadas directamente (sin secciones)
+    est = ame_detalle.detalle_estatico(r)
+    assert [b['texto'] for b in est if b['t'] == 'paso'][-1] == 'Factor de escala del análisis modal espectral'
+    # con K y M capturadas directamente se explican igual, sin la tabla de columnas
     r6 = ame.calcular(ame.preparar(copy.deepcopy(EJ6)))
-    assert 'm = diag(' in ame.reporte_texto(r6) or 'm = [' in ame.reporte_texto(r6)
+    tx6 = ame_detalle.bloques_a_texto(ame_detalle.detalle_modal(r6))
+    assert 'viene dada directamente' in tx6 and 'PASO 4' in tx6
 
 
 def test_ejemplo_14_examen_con_rodillo_y_columnas_de_distinta_seccion():
@@ -1738,12 +1760,37 @@ def test_en_limitacion_de_dano_los_rotulos_dicen_Sa_por_Ks_y_no_Q_R():
     r = correr(dict(EJ11, intensidad='Frecuente', Ks=''))
     assert r['clave'] == 'DL' and ame.rotulo_sa(r) == 'Sa(BD)·Ks'
     txt = ame.reporte_texto(r)
-    assert 'Aceleraciones espectrales Sa(BD)·Ks' in txt and "Sa/(Q'R')" not in txt
-    assert 'No se usan' in txt and 'Sin factor de carga' in txt and 'Factor de carga = 1.1' not in txt
+    assert 'Sa·Ks (cm/s²)' in txt and "Q'·R'" not in txt
+    assert 'sin factor de carga' in txt.lower() and 'FC = 1' in txt
     ame.exportar_excel(r, io.BytesIO())
     ame_pdf.memoria_pdf(r, io.BytesIO(), proyecto='x', autor='y')
     sv = correr(dict(EJ11, intensidad='Base de diseño'))
-    assert ame.rotulo_sa(sv) == "Sa/(Q'R')" and "Sa/(Q'R') calculadas" in ame.reporte_texto(sv)
+    assert ame.rotulo_sa(sv) == "Sa/(Q'R')" and "Q'·R'" in ame.reporte_texto(sv)
+
+
+def test_exportar_modal_y_estatico_por_separado():
+    import io
+    import ame_pdf
+    from openpyxl import load_workbook
+    r = correr(EJ12_SOL)
+    hojas = {}
+    for m in ('modal', 'estatico', 'ambos'):
+        buf = io.BytesIO()
+        ame.exportar_excel(r, buf, m)
+        hojas[m] = set(load_workbook(io.BytesIO(buf.getvalue())).sheetnames)
+    assert 'Modal espectral' in hojas['modal'] and 'Estático' not in hojas['modal']
+    assert 'Estático' in hojas['estatico'] and 'Modal espectral' not in hojas['estatico']
+    assert {'Modal espectral', 'Estático'} <= hojas['ambos']
+    pymupdf = pytest.importorskip('pymupdf')
+    textos = {}
+    for m in ('modal', 'estatico'):
+        buf = io.BytesIO()
+        ame_pdf.memoria_pdf(r, buf, proyecto='P', autor='A', metodo=m)
+        textos[m] = ''.join(pg.get_text() for pg in pymupdf.open(stream=buf.getvalue(), filetype='pdf'))
+    assert 'ANÁLISIS MODAL ESPECTRAL' in textos['modal'] and 'ANÁLISIS ESTÁTICO' not in textos['modal']
+    assert 'ANÁLISIS ESTÁTICO' in textos['estatico'] and 'ANÁLISIS MODAL ESPECTRAL' not in textos['estatico']
+    assert 'Coeficiente sísmico C' in textos['estatico'] and 'Valores propios' in textos['modal']
+
 
 
 def test_ejemplo_15_pizarron_columnas_que_faltan_y_eje_de_13_m():

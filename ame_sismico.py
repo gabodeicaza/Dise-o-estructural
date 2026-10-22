@@ -1595,161 +1595,9 @@ def texto_normativa(res):
     return s
 
 
-def texto_elastico(res):
-    """Análisis elástico (sin reducir) y comparación de métodos, en texto."""
-    el, p, n = res['elastico'], res['p'], res['p']['n']
-    s = ['\n=== ANÁLISIS ELÁSTICO (sin reducir: Q′ = 1, R′ = 1) ===',
-         f'Se combinan {res["n_modos"]} de {n} modos con {p["combinacion"]}.']
-    s.append(_tabla_txt(['Modo', 'T(s)', 'Sa elást.', 'Sa diseño', 'Sa el./Sa dis.'],
-                        [[j + 1, res['T'][j], el['Sa'][j], res['Sa_modal'][j, 0], el['Sa'][j] / res['Sa_modal'][j, 0]]
-                         for j in range(n)]))
-    t = el['tabla']
-    s.append(_tabla_txt(['Nivel', 'h(m)', 'F(t)', 'Fu(t)', 'Vu(t)', 'Mvu(t-m)'],
-                        zip(t['nivel'], t['h'], t['F'], t['Fu'], t['Vu'], t['Mvu'])))
-    s.append(f'V elástico = {el["V_el"]:.4f} t · V de diseño = {res["V_din"]:.4f} t · '
-             f'V elástico / V diseño = {el["V_el"] / res["V_din"]:.3f}')
-    enc, filas = tabla_elastico_comparacion(res)
-    s.append('\nFuerza y distorsión elásticas contra las de diseño:')
-    s.append(_tabla_txt(enc, filas))
-    enc, filas = tabla_comparacion_metodos(res)
-    s.append('=== COMPARACIÓN DE MÉTODOS ===')
-    s.append(f'{enc[0]:<38}{enc[1]:>12}{enc[2]:>14}{enc[3]:>10}   {enc[4]}')
-    for nombre, V, M, c, obs in filas:
-        s.append(f'{nombre:<38}{V:>12.3f}{M:>14.2f}{c:>10.4f}   {obs}')
-    return s
-
-
 def rotulo_sa(res):
     """Cómo se llama la ordenada espectral de cálculo: en limitación de daño es Sa(BD)·Ks (no se divide entre Q′R′)."""
     return 'Sa(BD)·Ks' if res['clave'] == 'DL' else "Sa/(Q'R')"
-
-
-def _fila(v, fmt='{:>14.5g}'):
-    return ''.join(fmt.format(x) for x in v)
-
-
-def _texto_matrices(res):
-    """Matrices K y M como en la solución (formato MATLAB: m = diag([...]); k = [...];)."""
-    p, n = res['p'], res['p']['n']
-    K, M = np.asarray(p['K'], float), np.asarray(p['M'], float)
-    s = ['=== MATRICES DEL MODELO ===']
-    if np.allclose(M, np.diag(np.diag(M))):
-        s.append(f'm = diag([{" ".join(f"{x:.5g}" for x in np.diag(M))}]);        % kg·s²/cm  (m = W/g)')
-    else:
-        s.append('m = [      % kg·s²/cm')
-        s.extend('   ' + _fila(M[i], '{:>14.5g}') for i in range(n))
-        s.append('];')
-    s.append('k = [        % kg/cm')
-    s.extend('   ' + _fila(K[i], '{:>16.9g}') for i in range(n))
-    s.append('];\n')
-    return s
-
-
-def _texto_modal(res):
-    """Bloques de la solución: eigenvalores, formas modales, Sa, participación, fuerzas modales y SRSS."""
-    p, n = res['p'], res['p']['n']
-    arr = np.arange(n, 0, -1)                                   # niveles de arriba hacia abajo, como en la solución
-    s = ['=== EIGENVALORES · "frecs", "frecshz" y "periodos" ===',
-         f'{"N°":>5}{"Eigv.(r/s)^2":>16}{"Frec.(r/seg)":>16}{"Frec.(Hz)":>14}{"Periodo(seg)":>16}']
-    for j in range(n):
-        s.append(f'{j + 1:>5d}{res["lam"][j]:>16.5g}{res["w"][j]:>16.5g}{res["f"][j]:>14.5g}{res["T"][j]:>16.5g}')
-    fi = np.asarray(res['fi'], float)
-    s.append('\nEIGENVECTORES · formas modales (columnas = modos, primera fila = nivel 1):')
-    s.extend('  ' + _fila(fi[i], '{:>13.5g}') for i in range(n))
-    base = np.where(np.abs(fi[0]) > 1e-12, fi[0], 1.0)
-    s.append('\nModos normalizados (nivel 1 = 1; niveles de arriba hacia abajo):')
-    s.append(f'{"Nivel":>8}' + ''.join(f'{"Modo " + str(j + 1):>13}' for j in range(n)))
-    for i in range(n - 1, -1, -1):
-        s.append(f'{"Story" + str(i + 1):>8}' + _fila(fi[i] / base, '{:>13.5g}'))
-    sa = np.asarray(res['Sa_modal'], float)[:, 0]
-    s.append(f"\nAceleraciones espectrales {rotulo_sa(res)} calculadas para cada modo"
-             + (' (limitación de daño: sin dividir entre Q′R′ ni factor de carga):' if res['clave'] == 'DL' else ':'))
-    s.extend(f'  {sa[j] / G:.5f} g = {sa[j]:.7f} cm/s²' for j in range(n))
-    s.append(f'  a_mínima = {res["a_min"]:.6f} cm/s²  ({res["a_min_g"]:.6f} g)   Ts = {p["Ts"]:g}')
-    s.append('\nFactores de participación modal:')
-    s.append(f'{"Forma modal":>14}{"Factor":>12}')
-    s.extend(f'{j + 1:>14d}{res["gam"][j]:>12.5g}' for j in range(n))
-    s.append(f'Suma de los factores = {res["gam"].sum():.5g}')
-    s.append('\nDesplazamientos modales δ [cm] (columnas = modos):')
-    s.extend(f'  nivel {arr[k]}' + _fila(res['d'][n - 1 - k], '{:>14.6g}') for k in range(n))
-    F = np.asarray(res['F'], float)
-    s.append('\nFuerzas sísmicas modales [kg] (las columnas son los modos):')
-    s.append(f'{"Nivel":>8}' + ''.join(f'{"Modo " + str(j + 1):>14}' for j in range(n)))
-    s.extend(f'{arr[k]:>8d}' + _fila(F[n - 1 - k], '{:>14.5g}') for k in range(n))
-    Ff = np.asarray(res['F_final'], float)
-    V = np.cumsum(Ff[::-1])[::-1]
-    s.append('\nCombinación (' + p['combinacion'] + ') sin factor de carga [kg]:')
-    s.append(f'{"Nivel":>8}{"Fuerza":>14}{"Cortante":>14}')
-    s.extend(f'{arr[k]:>8d}{Ff[n - 1 - k]:>14.5g}{V[n - 1 - k]:>14.5g}' for k in range(n))
-    s.append('')
-    return s
-
-
-def _texto_fuerzas_dinamicas(res):
-    """Tabla 'FUERZAS SÍSMICAS CON EL ANÁLISIS MODAL ESPECTRAL NTC-SISMO' (kg y kg·cm, como la solución)."""
-    p, n = res['p'], res['p']['n']
-    t = res['tabla_din']
-    arr = np.arange(n, 0, -1)
-    s = ['=== FUERZAS SÍSMICAS CON EL ANÁLISIS MODAL ESPECTRAL NTC-SISMO ===',
-         (f'Factor de carga = {p["factor_Fu"]:g}' if res['clave'] != 'DL' else 'Sin factor de carga (limitación de daño: Fu = F)')
-         + '   (fuerzas en kg, momentos en kg·cm)',
-         f'{"NIVEL":>8}{"FUERZA":>14}{"CORTANTE":>14}{"Fu":>14}{"Vu":>14}{"Mvu":>14}']
-    Vk = np.cumsum(t['F']) * 1000                       # las tablas por nivel ya vienen de arriba hacia abajo
-    for k in range(n):
-        j = k
-        s.append(f'{arr[k]:>8d}{t["F"][j] * 1000:>14.5g}{Vk[j]:>14.5g}{t["Fu"][j] * 1000:>14.5g}{t["Vu"][j] * 1000:>14.5g}'
-                 f'{t["Mvu"][j] * 1e5:>14.5g}')
-    s.append(f'MOMENTO DE VOLTEO DE DISEÑO = {t["Mv"][-1] * 1e5:.4f} kg·cm  ({t["Mv"][-1]:.4f} t·m)')
-    s.append('\n=== TABLA DE FUERZAS POR NIVEL (DINÁMICO, en t y t·m) ===')
-    s.append(_tabla_txt(['Nivel', 'h(m)', 'F(t)', 'Fu(t)', 'Vu(t)', 'Mvu(t-m)'],
-                        zip(t['nivel'], t['h'], t['F'], t['Fu'], t['Vu'], t['Mvu'])))
-    s.append(f'Σ Mvu = {t["Mvu"].sum():.6f} t-m')
-    return s
-
-
-def _tabla_resumen(nivel, Wi, dh, H, F, Fu, Vu):
-    """Tabla de la solución: Nivel, Wi, altura de entrepiso, Hi, WiHi, Fi, Vi, Mv = Fi·Hi, Fu, Vu, Mvu (con fila Σ)."""
-    Vi = np.cumsum(F)                                            # arreglos de arriba hacia abajo
-    enc = ['Nivel', 'Peso Wi[t]', 'h entrep.(m)', 'Hi (m)', 'WiHi', 'Fi [t]', 'Vi [t]', 'Mv [t-m]', 'Fu [t]', 'Vu [t]', 'Mvu [t-m]']
-    filas = [[f'STORY{int(nivel[j])}', Wi[j], dh[j], H[j], Wi[j] * H[j], F[j], Vi[j], F[j] * H[j], Fu[j], Vu[j], Fu[j] * H[j]]
-             for j in range(len(nivel))]
-    filas.append(['Σ', Wi.sum(), '', '', (Wi * H).sum(), F.sum(), '', (F * H).sum(), Fu.sum(), '', (Fu * H).sum()])
-    return enc, filas
-
-
-def _texto_estatico(res):
-    p = res['p']
-    if 'tabla_est' not in res:
-        return ['\n(Sin cargas/longitudes: no se calculó el método estático ni el factor de escala.)']
-    e, se = res['tabla_est'], res['estatico']
-    h_ent = np.asarray(p['alturas'], float)[::-1]
-    s = ['\n=== MÉTODO ESTÁTICO (apuntes p. 20-21) ===',
-         'Fi = C · (Wi·hi / Σ Wi·hi) · ΣWi,  C = máx { c/(Q′R′) en el plato ; a0/(Q′R′) en T = 0 }\n']
-    enc, filas = tabla_derivacion_estatica(res)
-    s.append(_tabla_txt(enc, filas))
-    s.append(f'cs = {se["C"]:.6f} g · gobierna: {se["gobierna"]}')
-    enc, filas = _tabla_resumen(e['nivel'], e['Wi'], h_ent, e['h'], e['Fi'], e['Fu'], e['Vu'])
-    s.append(_tabla_txt(enc, filas))
-    s.append(f'Comprobación: ΣFi = C·ΣWi = {se["C"]:.6f}·{se["W_T"]:.4f} = {se["C"] * se["W_T"]:.6f} t '
-             f'(= {e["Fi"].sum():.6f})')
-    s.append(f'V estático  = {res["V_est"]:.6f} t' + (f'  (× {p["mult_V"]:g} = {res["V_est"] * p["mult_V"]:.6f})'
-                                                   if p['mult_V'] != 1 else ''))
-    s.append(f'V dinámico  = {res["V_din"]:.6f} t')
-    Vi_est, Vi_din = float(e['Fi'].sum()), float(res['tabla_din']['F'].sum())
-    s.append(f'FACTOR DE ESCALA = {Vi_est:.4f} / {Vi_din:.4f} = {res["factor_escala"]:.6f}'
-             + ('   (V dinámico ya cumple, factor < 1)' if res['factor_escala'] < 1 else ''))
-    te = res['tabla_din_esc']
-    s.append(f'\nFuerzas dinámicas escaladas al 100% del estático (× {res["factor_escala"]:.4f}):')
-    enc, filas = _tabla_resumen(te['nivel'], np.asarray(e['Wi'], float), h_ent, te['h'], te['F'], te['Fu'], te['Vu'])
-    quitar = (1, 2, 3, 4)
-    s.append(_tabla_txt([c for i, c in enumerate(enc) if i not in quitar],
-                        [[c for i, c in enumerate(f) if i not in quitar] for f in filas]))
-    enc, filas = tabla_distorsiones_estatico(res)
-    s.append(f'\nDistorsiones del método estático ({p["estado"]}; desplazamientos × '
-             + ('1' if res['clave'] == 'DL' else f'FC·Q·R′ = {se["amp"]:.4f}') + '):')
-    s.append(_tabla_txt(enc[:-1], [f[:-1] for f in filas]))
-    s.append('Cumple (estático / dinámico): ' + '; '.join(f'N{f[0]}: {f[-1]}' for f in filas))
-    return s
 
 
 def reporte_texto(res):
@@ -1767,16 +1615,9 @@ def reporte_texto(res):
                             [[r['nivel'], r['h'], r['ncol'], r['nart'], r['seccion'], r['I'], r['k'], r['W'], r['m']]
                              for r in p['info']]))
         s.append('')
-    s.extend(_texto_matrices(res))
-    s.extend(_texto_modal(res))
-    if res['clave'] == 'DL':
-        s.append('\n=== Q′ y R′ ===\nNo se usan: en limitación de daño el espectro es Sa(BD)·Ks, sin reducir por Q′ ni R′.\n')
-    else:
-        s.append('\n=== R\' y Q·R\' POR MODO ===')
-        s.append(_tabla_txt(['Modo', 'T(s)', 'Q', 'k2', "R'", "Q·R'"], res['QR']))
-    s.extend(_texto_fuerzas_dinamicas(res))
-    s.extend(_texto_estatico(res))
-    s.extend(texto_elastico(res))
+    import ame_detalle
+    s.append(ame_detalle.bloques_a_texto(ame_detalle.detalle_modal(res)))
+    s.append(ame_detalle.bloques_a_texto(ame_detalle.detalle_estatico(res)))
     s.extend(texto_normativa(res))
     rev = res['revision']
     s.append('\n=== REVISIÓN DE DISTORSIONES (γ = deriva / altura de entrepiso) ===')
@@ -2234,7 +2075,9 @@ def fig_diagramas(res, metodo='dinamico'):
 # ----------------------------------------------------------------------------
 # Exportar a Excel
 # ----------------------------------------------------------------------------
-def exportar_excel(res, ruta):
+def exportar_excel(res, ruta, metodo='ambos'):
+    """Excel de resultados. metodo: 'modal' (modal espectral), 'estatico' o 'ambos'."""
+    import ame_detalle
     from openpyxl import Workbook
     from openpyxl.drawing.image import Image as XLImage
     from openpyxl.styles import Alignment, Font, PatternFill
@@ -2308,91 +2151,14 @@ def exportar_excel(res, ruta):
               [[i + 1, p['alturas'][i]] + ([p['cargas'][i]] if p['cargas'] is not None else []) for i in range(n)])
     ancho(ws, 20)
 
-    # Modal
-    ws = hoja('Modal')
-    titulo(ws, 'Propiedades modales')
-    tabla(ws, ['Modo', 'λ (rad/s)²', 'ω (rad/s)', 'f (Hz)', 'T (s)', 'γ'],
-          [[j + 1, res['lam'][j], res['w'][j], res['f'][j], res['T'][j], res['gam'][j]] for j in range(n)],
-          '0.00000')
-    titulo(ws, 'Eigenvectores normalizados (columnas = modos)')
-    tabla(ws, [f'Modo {j + 1}' for j in range(n)], res['fi'].tolist(), '0.00000')
-    ancho(ws)
-
-    # Espectro
-    ws = hoja('Espectro')
-    titulo(ws, f"{rotulo_sa(res)} por modo [cm/s²]")
-    tabla(ws, ['Modo', 'T (s)'] + [f'Q = {q:g}' for q in res['Qs']],
-          [[j + 1, res['T'][j]] + list(res['Sa_modal'][j]) for j in range(n)], '0.0000')
-    tabla(ws, ['a_mínima [cm/s²]', 'a_mínima [g]'], [[res['a_min'], res['a_min_g']]], '0.000000')
-    if res['clave'] != 'DL':
-        titulo(ws, "R' y Q·R' por modo")
-        tabla(ws, ['Modo', 'T (s)', 'Q', 'k2', "R'", "Q·R'"], res['QR'], '0.00000')
-    ancho(ws)
-
-    # Fuerzas dinámicas
-    ws = hoja('Dinámico')
-    titulo(ws, 'Desplazamientos modales δ [cm] (columnas = modos)')
-    tabla(ws, [f'Modo {j + 1}' for j in range(n)], res['d'].tolist(), '0.000000')
-    titulo(ws, 'Fuerzas modales F [kg] (columnas = modos)')
-    tabla(ws, [f'Modo {j + 1}' for j in range(n)], res['F'].tolist(), '#,##0.00')
-    titulo(ws, 'Fuerzas por nivel')
-    t = res['tabla_din']
-    tabla(ws, ['Nivel', 'h (m)', 'F (t)', 'Fu (t)', 'Vu (t)', 'Mvu (t-m)'],
-          zip(t['nivel'], t['h'], t['F'], t['Fu'], t['Vu'], t['Mvu']), '0.0000')
-    tabla(ws, ['Σ Mvu (t-m)'], [[float(t['Mvu'].sum())]], '0.0000')
-    ancho(ws)
-
-    # Estático y factor de escala
-    if 'tabla_est' in res:
+    modal = metodo in ('ambos', 'modal')
+    estatico = metodo in ('ambos', 'estatico') and 'tabla_est' in res
+    if modal:
+        ws = hoja('Modal espectral')
+        ame_detalle.bloques_a_hoja(ws, ame_detalle.detalle_modal(res))
+    if estatico:
         ws = hoja('Estático')
-        e, se = res['tabla_est'], res['estatico']
-        titulo(ws, 'Método estático: derivación del coeficiente sísmico (apuntes p. 20)')
-        enc, filas = tabla_derivacion_estatica(res)
-        tabla(ws, enc, filas, '0.0000')
-        tabla(ws, ['Coeficiente C (g)', 'Gobierna', 'Criterio'],
-              [[se['C'], se['gobierna'], 'Apuntes' if se['criterio'] == 'apuntes' else 'Máximo del espectro']], '0.000000')
-        titulo(ws, 'Fuerzas estáticas por nivel')
-        tabla(ws, ['Nivel', 'h (m)', 'Wi (t)', 'Wihi (t-m)', 'Fi (t)', 'Fu (t)', 'Vu (t)', 'Mvu (t-m)'],
-              zip(e['nivel'], e['h'], e['Wi'], e['hWi'], e['Fi'], e['Fu'], e['Vu'], e['Mvu']), '0.0000')
-        titulo(ws, 'Distorsiones: estático contra dinámico')
-        enc, filas = tabla_distorsiones_estatico(res)
-        tabla(ws, enc, filas, '0.00000')
-        titulo(ws, 'Factor de escala')
-        tabla(ws, ['Concepto', 'Valor'], [
-            ['Coeficiente sísmico estático C [g]', res['Fmax_est']],
-            ['ΣWi (t)', float(e['Wi'].sum())], ['ΣWihi (t-m)', float(e['hWi'].sum())],
-            ['ΣMvu (t-m)', float(e['Mvu'].sum())],
-            ['V estático (t)', res['V_est']], ['Multiplicador', p['mult_V']],
-            ['V dinámico (t)', res['V_din']], ['FACTOR DE ESCALA', res['factor_escala']],
-            ['Factor aplicado a las fuerzas dinámicas', res['factor_aplicado']]], '0.000000')
-        titulo(ws, f'Fuerzas dinámicas escaladas (× {res["factor_aplicado"]:.4f})')
-        te = res['tabla_din_esc']
-        tabla(ws, ['Nivel', 'h (m)', 'F (t)', 'Fu (t)', 'Vu (t)', 'Mvu (t-m)'],
-              zip(te['nivel'], te['h'], te['F'], te['Fu'], te['Vu'], te['Mvu']), '0.0000')
-        ancho(ws, 30)
-
-    # Elástico y comparación
-    ws = hoja('Elástico')
-    el = res['elastico']
-    titulo(ws, 'Análisis elástico: espectro sin reducir (Q′ = 1, R′ = 1)')
-    tabla(ws, ['Modo', 'T (s)', 'Sa elástico (cm/s²)', 'Sa de diseño (cm/s²)', 'Relación'],
-          [[j + 1, res['T'][j], el['Sa'][j], res['Sa_modal'][j, 0], el['Sa'][j] / res['Sa_modal'][j, 0]] for j in range(n)],
-          '0.0000')
-    te = el['tabla']
-    tabla(ws, ['Nivel', 'h (m)', 'F (t)', 'Fu (t)', 'Vu (t)', 'Mvu (t-m)'],
-          zip(te['nivel'], te['h'], te['F'], te['Fu'], te['Vu'], te['Mvu']), '0.0000')
-    titulo(ws, 'Fuerza y distorsión elásticas contra las de diseño')
-    enc, filas = tabla_elastico_comparacion(res)
-    tabla(ws, enc, filas, '0.00000')
-    ancho(ws, 22)
-    ws = hoja('Comparación')
-    titulo(ws, 'Comparación de métodos')
-    enc, filas = tabla_comparacion_metodos(res)
-    tabla(ws, enc, filas, '0.0000')
-    titulo(ws, 'Fu y Vu por nivel')
-    enc, filas = tabla_niveles_metodos(res)
-    tabla(ws, enc, filas, '0.0000')
-    ancho(ws, 26)
+        ame_detalle.bloques_a_hoja(ws, ame_detalle.detalle_estatico(res))
 
     # Normativa
     ws = hoja('Normativa')
@@ -2445,9 +2211,10 @@ def exportar_excel(res, ruta):
     # Gráficas
     ws = hoja('Gráficas')
     fila = 1
-    figs = (([fig_estructura(p)] if 'geom' in p else []) + [fig_modal(res), fig_espectro(res), fig_diagramas(res)]
-            + ([fig_diagramas(res, 'estatico')] if 'tabla_est' in res else [])
-            + [fig_elastico(res), fig_comparacion(res), fig_fuerzas(res), fig_distorsiones(res)])
+    figs = (([fig_estructura(p)] if 'geom' in p else [])
+            + ([fig_modal(res), fig_espectro(res), fig_diagramas(res)] if modal else [])
+            + ([fig_diagramas(res, 'estatico')] if estatico else [])
+            + [fig_distorsiones(res)])
     for fig in figs:
         buf = io.BytesIO()
         fig.savefig(buf, format='png')

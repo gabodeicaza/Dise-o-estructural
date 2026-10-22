@@ -11,6 +11,7 @@ import pandas as pd
 import streamlit as st
 
 import ame_ntc as ntc
+import ame_detalle
 import ame_dimensionado as dim
 import ame_pdf
 import ame_sismico as ame
@@ -89,6 +90,14 @@ st.markdown(f"""
 .kpi .s {{color:{AZUL_MED};font-size:.8rem}}
 .objetivo {{background:{PALE};border-left:5px solid {AZUL};border-radius:6px;padding:10px 14px;margin:6px 0 12px 0;color:{NAVY}}}
 h3 {{color:{AZUL_OSC}}}
+.det-titulo {{background:{NAVY};color:white;padding:24px 30px;border-radius:12px;margin:10px 0 30px 0}}
+.det-titulo .t {{font-size:2.2rem;font-weight:800;letter-spacing:.02em;line-height:1.2}}
+.det-titulo .s {{color:{AZUL_CLARO};font-size:1.05rem;margin-top:6px}}
+.det-paso {{display:flex;align-items:center;gap:16px;background:{PALE};border-radius:10px;padding:12px 18px;margin:64px 0 12px 0}}
+.det-paso .n {{background:{AZUL};color:white;font-weight:800;border-radius:8px;padding:5px 16px;font-size:1.1rem;white-space:nowrap}}
+.det-paso .tt {{color:{AZUL_OSC};font-weight:800;font-size:1.65rem;line-height:1.2}}
+.det-expl {{border-left:5px solid {AZUL_MED};padding:6px 18px;margin:8px 0 26px 0;color:{AZUL_OSC};font-size:1.08rem;line-height:1.6}}
+.det-sub {{color:{AZUL_OSC};font-weight:700;font-size:1.2rem;margin:34px 0 8px 0}}
 .stTabs [data-baseweb="tab-list"] button p {{font-size:1.02rem;font-weight:600}}
 </style>
 <div class="cabecera"><h1>Análisis Modal Espectral</h1>
@@ -554,6 +563,56 @@ if modelo is not None:
         error_modelo = f'No se pudo calcular: {e if isinstance(e, ValueError) else "las matrices son singulares. Revisa secciones y alturas."}'
 
 
+def _num_latex(v, dec):
+    v = float(v)
+    return '0' if abs(v) < 0.5 * 10 ** -dec else f'{v:.{dec}f}'
+
+
+def _latex_matriz(b):
+    n_c = b['datos'].shape[1]
+    if b['simbolica'] is not None:
+        filas = [' & '.join(f'{x}' for x in fila) for fila in b['simbolica']]
+    else:
+        filas = [' & '.join(_num_latex(v, b['dec']) for v in fila) for fila in b['datos']]
+    cuerpo = r' \\ '.join(filas)
+    tam = r'\small ' if n_c >= 5 else ''
+    return '{' + tam + b['latex_nombre'] + r'=\begin{bmatrix}' + cuerpo + r'\end{bmatrix}}'
+
+
+def mostrar_bloques(bloques):
+    """Dibuja el procedimiento paso a paso: títulos grandes, explicación de dos líneas, fórmulas, matrices y tablas."""
+    for b in bloques:
+        t = b['t']
+        if t == 'titulo':
+            st.markdown(f'<div class="det-titulo"><div class="t">{b["texto"]}</div>'
+                        + (f'<div class="s">{b["sub"]}</div>' if b['sub'] else '') + '</div>', unsafe_allow_html=True)
+        elif t == 'paso':
+            st.markdown(f'<div class="det-paso"><span class="n">PASO {b["n"]}</span><span class="tt">{b["texto"]}</span></div>'
+                        f'<div class="det-expl">{"<br>".join(b["expl"])}</div>', unsafe_allow_html=True)
+        elif t == 'formula':
+            st.latex(b['latex'])
+        elif t == 'matriz':
+            st.latex(_latex_matriz(b))
+            n_f, n_c = b['datos'].shape
+            st.caption((f'Unidades: {b["unidad"]} · ' if b['unidad'] else '') + 'filas = '
+                       + ('niveles (N1 abajo … N' + str(n_f) + ' arriba)' if b['filas'] and str(b['filas'][0]).startswith('N') else 'filas')
+                       + (' · columnas = modos' if b['cols'] and str(b['cols'][0]).startswith('Modo') else ''))
+            st.write('')
+        elif t == 'tabla':
+            if b['titulo']:
+                st.markdown(f'<div class="det-sub">{b["titulo"]}</div>', unsafe_allow_html=True)
+            df = pd.DataFrame(b['filas'], columns=b['enc'])
+            conf = {c: st.column_config.NumberColumn(format=f'%.{b["dec"]}f') for c in df.columns
+                    if pd.api.types.is_float_dtype(df[c])}
+            st.dataframe(df, hide_index=True, width='stretch', column_config=conf)
+            st.write('')
+        elif t == 'texto':
+            st.markdown(f'**{b["texto"]}**')
+            st.write('')
+        elif t == 'nota':
+            st.info(b['texto'])
+
+
 def kpi(col, titulo, num, sub):
     col.markdown(f'<div class="kpi"><div class="t">{titulo}</div><div class="n">{num}</div>'
                  f'<div class="s">{sub}</div></div>', unsafe_allow_html=True)
@@ -642,46 +701,56 @@ with T_res:
         kpi(k[3], 'FACTOR DE ESCALA', f'{fe:.4f}', 'Escalar fuerzas dinámicas' if fe > 1 else 'El dinámico ya cumple (≤ 1)')
         st.write('')
 
-        # descargas (Excel y PDF se generan al pedirlos: son lentos)
+        # descargas (Excel y PDF se generan al pedirlos: son lentos); se pueden exportar por separado
+        opciones = {'Modal espectral y estático': 'ambos', 'Solo modal espectral': 'modal', 'Solo estático': 'estatico'}
+        if 'tabla_est' not in res:
+            opciones = {'Solo modal espectral': 'modal'}
+        etiqueta_m = st.radio('Qué exportar', list(opciones), horizontal=True, key='metodo_exp')
+        metodo_exp = opciones[etiqueta_m]
+        firma_exp = f'{firma}|{metodo_exp}'
         d1, d2, d3, _ = st.columns([1, 1, 1, 1])
         if d1.button('Preparar Excel', width='stretch'):
             buf = io.BytesIO()
-            ame.exportar_excel(res, buf)
-            st.session_state['excel'] = (firma, buf.getvalue())
+            ame.exportar_excel(res, buf, metodo_exp)
+            st.session_state['excel'] = (firma_exp, buf.getvalue())
         if d2.button('Preparar memoria PDF', width='stretch', type='primary'):
             with st.spinner('Generando memoria de cálculo…'):
                 buf = io.BytesIO()
-                ame_pdf.memoria_pdf(res, buf, proyecto=datos['proyecto'], autor=datos['autor'])
-                st.session_state['pdf'] = (firma, buf.getvalue())
+                ame_pdf.memoria_pdf(res, buf, proyecto=datos['proyecto'], autor=datos['autor'], metodo=metodo_exp)
+                st.session_state['pdf'] = (firma_exp, buf.getvalue())
         d3.download_button('Guardar proyecto (.json)', json.dumps(datos, indent=2, ensure_ascii=False), 'proyecto_AME.json',
                            mime='application/json', width='stretch')
         b1, b2, _ = st.columns([1, 1, 2])
         for clave, col, etiqueta, nombre, mime in (
-                ('excel', b1, 'Descargar Excel', 'resultados_AME.xlsx',
+                ('excel', b1, 'Descargar Excel', f'resultados_AME_{metodo_exp}.xlsx',
                  'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'),
-                ('pdf', b2, 'Descargar memoria PDF', 'memoria_AME.pdf', 'application/pdf')):
+                ('pdf', b2, 'Descargar memoria PDF', f'memoria_AME_{metodo_exp}.pdf', 'application/pdf')):
             listo = st.session_state.get(clave)
-            if listo and listo[0] == firma:
+            if listo and listo[0] == firma_exp:
                 col.download_button(etiqueta, listo[1], nombre, mime=mime, width='stretch')
             elif listo:
-                col.caption(f'El archivo ({clave.upper()}) quedó desactualizado: vuelve a prepararlo.')
+                col.caption(f'El archivo ({clave.upper()}) no corresponde a lo que está seleccionado: vuelve a prepararlo.')
 
 
-        NOMBRES = ['Resumen', 'Fuerzas por nivel', 'Análisis estático', 'Análisis elástico', 'Revisiones', 'Normativa', 'Modos',
-                   'Detalle completo', 'Formas modales', 'Espectro']
+        NOMBRES = ['Resumen', 'Detalle paso a paso', 'Fuerzas por nivel', 'Revisiones', 'Normativa', 'Modos',
+                   'Formas modales', 'Espectro']
         tab = dict(zip(NOMBRES, st.tabs(NOMBRES)))
         with tab['Resumen']:
-            est_txt = ('estático ' + ('aplicable' if nm['estatico']['aplica'] else 'no aplicable (referencia)')) if 'tabla_est' in res else ''
-            st.markdown(f'**Análisis de diseño: {p["estado"]}** · {res["n_modos"]} de {n} modos · {p["combinacion"]}'
-                        f' · {est_txt} · elástico sin reducir')
-            enc, filas = ame.tabla_comparacion_metodos(res)
+            st.markdown(f'**Análisis de diseño: {p["estado"]}** · {res["n_modos"]} de {n} modos · {p["combinacion"]}')
+            enc, filas = ame_detalle.resumen_metodos(res)
             mostrar(pd.DataFrame(filas, columns=enc), 3)
             if fe > 1:
                 st.info(f'V estático / V dinámico = {fe:.4f} > 1: para diseñar se usan las fuerzas dinámicas escaladas por ese factor.')
-            st.pyplot(ame.fig_comparacion(res))
             st.markdown('**Fu y Vu por nivel de cada análisis**')
-            enc, filas = ame.tabla_niveles_metodos(res)
+            enc, filas = ame_detalle.niveles_metodos(res)
             mostrar(pd.DataFrame(filas, columns=enc), 3)
+        with tab['Detalle paso a paso']:
+            st.caption('Cada análisis se explica paso a paso, con todas sus matrices. Es lo mismo que sale en el Excel y en el PDF.')
+            sub_modal, sub_est = st.tabs(['Modal espectral', 'Estático'])
+            with sub_modal:
+                mostrar_bloques(ame_detalle.detalle_modal(res))
+            with sub_est:
+                mostrar_bloques(ame_detalle.detalle_estatico(res))
         with tab['Fuerzas por nivel']:
             st.pyplot(ame.fig_diagramas(res))
             t = res['tabla_din']
@@ -698,67 +767,6 @@ with T_res:
                 st.caption('El factor de escala es menor o igual que 1: las fuerzas dinámicas ya cumplen y no se escalan.')
             st.caption('M volteo entrepiso = momento de volteo en la base de ese entrepiso (Σ Fu·(z − z de la base)); el del '
                        'primer entrepiso es el momento de volteo total en la cimentación.')
-        with tab['Análisis estático']:
-            e, se, ap = res['tabla_est'], res['estatico'], nm['estatico']
-            if ap['aplica']:
-                st.success('El método estático es aplicable' + (f' (H = {ap["H"]:.1f} m ≤ {ap["limite"]:g} m)' if ap['limite'] else '') + '.')
-            else:
-                st.warning('Según los apuntes el método estático **no aplica** (grupo A o altura excedida): '
-                           'el factor de escala es solo de referencia.')
-            st.markdown('**Coeficiente sísmico** · C = máx { c/(Q′R′) en el plato ; a₀/(Q′R′) en T = 0 }')
-            enc, filas = ame.tabla_derivacion_estatica(res)
-            mostrar(pd.DataFrame(filas, columns=enc))
-            c = st.columns(4)
-            c[0].metric('C (g)', f'{se["C"]:.5f}')
-            c[1].metric('Gobierna', se['gobierna'].split(' (')[0].replace('el ', '', 1))
-            c[2].metric('ΣW (t)', f'{se["W_T"]:.2f}')
-            c[3].metric('V estático (t)', f'{res["V_est"]:.3f}')
-            st.pyplot(ame.fig_diagramas(res, 'estatico'))
-            st.markdown('**Fuerzas por nivel**  ·  Fᵢ = C·(Wᵢhᵢ / ΣWᵢhᵢ)·ΣW')
-            mostrar(pd.DataFrame({'Nivel': e['nivel'], 'h (m)': e['h'], 'Wi (t)': e['Wi'], 'Wihi (t·m)': e['hWi'],
-                                  'Fi (t)': e['Fi'], 'Fu (t)': e['Fu'], 'Vu (t)': e['Vu'], 'Mvu (t·m)': e['Mvu'],
-                                  'M volteo entrepiso (t·m)': e['Mv']}))
-            st.caption(f'Comprobación: ΣFᵢ = {e["Fi"].sum():.4f} t = C·ΣW = {se["C"]:.5f} × {se["W_T"]:.2f} · '
-                       f'ΣMvu = {e["Mvu"].sum():.2f} t·m')
-            st.markdown(f'**Distorsiones por el método estático** ({p["estado"]})')
-            enc, filas = ame.tabla_distorsiones_estatico(res)
-            mostrar(pd.DataFrame(filas, columns=enc), 5)
-            st.caption('Desplazamientos de K⁻¹·Fᵢ × ' + ('1 (limitación de daños: sin FC ni Q·R′)' if res['clave'] == 'DL'
-                       else f'FC·Q·R′ = {se["amp"]:.4f} (R′ del plato)') + ', comparados con el análisis dinámico.')
-            st.markdown('**Factor de escala**')
-            c = st.columns(4)
-            c[0].metric('V estático (t)', f'{res["V_est"] * p["mult_V"]:.3f}')
-            c[1].metric('V dinámico (t)', f'{res["V_din"]:.3f}')
-            c[2].metric('Factor V est. / V din.', f'{fe:.4f}')
-            c[3].metric('Se aplica', f'× {res["factor_aplicado"]:.4f}' if res['factor_aplicado'] > 1 else 'No hace falta')
-        with tab['Análisis elástico']:
-            el = res['elastico']
-            st.info('Espectro **sin reducir** (Q′ = 1, R′ = 1), el "espectro transparente" de los apuntes: la demanda que tendría la '
-                    'estructura si no se redujera por ductilidad ni sobrerresistencia. Mismo modelo, modos y combinación.')
-            c = st.columns(4)
-            c[0].metric('V elástico (t)', f'{el["V_el"]:.3f}')
-            c[1].metric('V de diseño (t)', f'{res["V_din"]:.3f}')
-            c[2].metric('V el. / V diseño', f'{el["V_el"] / res["V_din"]:.3f}')
-            c[3].metric('Σ Mvu elástico (t·m)', f'{el["tabla"]["Mvu"].sum():.2f}')
-            st.pyplot(ame.fig_elastico(res))
-            st.markdown('**Ordenadas espectrales por modo**')
-            mostrar(pd.DataFrame({'Modo': np.arange(1, n + 1), 'T (s)': res['T'], 'Sa elástico (cm/s²)': el['Sa'],
-                                  'Sa de diseño (cm/s²)': res['Sa_modal'][:, 0], 'Relación': el['Sa'] / res['Sa_modal'][:, 0]}))
-            st.pyplot(ame.fig_diagramas(res, 'elastico'))
-            te = el['tabla']
-            st.markdown('**Fuerzas elásticas por nivel (dinámico)**')
-            mostrar(pd.DataFrame({'Nivel': te['nivel'], 'h (m)': te['h'], 'F (t)': te['F'], 'Fu (t)': te['Fu'],
-                                  'Vu (t)': te['Vu'], 'Mvu (t·m)': te['Mvu'], 'M volteo entrepiso (t·m)': te['Mv']}))
-            if 'est' in el:
-                ee = el['est']['tabla']
-                st.markdown(f'**Fuerzas elásticas por el método estático** · C = máx(c, a₀) = {el["est"]["C"]:.4f} g')
-                mostrar(pd.DataFrame({'Nivel': ee['nivel'], 'h (m)': ee['h'], 'Wi (t)': ee['Wi'], 'Fi (t)': ee['Fi'],
-                                      'Fu (t)': ee['Fu'], 'Vu (t)': ee['Vu'], 'Mvu (t·m)': ee['Mvu'],
-                                      'M volteo entrepiso (t·m)': ee['Mv']}))
-            st.markdown('**Fuerza y distorsión elásticas contra las de diseño**')
-            enc, filas = ame.tabla_elastico_comparacion(res)
-            mostrar(pd.DataFrame(filas, columns=enc), 4)
-            st.caption('Las distorsiones de diseño incluyen la amplificación FC·Q·R′; las elásticas no se amplifican.')
         with tab['Revisiones']:
             rev = res['revision']
             st.markdown('**Distorsiones de entrepiso por estado límite** (★ = estado de diseño)')
@@ -833,8 +841,6 @@ with T_res:
             else:
                 st.caption('Limitación de daño: Sa(BD)·Ks, sin dividir entre Q′R′ ni factor de carga.')
             mostrar(pd.DataFrame(tabla_modos))
-        with tab['Detalle completo']:
-            st.code(ame.reporte_texto(res), language=None)
         with tab['Formas modales']:
             st.pyplot(ame.fig_modal(res))
         with tab['Espectro']:

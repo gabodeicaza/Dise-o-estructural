@@ -16,6 +16,7 @@ from reportlab.pdfbase.ttfonts import TTFont
 from reportlab.platypus import (BaseDocTemplate, Frame, Image, KeepTogether, PageBreak, PageTemplate, Paragraph,
                                 Spacer, Table, TableStyle)
 
+import ame_detalle
 import ame_sismico as ame
 
 NAVY, AZUL_OSC, AZUL, AZUL_MED, AZUL_CLARO, PALE, BG = (colors.HexColor(c) for c in (
@@ -96,8 +97,96 @@ def _imagen(fig, ancho_cm):
     return Image(buf, width=ancho, height=ancho * h / w)
 
 
-def memoria_pdf(res, destino, proyecto='', autor=''):
-    """Genera la memoria de cálculo. `destino` es una ruta o un BytesIO."""
+def _anchos(enc, filas, total):
+    """Anchos de columna proporcionales al contenido (con un mínimo), para que las tablas anchas quepan."""
+    pesos = []
+    for j, h in enumerate(enc):
+        largo = max([len(str(h))] + [len(str(f[j])) if not isinstance(f[j], float) else 12 for f in filas if j < len(f)] + [4])
+        pesos.append(min(max(largo, 8), 34))
+    suma = sum(pesos)
+    return [total * w / suma for w in pesos]
+
+
+def _sub(txt):
+    """k_{c4} -> k<sub>c4</sub> para los símbolos de las matrices."""
+    return re.sub(r'_\{([^}]*)\}', r'<sub>\1</sub>', _escapar(str(txt)))
+
+
+def _matriz_pdf(b, st, Ancho):
+    datos = b['datos']
+    n_f, n_c = datos.shape
+    filas_l = b['filas'] or [str(i + 1) for i in range(n_f)]
+    cols = b['cols'] or [str(j + 1) for j in range(n_c)]
+    simb = b['simbolica'] is not None
+    fuente = 9 if n_c <= 5 else (7.5 if n_c <= 7 else 6)
+    if simb:
+        celdas = [[Paragraph(_sub(b['simbolica'][i][j]) or '0', ParagraphStyle('c', parent=st['base'], fontSize=fuente, alignment=1))
+                   for j in range(n_c)] for i in range(n_f)]
+    else:
+        celdas = [[_f(float(datos[i, j]), b['dec']) for j in range(n_c)] for i in range(n_f)]
+    cab = [''] + [Paragraph(f'<b>{_escapar(c)}</b>', ParagraphStyle('cc', parent=st['base'], fontSize=7, alignment=1,
+                                                                   textColor=AZUL_MED)) for c in cols]
+    cuerpo = [[Paragraph(f'<b>{_escapar(filas_l[i])}</b>', ParagraphStyle('rr', parent=st['base'], fontSize=7,
+                                                                         textColor=AZUL_MED))] + celdas[i] for i in range(n_f)]
+    ancho_f = 1.4 * cm
+    ancho_c = min((Ancho - ancho_f) / n_c, 3.6 * cm)
+    t = Table([cab] + cuerpo, colWidths=[ancho_f] + [ancho_c] * n_c, hAlign='LEFT')
+    t.setStyle(TableStyle([('FONTNAME', (1, 1), (-1, -1), 'DejaVu'), ('FONTSIZE', (1, 1), (-1, -1), fuente),
+                           ('TEXTCOLOR', (1, 1), (-1, -1), NAVY), ('ALIGN', (1, 1), (-1, -1), 'RIGHT' if not simb else 'CENTER'),
+                           ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'), ('TOPPADDING', (0, 0), (-1, -1), 2.5),
+                           ('BOTTOMPADDING', (0, 0), (-1, -1), 2.5),
+                           ('LINEBEFORE', (1, 1), (1, -1), 1.4, AZUL), ('LINEAFTER', (-1, 1), (-1, -1), 1.4, AZUL),
+                           ('LINEABOVE', (1, 1), (-1, 1), 0.4, AZUL_CLARO), ('LINEBELOW', (1, -1), (-1, -1), 0.4, AZUL_CLARO),
+                           ('BACKGROUND', (1, 1), (-1, -1), BG)]))
+    return t
+
+
+def _bloques(bloques, st, Ancho):
+    """Convierte los bloques de ame_detalle en elementos de reportlab."""
+    P = lambda txt, est='base': Paragraph(_escapar(txt), st[est])
+    E = []
+    for b in bloques:
+        t = b['t']
+        if t == 'titulo':
+            banda = Table([[Paragraph('<font color="white" size="20"><b>' + _escapar(b['texto']) + '</b></font>'
+                                      + (f'<br/><font color="#81A4CD" size="10.5">{_escapar(b["sub"])}</font>' if b['sub'] else ''),
+                                      st['base'])]], colWidths=[Ancho])
+            banda.setStyle(TableStyle([('BACKGROUND', (0, 0), (-1, -1), NAVY), ('LEFTPADDING', (0, 0), (-1, -1), 14),
+                                       ('TOPPADDING', (0, 0), (-1, -1), 14), ('BOTTOMPADDING', (0, 0), (-1, -1), 14)]))
+            E += [banda, Spacer(1, 10)]
+        elif t == 'paso':
+            cab = Table([[Paragraph(f'<font color="white" size="11"><b>PASO {b["n"]}</b></font>', st['base']),
+                          Paragraph('<font size="13"><b>' + _escapar(b['texto']) + '</b></font>', ParagraphStyle(
+                              'pt', parent=st['base'], textColor=AZUL_OSC, fontSize=13, leading=16))]],
+                        colWidths=[2.2 * cm, Ancho - 2.2 * cm])
+            cab.setStyle(TableStyle([('BACKGROUND', (0, 0), (0, 0), AZUL), ('BACKGROUND', (1, 0), (1, 0), PALE),
+                                     ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'), ('TOPPADDING', (0, 0), (-1, -1), 6),
+                                     ('BOTTOMPADDING', (0, 0), (-1, -1), 6), ('LEFTPADDING', (0, 0), (-1, -1), 8)]))
+            expl = Table([[Paragraph(_escapar(' '.join(b['expl'])), ParagraphStyle('ex', parent=st['base'], fontSize=9.5,
+                                                                                 leading=13.5, textColor=AZUL_OSC))]],
+                         colWidths=[Ancho])
+            expl.setStyle(TableStyle([('LINEBEFORE', (0, 0), (0, 0), 3, AZUL_MED), ('LEFTPADDING', (0, 0), (-1, -1), 10),
+                                      ('TOPPADDING', (0, 0), (-1, -1), 5), ('BOTTOMPADDING', (0, 0), (-1, -1), 5)]))
+            E += [Spacer(1, 26), KeepTogether([cab, Spacer(1, 4), expl]), Spacer(1, 8)]
+        elif t == 'formula':
+            E += [P(b['texto'], 'formula'), Spacer(1, 6)]
+        elif t == 'matriz':
+            tit = b['nombre'] + (f'   [{b["unidad"]}]' if b['unidad'] else '')
+            E += [KeepTogether([P(tit, 'h2'), _matriz_pdf(b, st, Ancho)]), Spacer(1, 12)]
+        elif t == 'tabla':
+            filas = [[(Paragraph(_escapar(v), ParagraphStyle('tc', parent=st['base'], fontSize=7.5, leading=9.5, alignment=1))
+                       if isinstance(v, str) and len(v) > 14 else v) for v in f] for f in b['filas']]
+            fuente = 8 if len(b['enc']) <= 6 else 7
+            E += ([P(b['titulo'], 'h2')] if b['titulo'] else [])
+            E += [_tabla(st, [_escapar(h) for h in b['enc']], filas, dec=b['dec'], fuente=fuente,
+                         anchos=_anchos(b['enc'], b['filas'], Ancho)), Spacer(1, 12)]
+        elif t in ('texto', 'nota'):
+            E += [P(b['texto'], 'base' if t == 'texto' else 'nota'), Spacer(1, 6)]
+    return E
+
+
+def memoria_pdf(res, destino, proyecto='', autor='', metodo='ambos'):
+    """Genera la memoria de cálculo. `destino` es una ruta o un BytesIO. metodo: 'modal', 'estatico' o 'ambos'."""
     _registrar_fuentes()
     st = _estilos()
     p, n = res['p'], res['p']['n']
@@ -139,12 +228,16 @@ def memoria_pdf(res, destino, proyecto='', autor=''):
 
     # resumen
     fe = res.get('factor_escala')
-    resumen = [['Periodo fundamental T₁', f'{res["T"][0]:.4f} s'],
-               ['Cortante basal dinámico Vu', f'{res["V_din"]:.3f} t']]
-    if fe is not None:
-        resumen += [['Cortante basal estático', f'{res["V_est"]:.3f} t'], ['Factor de escala', f'{fe:.4f}']]
+    modal = metodo in ('ambos', 'modal')
+    estat = metodo in ('ambos', 'estatico') and 'tabla_est' in res
+    resumen = [['Periodo fundamental T₁', f'{res["T"][0]:.4f} s']]
+    if modal:
+        resumen += [['Cortante basal modal espectral Vu', f'{res["V_din"]:.3f} t']]
+    if estat:
+        resumen += [['Cortante basal estático', f'{res["V_est"]:.3f} t']]
+    if modal and estat:
+        resumen += [['Factor de escala', f'{fe:.4f}']]
     est = res['revision']['estados']
-    resumen += [['Cortante basal elástico (sin reducir)', f'{res["elastico"]["V_el"]:.3f} t']]
     resumen += [[f'Distorsión máx. · {e["nombre"]}', f'{e["dist"].max():.5f}'
                  + ('' if e['limite'] is None else f'  (límite {e["limite"]:g}: '
                                                    + ('cumple' if e['dist'].max() <= e['limite'] else 'NO cumple') + ')')]
@@ -158,7 +251,7 @@ def memoria_pdf(res, destino, proyecto='', autor=''):
                        f'{"ALERTA" if sev == "alerta" else "AVISO"}</b></font> · {txt}', 'nota'))
 
     # ------------------------------------------------------------------ 1. datos
-    E += [P('1. Datos de entrada', 'h1')]
+    E += [P('Datos de entrada', 'h1')]
     datos = [['Material', p.get('material', 'Concreto')], ['Módulo de elasticidad E', f'{p["E"]:,.0f} kg/cm²' if 'E' in p else 'No aplica (K dada)'],
              ['Grupo / subgrupo', f'{p["grupo"]} / {p.get("subgrupo") or p["grupo"]}'],
              ['Intensidad sísmica', p.get('intensidad', 'Base de diseño')],
@@ -180,7 +273,7 @@ def memoria_pdf(res, destino, proyecto='', autor=''):
                     anchos=[5.5 * cm, Ancho - 5.5 * cm], fuente=8.5))
 
     # ------------------------------------------------------------------ 2. estructura
-    E += [P('2. Descripción de la estructura', 'h1')]
+    E += [P('Descripción de la estructura', 'h1')]
     if p.get('manual'):
         E += [P('La estructura se definió con las matrices K y M (sin geometría). Los pesos salen de las masas '
                 '(W = m·g) salvo que se hayan dado.', 'nota'),
@@ -209,58 +302,24 @@ def memoria_pdf(res, destino, proyecto='', autor=''):
             E += [P('Columnas', 'h2'), _tabla(st, ['Nivel', 'Eje', 'x (m)', 'Sección (cm)', 'I (cm⁴)', 'Apoyo',
                                                   'k (kg/cm)'], filas_c, dec=2, fuente=7.5)]
 
-    # ------------------------------------------------------------------ 3. matrices
-    E += [P('3. Matrices de rigidez y de masa', 'h1'),
-          P('Ecuación de movimiento libre: M·ü + K·u = 0 → (M⁻¹K − ω²·I)·Φ = 0', 'formula')]
-    an = [None] + [None] * n
-    fs = 8 if n <= 6 else 6.5
-    E += [P('Matriz K (kg/cm)', 'h2'),
-          _tabla(st, [''] + [str(j + 1) for j in range(n)], [[i + 1] + list(p['K'][i]) for i in range(n)], dec=2,
-                 fuente=fs, zebra=False),
-          P('Matriz M (kg·s²/cm) = W / g', 'h2'),
-          _tabla(st, [''] + [str(j + 1) for j in range(n)], [[i + 1] + list(p['M'][i]) for i in range(n)], dec=4,
-                 fuente=fs, zebra=False)]
+    # ------------------------------------------------------------------ análisis (mismos bloques que la página)
+    def seccion(bloques, figuras):
+        E.append(PageBreak())
+        E.extend(_bloques(bloques, st, Ancho))
+        for titulo_, fig, ancho in figuras:
+            E.extend([P(titulo_, 'h2'), _imagen(fig, ancho), Spacer(1, 8)])
 
-    # ------------------------------------------------------------------ 4. modal
-    E += [P('4. Análisis modal', 'h1'),
-          P('A = M⁻¹·K · λ = eigenvalores de A · ω = √λ · f = ω / 2π · T = 1 / f · '
-            'Φ = eigenvectores de A (normalizados con el primer elemento = 1)', 'formula'),
-          P('γᵢ = (Φᵢᵀ·M·{1}) / (Φᵢᵀ·M·Φᵢ)', 'formula')]
-    E.append(_tabla(st, ['Modo', 'λ (rad/s)²', 'ω (rad/s)', 'f (Hz)', 'T (s)', 'γ'],
-                    [[j + 1, res['lam'][j], res['w'][j], res['f'][j], res['T'][j], res['gam'][j]] for j in range(n)], dec=5))
-    E.append(P(f'Σγ = {res["gam"].sum():.5f}', 'nota'))
-    E += [P('Eigenvectores normalizados (columnas = modos)', 'h2'),
-          _tabla(st, ['Nivel'] + [f'Modo {j + 1}' for j in range(n)],
-                 [[i + 1] + list(res['fi'][i]) for i in range(n)], dec=5, fuente=fs), Spacer(1, 6),
-          _imagen(ame.fig_modal(res), 17)]
-
-    # ------------------------------------------------------------------ 5. espectro
-    E += [P('5. Espectro de diseño', 'h1'),
-          P(f'Estado límite: <b>{p["estado"]}</b>. '
-            + {'SV': "Se usa la ordenada reducida Sa/(Q′·R′).",
-               'OI': "Ocupación inmediata: Q′ = 1, se reduce solo por R′.",
-               'DL': f"Limitación de daños: se usa Sa·Ks con Ks = {p['Ks']:g}, sin Q′ ni R′."}[res['clave']])]
-    E += [P('T < Tₐ: Sa = a₀ + (c − a₀)·T/Tₐ · Tₐ ≤ T < T_b: Sa = c · T ≥ T_b: Sa = c·p·(T_b/T)², '
-            'p = k + (1−k)(T_b/T)²', 'formula'),
-          P("Q′ = 1 + (Q−1)·√(1/k)·T/Tₐ  (T<Tₐ) · 1 + (Q−1)·√(1/k)  (Tₐ≤T<T_b) · 1 + (Q−1)·√(p/k)  (T≥T_b)", 'formula'),
-          P("R = k₁·R₀ + k₂ (R₀ = 1.75 si Q<3, 2 si Q≥3; k₂ = 0.5·(1−√(T/Tₐ)) ≥ 0) · "
-            "R′ = R (grupo B o sismo infrecuente) · 0.75·R (grupo A, sismo base)", 'formula')]
-    E.append(_imagen(ame.fig_espectro(res), 15))
-    E += [P("Ordenadas espectrales de diseño " + ame.rotulo_sa(res).replace("'", "′") + " (cm/s²)", 'h2'),
-          _tabla(st, ['Modo', 'T (s)'] + [f'Q = {q:g}' for q in res['Qs']],
-                 [[j + 1, res['T'][j]] + list(res['Sa_modal'][j]) for j in range(n)], dec=4)]
-    if res['a_min']:
-        E.append(P(f"Ordenada mínima: a_min = {res['a_min']:.4f} cm/s² ({res['a_min_g']:.5f} g), con Ts = {p['Ts']:g} s.",
-                   'nota'))
-    if res['clave'] == 'DL':
-        E.append(P('Limitación de daños: el espectro es Sa(BD)·Ks, sin reducir por Q′ ni R′ y sin factor de carga.', 'nota'))
-    else:
-        E += [P("Factores de reducción por modo", 'h2'),
-              _tabla(st, ['Modo', 'T (s)', 'Q', 'k₂', "R′", "Q·R′"], res['QR'], dec=4)]
+    if modal:
+        seccion(ame_detalle.detalle_modal(res), [('Formas modales', ame.fig_modal(res), 17),
+                                                 ('Espectro de diseño', ame.fig_espectro(res), 15),
+                                                 ('Diagramas de Fu, Vu y Mvu (modal espectral)', ame.fig_diagramas(res), 17)])
+    if estat:
+        seccion(ame_detalle.detalle_estatico(res), [('Diagramas de Fu, Vu y Mvu (estático)', ame.fig_diagramas(res, 'estatico'), 17)])
+    E.append(PageBreak())
 
     # ------------------------------------------------------------------ 6. marco normativo
     nm = res['normativa']
-    E += [P('6. Marco normativo (NTC-S 2023)', 'h1'),
+    E += [P('Marco normativo (NTC-S 2023)', 'h1'),
           P('Reglas tomadas de los apuntes de Diseño Estructural (Dr. Rivero, Ibero). Los valores que los apuntes no traen '
             '(por ejemplo, los límites γ de las tablas 4.3.x) son datos del proyecto.', 'nota')]
     ancho_v = 5.6 * cm
@@ -301,105 +360,9 @@ def memoria_pdf(res, destino, proyecto='', autor=''):
           P(f'{nm["modos"]["n95"]} modo(s) alcanzan el 95% de la masa efectiva; modos con T ≥ 0.4 s: {nm["modos"]["n_T04"]}. '
             'Los apuntes piden más de 3 modos, el 95% de la participación o todos los modos con T ≥ 0.4 s.', 'nota')]
 
-    # ------------------------------------------------------------------ 7. fuerzas modales
-    E += [P('7. Desplazamientos y fuerzas modales', 'h1'),
-          P('δᵢ = Φᵢ · (Saᵢ·γᵢ / λᵢ) · Fᵢ = K·δᵢ', 'formula'),
-          P('Desplazamientos modales δ (cm), columnas = modos', 'h2'),
-          _tabla(st, ['Nivel'] + [f'Modo {j + 1}' for j in range(n)], [[i + 1] + list(res['d'][i]) for i in range(n)],
-                 dec=5, fuente=fs),
-          P('Fuerzas modales F (kg), columnas = modos', 'h2'),
-          _tabla(st, ['Nivel'] + [f'Modo {j + 1}' for j in range(n)], [[i + 1] + list(res['F'][i]) for i in range(n)],
-                 dec=2, fuente=fs)]
-    comb = {'SRSS': 'F = √(Σ Fᵢ²)  (raíz de la suma de los cuadrados)',
-            'CQC': 'F = √(Σᵢ Σⱼ ρᵢⱼ·Fᵢ·Fⱼ)  (combinación cuadrática completa, ρ de Der Kiureghian)',
-            'Suma absoluta': 'F = Σ |Fᵢ|  (suma de valores absolutos, cota superior)'}[p['combinacion']]
-    E += [P('Combinación modal', 'h2'), P(comb, 'formula'),
-          _tabla(st, ['Nivel', 'F combinada (kg)'], [[i + 1, res['F_final'][i]] for i in range(n - 1, -1, -1)], dec=2,
-                 anchos=[3 * cm, 5 * cm])]
-
-    # ------------------------------------------------------------------ 7. fuerzas por nivel
-    t = res['tabla_din']
-    E += [P('8. Fuerzas sísmicas por nivel (análisis dinámico)', 'h1'),
-          P(f'Fu = F · {p["factor_Fu"]:g}/1000 (t) · Vu = ΣFu (acumulado desde arriba) · Mvu = h · Fu', 'formula'),
-          _tabla(st, ['Nivel', 'h (m)', 'F (t)', 'Fu (t)', 'Vu (t)', 'Mvu (t·m)', 'M volteo entrepiso (t·m)'],
-                 [[t['nivel'][i], t['h'][i], t['F'][i], t['Fu'][i], t['Vu'][i], t['Mvu'][i], t['Mv'][i]]
-                  for i in range(n)]),
-          P(f'Σ Mvu = {t["Mvu"].sum():.4f} t·m', 'nota'), Spacer(1, 4), _imagen(ame.fig_diagramas(res), 17)]
-
-    # ------------------------------------------------------------------ 9. método estático
-    if 'tabla_est' in res:
-        e, se, ap = res['tabla_est'], res['estatico'], nm['estatico']
-        E += [P('9. Método estático y factor de escala', 'h1'),
-              P('Fᵢ = C · (Wᵢ·hᵢ / Σ Wᵢ·hᵢ) · ΣWᵢ   con   C = máx { c / (Q′R′) en el plato ; a₀ / (Q′R′) en T = 0 }', 'formula'),
-              P('Plato: k₂ = 0 y Q′ = 1 + (Q−1)·√(1/k).  Inicio (T = 0): k₂ = 0.5 y Q′ = 1.  Comprobación: ΣFᵢ = V_B = C·ΣWᵢ.',
-                'formula'),
-              P(('Aplicable según los apuntes' if ap['aplica'] else '<b>No aplicable</b> según los apuntes (grupo A o altura excedida): '
-                 'el factor de escala es solo de referencia')
-                + f'. H = {ap["H"]:.1f} m' + (f', límite {ap["limite"]:g} m (zona {ap["zona"]}, '
-                                           f'{"regular" if ap["regular"] else "irregular"})' if ap['limite'] else '') + '.', 'nota')]
-        enc, filas = ame.tabla_derivacion_estatica(res)
-        E.append(_tabla(st, enc, filas, dec=4, anchos=[6.2 * cm, 4.4 * cm, 4.4 * cm], fuente=8.5))
-        E.append(P(f'C = {se["C"]:.5f} g, gobierna {se["gobierna"]}'
-                   + (' (criterio: máximo del espectro, como el código de MATLAB)' if se['criterio'] == 'maximo' else '') + '.',
-                   'nota'))
-        E += [Spacer(1, 4),
-              _tabla(st, ['Nivel', 'h (m)', 'Wi (t)', 'Wi·hi (t·m)', 'Fi (t)', 'Fu (t)', 'Vu (t)', 'Mvu (t·m)',
-                          'M volteo entrepiso (t·m)'],
-                     [[e['nivel'][i], e['h'][i], e['Wi'][i], e['hWi'][i], e['Fi'][i], e['Fu'][i], e['Vu'][i],
-                       e['Mvu'][i], e['Mv'][i]] for i in range(n)], fuente=7.5),
-              P(f'ΣFᵢ = {e["Fi"].sum():.4f} t = C·ΣWᵢ = {se["C"]:.5f}·{se["W_T"]:.4f} t   ·   Σ Mvu = {e["Mvu"].sum():.4f} t·m',
-                'nota'),
-              Spacer(1, 4), _imagen(ame.fig_diagramas(res, 'estatico'), 17)]
-        enc, filas = ame.tabla_distorsiones_estatico(res)
-        E += [P('Distorsiones por el método estático', 'h2'),
-              P(f'Estado de cálculo: {p["estado"]}. Desplazamientos de K⁻¹·Fᵢ × '
-                + ('1 (sin factor de carga ni Q·R′)' if res['clave'] == 'DL' else f'FC·Q·R′ = {se["amp"]:.4f} (R′ del plato)')
-                + '. Se compara con el análisis dinámico.', 'nota'),
-              _tabla(st, enc, filas, dec=5, fuente=8)]
-        filas = [['Coeficiente sísmico C', f'{se["C"]:.5f} g'], ['V estático', f'{res["V_est"]:.4f} t']]
-        if p['mult_V'] != 1:
-            filas.append(['Multiplicador', f'{p["mult_V"]:g}'])
-        filas += [['V dinámico', f'{res["V_din"]:.4f} t'], ['Factor de escala = V est. / V din.', f'{fe:.4f}'],
-                  ['Factor aplicado a las fuerzas dinámicas', f'{res["factor_aplicado"]:.4f}']]
-        E += [P('Factor de escala', 'h2'), _tabla(st, ['Concepto', 'Valor'], filas, anchos=[8 * cm, 5 * cm], fuente=9)]
-        if res['factor_aplicado'] > 1:
-            te = res['tabla_din_esc']
-            E += [P(f'Fuerzas dinámicas escaladas (× {res["factor_aplicado"]:.4f})', 'h2'),
-                  _tabla(st, ['Nivel', 'h (m)', 'F (t)', 'Fu (t)', 'Vu (t)', 'Mvu (t·m)'],
-                         [[te['nivel'][i], te['h'][i], te['F'][i], te['Fu'][i], te['Vu'][i], te['Mvu'][i]] for i in range(n)]),
-                  P('El factor es mayor que 1: estas son las fuerzas dinámicas que deben usarse en el diseño.', 'nota')]
-        else:
-            E.append(P('El factor es menor o igual que 1: las fuerzas dinámicas ya cumplen y no se escalan.', 'nota'))
-
-    # ------------------------------------------------------------------ 10. análisis elástico y comparación
-    el = res['elastico']
-    E += [P('10. Análisis elástico (sin reducir)', 'h1'),
-          P('Espectro sin reducir por ductilidad ni sobrerresistencia (Q′ = 1, R′ = 1; el "espectro transparente" de los '
-            f'apuntes). Mismo modelo, {res["n_modos"]} de {n} modos y combinación {p["combinacion"]}.', 'nota'),
-          _tabla(st, ['Modo', 'T (s)', 'Sa elástico (cm/s²)', 'Sa de diseño (cm/s²)', 'Relación'],
-                 [[j + 1, res['T'][j], el['Sa'][j], res['Sa_modal'][j, 0], el['Sa'][j] / res['Sa_modal'][j, 0]]
-                  for j in range(n)], dec=4),
-          Spacer(1, 4), _imagen(ame.fig_elastico(res), 17),
-          _tabla(st, ['Nivel', 'h (m)', 'F (t)', 'Fu (t)', 'Vu (t)', 'Mvu (t·m)'],
-                 [[el['tabla']['nivel'][i], el['tabla']['h'][i], el['tabla']['F'][i], el['tabla']['Fu'][i],
-                   el['tabla']['Vu'][i], el['tabla']['Mvu'][i]] for i in range(n)]),
-          Spacer(1, 4), _imagen(ame.fig_diagramas(res, 'elastico'), 17)]
-    enc, filas = ame.tabla_elastico_comparacion(res)
-    E += [P('Fuerza y distorsión elásticas contra las de diseño', 'h2'),
-          P(f'V elástico / V de diseño = {el["V_el"] / res["V_din"]:.3f}: es el factor con el que la reducción por Q′ y R′ '
-            'baja la demanda. Las distorsiones de diseño ya incluyen la amplificación FC·Q·R′.', 'nota'),
-          _tabla(st, enc, filas, dec=4, fuente=8)]
-    enc, filas = ame.tabla_comparacion_metodos(res)
-    E += [P('11. Comparación de métodos', 'h1'),
-          _tabla(st, enc, [[a, b, c_, d_, Paragraph(e_, st['nota'])] for a, b, c_, d_, e_ in filas], dec=3,
-                 anchos=[5.6 * cm, 2.4 * cm, 2.6 * cm, 2 * cm, Ancho - 12.6 * cm], fuente=8),
-          Spacer(1, 4), _imagen(ame.fig_comparacion(res), 17)]
-    enc, filas = ame.tabla_niveles_metodos(res)
-    E += [P('Fu y Vu por nivel', 'h2'), _tabla(st, enc, filas, dec=3, fuente=6.5)]
-
     # ------------------------------------------------------------------ 12. revisiones
     rev = res['revision']
-    E += [P('12. Revisiones', 'h1'), P('12.1 Distorsiones de entrepiso', 'h2'),
+    E += [P('Revisiones', 'h1'), P('Distorsiones de entrepiso', 'h2'),
           P('Seguridad de vida y ocupación inmediata: desplazamientos × FC·Q·R′, con R′ ' + ('del plato (k₂ = 0, como en las hojas)' if p.get('R_dist', 'plato') == 'plato' else 'del periodo fundamental') + '. '
             'Limitación de daños: Sa·Ks, sin factor de carga. Las distorsiones modales se combinan con el método elegido '
             'y γ = Δ / h. El límite de ocupación inmediata y de seguridad de vida se reduce por irregularidad (γc). '
@@ -413,7 +376,7 @@ def memoria_pdf(res, destino, proyecto='', autor=''):
     E += [Spacer(1, 4), _tabla(st, enc, filas, dec=5, fuente=8), Spacer(1, 4), _imagen(ame.fig_distorsiones(res), 12)]
     pdt = ame.tabla_pdelta(res)
     if pdt:
-        E += [P('12.2 Efectos P-Δ e irregularidades', 'h2'),
+        E += [P('Efectos P-Δ e irregularidades', 'h2'),
               P('θ = P·δ / (V·h): P = peso acumulado sobre el entrepiso, δ = deriva elástica con las fuerzas de diseño, '
                 'V = cortante de entrepiso, h = altura. θ ≤ 0.10: se pueden ignorar; θ > 0.25: posible inestabilidad '
                 '(criterio general ASCE 7).', 'nota'),
@@ -424,7 +387,7 @@ def memoria_pdf(res, destino, proyecto='', autor=''):
                 f'{", ".join(map(str, rev["irreg_rigidez"])) or "ninguno"}.', 'nota')]
 
     # ------------------------------------------------------------------ 10. avisos
-    E += [P('13. Avisos de coherencia', 'h1')]
+    E += [P('Avisos de coherencia', 'h1')]
     if res['avisos']:
         rows = [[{'alerta': 'ALERTA', 'aviso': 'AVISO', 'info': 'INFO'}[sev], Paragraph(txt, st['base'])]
                 for sev, txt in res['avisos']]
