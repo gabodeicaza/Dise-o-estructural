@@ -168,6 +168,7 @@ def detalle_modal(res):
           tabla('', ['Dato', 'Valor'], filas)]
 
     # ---- 2 masas
+    B_base, B = B, []
     M = np.asarray(p['M'], float)
     B.append(paso(2, 'Matriz de masas M',
                   'Voy a convertir el peso de cada nivel en masa, m = W / g, con g = 981 cm/s², y a colocarla en la diagonal de M.',
@@ -179,6 +180,7 @@ def detalle_modal(res):
         B.append(nota('Las masas vienen dadas directamente en la matriz M del problema.'))
     B.append(matriz('M', M, 4, 'kg·s²/cm', nv, nv, latex_nombre=r'\mathbf{M}'))
 
+    B_masa, B = B, []
     # ---- 3 rigidez
     K = np.asarray(p['K'], float)
     B.append(paso(3, 'Matriz de rigidez K',
@@ -210,6 +212,14 @@ def detalle_modal(res):
     else:
         B.append(nota('La matriz de rigidez viene dada directamente en el problema.'))
     B.append(matriz('K', K, 4, 'kg/cm', nv, nv, latex_nombre=r'\mathbf{K}'))
+
+    B_rig = B
+    B = B_base
+    aj = p.get('ajuste_periodo')
+    if aj:      # el peso no es un dato: sale del periodo medido (problema "al revés")
+        B += B_rig + _bloques_ajuste(p, aj, M, K) + []
+    else:
+        B += B_masa + B_rig
 
     # ---- 4 valores propios
     lam, w, f, T, fi = res['lam'], res['w'], res['f'], res['T'], np.asarray(res['fi'], float)
@@ -334,6 +344,48 @@ def detalle_modal(res):
           tabla('Los mismos resultados en kg y kg·cm', ['Nivel', 'F (kg)', 'Fu (kg)', 'Vu (kg)', 'Mvu (kg·cm)'],
                 [[int(t['nivel'][i]), float(t['F'][i] * 1000), float(t['Fu'][i] * 1000), float(t['Vu'][i] * 1000),
                   float(t['Mvu'][i] * 1e5)] for i in range(n)], 1)]
+    n_paso = 0
+    for b in B:
+        if b['t'] == 'paso':
+            n_paso += 1
+            b['n'] = n_paso
+    return B
+
+
+def _bloques_ajuste(p, aj, M, K):
+    """Paso que obtiene la masa (y el peso) a partir del periodo medido T1."""
+    n = p['n']
+    nv = _niveles(n)
+    g = ame.G
+    Tm = float(aj['T_medido'])
+    if n == 1:
+        k = float(K[0, 0])
+        m = k * Tm ** 2 / (4 * np.pi ** 2)
+        B = [paso(3, 'Peso del marco a partir del periodo medido',
+                  f'Voy a obtener la masa del marco con el periodo medido T = {Tm:g} s y la rigidez lateral total k del paso anterior.',
+                  'Como T = 2π√(m/k), la masa debe ser m = k·T²/(4π²); el peso es W = m·g y con él se arma la matriz M.'),
+             formula(r'T=2\pi\sqrt{m/k}\ \Rightarrow\ m=\dfrac{k\,T^{2}}{4\pi^{2}}\qquad W=m\,g',
+                     'T = 2π√(m/k)  →  m = k·T² / (4π²) ;  W = m·g'),
+             tabla('', ['Concepto', 'Cálculo', 'Resultado'],
+                   [['Rigidez lateral total k', 'Σ de las columnas (paso anterior)', f'{k:.4f} kg/cm'],
+                    ['Periodo medido T', 'dato', f'{Tm:g} s'],
+                    ['Masa m = k·T² / (4π²)', f'{k:.4f} · {Tm:g}² / (4π²)', f'{m:.5f} kg·s²/cm'],
+                    ['Peso W = m·g', f'{m:.5f} · {g:g} / 1000', f'{m * g / 1000:.5f} t']])]
+    else:
+        B = [paso(3, 'Peso del marco a partir del periodo medido',
+                  f'Voy a escalar las masas para que el primer periodo calculado coincida con el medido T₁ = {Tm:g} s.',
+                  'Los pesos dados solo fijan cómo se reparte la masa entre niveles; el factor de escala es (T medido / T calculado)².'),
+             formula(r'T\propto\sqrt{m}\ \Rightarrow\ f=\left(\dfrac{T_{medido}}{T_{calculado}}\right)^{2}\qquad W_{total}=f\cdot W_{prov}',
+                     'T ∝ √m  →  f = (T_medido / T_calculado)² ;  W_total = f · W_provisional'),
+             tabla('', ['Concepto', 'Resultado'],
+                   [['T₁ calculado con los pesos relativos', f'{float(aj["T_calculado"]):.5f} s'],
+                    ['T₁ medido', f'{Tm:g} s'],
+                    ['Factor f = (T medido / T calculado)²', f'{float(aj["factor"]):.6f}'],
+                    ['Masa total', f'{float(aj["m_total"]):.5f} kg·s²/cm'],
+                    ['Peso total W', f'{float(aj["W_total"]):.5f} t']])]
+    filas = [[i + 1, float(p['cargas'][i]), f'{p["cargas"][i]:.4f} t · 1000 / {g:g}', float(M[i, i])] for i in range(n)]
+    B += [tabla('Pesos y masas resultantes', ['Nivel', 'W (t)', 'm = W·1000 / g', 'm (kg·s²/cm)'], filas, 5),
+          matriz('M', M, 4, 'kg·s²/cm', nv, nv, latex_nombre=r'\mathbf{M}')]
     return B
 
 

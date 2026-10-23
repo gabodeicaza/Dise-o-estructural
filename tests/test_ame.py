@@ -1845,3 +1845,21 @@ def test_estructura_A_de_la_hoja_de_excel_de_un_companero_coincide_en_las_dos_ve
     assert t2['Fu'] == pytest.approx([126.61, 91.16, 158.83, 124.68], abs=0.01)
     assert t2['Vu'] == pytest.approx([126.61, 217.78, 376.61, 501.29], abs=0.01)
     assert t2['Mvu'].sum() == pytest.approx(6111.4964, rel=1e-5)
+
+
+def test_detalle_explica_el_peso_obtenido_del_periodo_medido():
+    """Problema al revés (nave con T medido): el detalle muestra k, T, m = kT²/4π² y W = m·g."""
+    import ame_detalle
+    r = correr(dict(EJ9, intensidad='Base de diseño', Q='2', k1='1.0'))
+    modal = ame_detalle.detalle_modal(r)
+    pasos = [b['texto'] for b in modal if b['t'] == 'paso']
+    assert pasos[1:3] == ['Matriz de rigidez K', 'Peso del marco a partir del periodo medido']
+    assert [b['n'] for b in modal if b['t'] == 'paso'] == list(range(1, len(pasos) + 1))
+    k = r['p']['K'][0, 0]
+    m = k * 0.17 ** 2 / (4 * np.pi ** 2)
+    assert m == pytest.approx(r['p']['M'][0, 0]) and m * 981 / 1000 == pytest.approx(1.7932, abs=1e-4)
+    txt = ame_detalle.bloques_a_texto(modal)
+    assert 'm = k·T² / (4π²)' in txt and '1.79321 t' in txt
+    # sin periodo medido, el paso de masas sigue siendo el de siempre
+    r12 = correr(copy.deepcopy(EJ12_SOL))
+    assert 'Matriz de masas M' in [b['texto'] for b in ame_detalle.detalle_modal(r12) if b['t'] == 'paso']
