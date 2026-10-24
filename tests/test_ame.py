@@ -25,7 +25,7 @@ from ame_revision import combinar, irregularidades, rho_cqc, theta_pdelta  # noq
 from ame_secciones import parse_secciones  # noqa: E402
 
 EJ = ame.EJEMPLOS_MODELO
-EJ1, EJ2, EJ3, EJ4, EJ5, EJ6, EJ7, EJ8, EJ9, EJ10, EJ11, EJ12, EJ13, EJ14, EJ15 = list(EJ.values())
+EJ1, EJ2, EJ3, EJ4, EJ5, EJ6, EJ7, EJ8, EJ9, EJ10, EJ11, EJ12, EJ13, EJ14, EJ15, EJ16 = list(EJ.values())
 # Los ejemplos 12 y 13 vienen con el acero articulado (3EI/h³, como la solución del examen); EJ12 y EJ13 son su variante empotrada.
 EJ12_SOL, EJ13_SOL = EJ12, EJ13
 EJ12 = copy.deepcopy(EJ12_SOL)
@@ -1863,3 +1863,27 @@ def test_detalle_explica_el_peso_obtenido_del_periodo_medido():
     # sin periodo medido, el paso de masas sigue siendo el de siempre
     r12 = correr(copy.deepcopy(EJ12_SOL))
     assert 'Matriz de masas M' in [b['texto'] for b in ame_detalle.detalle_modal(r12) if b['t'] == 'paso']
+
+
+def test_ejemplo_16_torre_de_acero_coincide_con_la_hoja_de_un_companero():
+    """Examen abr-2025: K, periodos, ordenadas y fuerzas de la hoja de Excel; los errores típicos de captura se detectan."""
+    KC = np.array([[4061.0500, -3625.0667, 0, 0, 0], [-3625.0667, 10819.7531, -7067.2, 0, 0],
+                   [0, -7067.2, 8867.4801, -1529.3250, -270.9551], [0, 0, -1529.3250, 5154.3917, -3625.0667],
+                   [0, 0, -270.9551, -3625.0667, 3896.0218]])
+    r = correr(EJ16)
+    assert r['p']['K'] == pytest.approx(KC, abs=1e-3)
+    assert np.diag(r['p']['M']) == pytest.approx([18.35, 40.77, 26.50, 18.35, 40.77], abs=0.005)
+    assert r['T'] == pytest.approx([3.431511, 0.956727, 0.400517, 0.3343, 0.267441], abs=1e-4)
+    assert r['Sa_modal'][:, 0] == pytest.approx([38.04, 187.56, 174.50, 164.94, 154.30], abs=0.01)
+    t = r['tabla_din']
+    assert t['Fu'] == pytest.approx([2.13, 0.88, 1.14, 1.75, 0.78], abs=0.01)           # niveles 5 a 1
+    assert t['Vu'][-1] == pytest.approx(6.68, abs=0.01) and t['Mvu'].sum() == pytest.approx(88.64, abs=0.02)
+    qr = [f for f in r['normativa']['factores'] if f[0].startswith('Q·R′ (distorsiones)')][0]
+    assert float(qr[1]) == pytest.approx(2.8)
+    # E tecleado 10 veces mayor y bases articuladas capturadas como empotradas: la K de la memoria equivocada
+    mal = copy.deepcopy(EJ16)
+    mal['E'] = '21000000'
+    for f in mal['columnas']:
+        f['apoyo'] = 'Empotrado'
+    assert correr(mal)['p']['K'][0, 0] == pytest.approx(40782.0, abs=0.1)
+    assert any('poco usual para acero' in tx for _, tx in correr(mal)['avisos'])

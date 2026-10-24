@@ -1218,6 +1218,7 @@ def _normativa(p, res):
         fila("R′ = " + ('0.75·R' if frp != 1 else 'R'), f'{frp * R_:.4f}', 'OI: 0.75R · SV: R (p. 10)')
         fila("Q′ (T1)", f'{q1:.4f}', 'Q′ = 1 + (Q − 1)·√(p/k)…')
         fila("Q′·R′ (T1)", f'{q1 * frp * R_:.4f}', 'Reduce las ordenadas del espectro')
+        fila("Q·R′ (distorsiones)", f'{Q0 * frp * R_:.4f}', 'Factor QR′ por el que se multiplican los desplazamientos elásticos')
         fila("FC·Q·R′ (distorsiones)", f'{FC * Q0 * frp * R_:.4f}', 'Desplazamientos × FC·Q·R′ (p. 13, 15)')
     fila('γc por irregularidad', f'{p["gamma_c"]:g}', p['gamma_c_txt'])
     out['factores'] = filas
@@ -2378,6 +2379,23 @@ EJEMPLOS_MODELO = {
         niveles=[dict(h='8', sin_losa='4', cargas='2 2 2 0'), dict(h='5', cargas='4 3 2 4'), dict(h='4', cargas='4 4 4 2')],
         fc='', subgrupo='B', intensidad='Frecuente', Q='1', k1='1', zeta='0.05',
         a0='104', c='400', Ta='0.4', Tb='1.9', k='0.82', Ts='0.5', factor_Fu='1.1', mult_V='1'),
+    # Examen del 23-abr-2025, problema 1 (estructura A): torre de acero de 5 niveles, volado de 3 m solo en los niveles 2 y 5.
+    # Los ejes 2 y 3 son columnas IR con su eje débil (Iy) y base articulada; los ejes 1 y 4 usan Ix y van empotrados. En los
+    # niveles 1 y 4 no hay losa en la primera crujía, así que la columna del eje 1 cruza del nivel 1 al 2 y del 4 al 5.
+    # R = k1·R0 = 1.4 (como la hoja de un compañero, con R′ = R en seguridad de vida), no R = 1.
+    'Ejemplo 16 (examen abr-2025: torre de acero de 5 niveles, Ix e Iy, volados)': dict(
+        crujias='4 5 4', volado_der='3', vigas='rigidas', material='Acero', direccion='X', unidad_E='kg/cm²', E='2100000',
+        columnas=[dict(eje='1', desde='1', hasta='2', seccion='I:3688/A:26.8', E='', apoyo='Empotrado', art_sup=False),
+                  dict(eje='1', desde='3', hasta='3', seccion='I:3688/A:26.8', E='', apoyo='Empotrado', art_sup=False),
+                  dict(eje='1', desde='4', hasta='5', seccion='I:3688/A:26.8', E='', apoyo='Empotrado', art_sup=False),
+                  dict(eje='2', desde='1', hasta='5', seccion='I:98/A:26.8', E='', apoyo='Articulado', art_sup=False),
+                  dict(eje='3', desde='1', hasta='5', seccion='I:98/A:26.8', E='', apoyo='Articulado', art_sup=False),
+                  dict(eje='4', desde='1', hasta='5', seccion='I:3688/A:26.8', E='', apoyo='Empotrado', art_sup=False)],
+        niveles=[dict(h='6', sin_losa='1', cargas='2 2 2 0'), dict(h='3', cargas='2.5 2.5 2.5 2.5'),
+                 dict(h='3', cargas='2 2 2 0'), dict(h='4', sin_losa='1', cargas='2 2 2 0'),
+                 dict(h='3', cargas='2.5 2.5 2.5 2.5')],
+        fc='', subgrupo='A2', intensidad='Infrecuente', Q='2', k1='0.8', zeta='0.03', R1_otros=False,
+        a0='166', c='625', Ta='0.5', Tb='1.8', k='0.525', Ts='0.6', factor_Fu='1.1', mult_V='1'),
 }
 
 
