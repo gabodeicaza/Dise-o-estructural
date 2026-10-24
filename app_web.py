@@ -481,8 +481,8 @@ with T_sismo:
     with st.expander('Otros datos normativos'):
         st.text_input('Amortiguamiento ζ', key='zeta', help='Vacío: 0.05 concreto, 0.03 acero. Se usa en CQC; '
                       'el espectro de SASID debe pedirse con el mismo ζ.')
-        st.checkbox('R = 1 en materiales distintos del concreto', key='R1_otros',
-                    help='Los apuntes indican R = 1 para otros materiales.')
+        st.caption('R = k₁·R₀ + k₂ (NTC 3.3) en concreto, acero y mampostería, con R₀ = 2.0 si Q ≥ 3 y 1.75 si Q < 3. '
+                   'R = 1 solo con material «Otro» (fuera de las tablas 4.3).')
         st.selectbox('Coeficiente del método estático', CRITERIOS, key='criterio_estatico',
                      help='Los apuntes toman el mayor entre c/(Q′R′) en el plato y a0/(Q′R′) en T = 0. '
                           'El código de MATLAB toma el máximo del espectro de diseño completo.')

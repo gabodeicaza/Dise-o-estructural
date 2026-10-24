@@ -712,56 +712,89 @@ def _compacto_modal(res):
           matriz('Φ (formas modales; cada columna es un modo)', fi, 5, '', nv, modos),
           figura('Formas modales', ame.fig_modal(res), 17)]
 
-    # ---- B. espectro y fuerzas
+    # ---- B. espectro y fuerzas (mismo orden que la solución del profesor)
     clave_q = ame.CLAVE_ESTADO[p['estado']]
     dl = res['clave'] == 'DL'
     pq = p if clave_q == 'SV' else dict(p, Q=np.array([1.0]))
     Sa_el = ame._interp(T, res['serie'], ame.espectro(dict(p, Ks=1.0), 1.0, 1.0, res['serie'], dl=True)[0])
     Sa_d = np.asarray(res['Sa_modal'][:, 0], float)
-    B.append(seccion('B', 'Espectro y fuerzas sísmicas de diseño · modal espectral'))
+    B.append(seccion('B', 'Fuerzas sísmicas de diseño · modal espectral'))
     quiero = ('Q', 'k1', 'R0', 'k2', 'R = ', "R′", 'Q·R′ (distorsiones)', 'FC·Q·R′', 'γc', 'Ks', 'Amortiguamiento')
     filas_n = [[a_, b_] for a_, b_, _ in res['normativa']['factores'] if str(a_).startswith(quiero)]
     pares = []
     for i in range(0, len(filas_n), 2):
         pares.append(filas_n[i] + (filas_n[i + 1] if i + 1 < len(filas_n) else ['', '']))
     B.append(tabla('Parámetros del espectro y de la reducción', ['Concepto', 'Valor', 'Concepto', 'Valor'], pares))
+    gam = [float(x) for x in res['gam']]
     if dl:
-        enc = ['Modo', 'T (s)', 'Sa(T) elástica (cm/s²)', 'Ks', 'Sa·Ks (cm/s²)', 'en g']
-        filas = [[j + 1, float(T[j]), float(Sa_el[j]), float(p['Ks']), float(Sa_d[j]), float(Sa_d[j] / G)] for j in range(n)]
+        enc = ['Modo', 'T (s)', 'Sa elástica (cm/s²)', 'Ks', 'Sa·Ks (cm/s²)', 'Sa (g)', 'Partic.']
+        filas = [[j + 1, float(T[j]), float(Sa_el[j]), float(p['Ks']), float(Sa_d[j]), float(Sa_d[j] / G), gam[j]] for j in range(n)]
     else:
         q_, r_ = ame._q_r(pq, float(pq['Q'][0]), T, clave_q)
-        k2 = [0.0 if p['R_unitaria'] else float(ame._k2(T[j], p['Ta'])) for j in range(n)]
-        enc = ['Modo', 'T (s)', 'Sa(T) elástica (cm/s²)', "Q'", 'k₂', "R'", "Q'·R'", "Sa/(Q'R') (cm/s²)", 'en g']
-        filas = [[j + 1, float(T[j]), float(Sa_el[j]), float(q_[j]), k2[j], float(r_[j]), float(q_[j] * r_[j]), float(Sa_d[j]),
-                  float(Sa_d[j] / G)] for j in range(n)]
-    B.append(tabla('Ordenada espectral de cada modo', enc, filas, 4))
-    if res.get('a_min'):
-        B.append(nota(f'Ordenada mínima a_min = {res["a_min"]:.4f} cm/s² ({res["a_min_g"]:.5f} g).'))
+        enc = ['Modo', 'T (s)', 'Sa elástica (cm/s²)', "Q'·R'", 'Sa diseño (cm/s²)', 'Sa diseño (g)', 'Partic.']
+        filas = [[j + 1, float(T[j]), float(Sa_el[j]), float(q_[j] * r_[j]), float(Sa_d[j]), float(Sa_d[j] / G), gam[j]]
+                 for j in range(n)]
+    B.append(tabla('Aceleraciones espectrales y factores de participación modal', enc, filas, 5))
+    B.append(texto(f'Suma de los factores de participación = {sum(gam):.5f}'
+                   + (f'     Ordenada mínima a_min = {res["a_min"]:.4f} cm/s² ({res["a_min_g"]:.5f} g)' if res.get('a_min') else '')))
     B.append(figura('Espectro elástico y de diseño', ame.fig_espectros_comparados(res), 14))
 
-    d, F = np.asarray(res['d'], float), np.asarray(res['F'], float)
-    Ff = np.asarray(res['F_final'], float)
-    B += [sub('Desplazamientos y fuerzas modales'),
-          matriz('δ (cada columna es un modo)', d, 6, 'cm', nv, modos),
-          matriz('F (cada columna es un modo)', F, 3, 'kg', nv, modos),
-          formula('', f'Combinación {p["combinacion"]}: ' + {'SRSS': 'F_i = √( Σ_j F_ij² )', 'CQC': 'F_i = √( Σ_j Σ_k ρ_jk F_ij F_ik )'}.get(
-              p['combinacion'].split()[0], 'F_i = Σ_j |F_ij|')),
-          tabla('Fuerza de cada modo y combinada, por nivel (kg)', ['Nivel'] + modos + ['Combinada'],
-                [[i + 1] + [float(F[i, j]) for j in range(n)] + [float(Ff[i])] for i in range(n - 1, -1, -1)], 2)]
+    F = np.asarray(res['F'], float)
     t_ = res['tabla_din']
     FC = 1.0 if dl else p['factor_Fu']
-    B += [sub(f'Fuerzas sísmicas de diseño (FC = {FC:g})'),
-          tabla('', ['Nivel', 'H (m)', 'F (t)', 'Fu (t)', 'Vu (t)', 'Mvu (t·m)'],
-                [[int(t_['nivel'][i]), float(t_['h'][i]), float(t_['F'][i]), float(t_['Fu'][i]), float(t_['Vu'][i]),
-                  float(t_['Mvu'][i])] for i in range(n)], 4),
-          texto(f'Vu en la base = {float(t_["Vu"][-1]):.4f} t     Σ Mvu (momento de volteo) = {float(t_["Mvu"].sum()):.4f} t·m'),
+    Fkg = np.asarray(t_['F'], float) * 1000                 # arriba -> abajo, kg
+    Vkg = np.cumsum(Fkg)
+    B += [sub('Fuerzas sísmicas modales (cada columna es un modo)'),
+          matriz('F', F, 2, 'kg', nv, modos),
+          sub(f'Combinación {p["combinacion"]} sin factor de carga'),
+          tabla('', ['Nivel', 'Fuerza (kg)', 'Cortante (kg)'],
+                [[int(t_['nivel'][i]), float(Fkg[i]), float(Vkg[i])] for i in range(n)], 1),
+          sub(f'Fuerzas sísmicas con el análisis modal espectral NTC-Sismo (FC = {FC:g})'),
+          tabla('', ['Nivel', 'Fuerza (kg)', 'Cortante (kg)', 'Fu (kg)', 'Vu (kg)', 'Mvu (kg·cm)'],
+                [[int(t_['nivel'][i]), float(Fkg[i]), float(Vkg[i]), float(t_['Fu'][i] * 1000), float(t_['Vu'][i] * 1000),
+                  float(t_['Mvu'][i] * 1e5)] for i in range(n)], 1),
+          texto(f'Momento de volteo de diseño = Σ Mvu = {float(t_["Mvu"].sum() * 1e5):,.1f} kg·cm '
+                f'= {float(t_["Mvu"].sum()):.4f} t·m     Vu en la base = {float(t_["Vu"][-1]) * 1000:,.1f} kg'),
           figura('Diagramas de Fu, Vu y Mvu', ame.fig_diagramas(res), 12.5)]
-    if not dl:
-        qr = [b_ for a_, b_, _ in res['normativa']['factores'] if str(a_).startswith('Q·R′ (distorsiones)')]
-        if qr:
-            B.append(texto(f"Factor Q·R′ por el que se multiplican las distorsiones elásticas: {qr[0]}"))
     enc, filas = ame.tabla_distorsiones(res)
     B.append(tabla('Distorsiones de entrepiso por estado límite', enc, filas, 5))
+    return B
+
+
+def _compacto_estatico(res):
+    """Sección C como la solución del profesor: cs, tabla estática, factor de escala y fuerzas dinámicas escaladas."""
+    p, n = res['p'], res['p']['n']
+    e, se = res['tabla_est'], res['estatico']
+    Fi = np.asarray(e['Fi'], float)
+    Vi = np.cumsum(Fi)
+    Mv = Fi * np.asarray(e['h'], float)
+    Wi = np.asarray(e['Wi'], float)
+    H = np.asarray(e['h'], float)
+    h_ent = [float(H[i] - (H[i + 1] if i + 1 < n else 0.0)) for i in range(n)]      # altura de entrepiso, arriba -> abajo
+    B = [seccion('C', 'Método estático, factor de escala y fuerzas escaladas'),
+         texto(f'cₛ = {se["C"]:.5f} g   (gobierna {se["gobierna"]};  V = cₛ·ΣW = {se["C"]:.5f} · {float(se["W_T"]):.4f} t = '
+               f'{se["C"] * float(se["W_T"]):.4f} t)'),
+         tabla('Fuerzas estáticas', ['Niv.', 'Peso Wi (t)', 'Alt. entrepiso (m)', 'Hi (m)', 'Wi·Hi', 'Fi (t)', 'Vi (t)',
+                                     'Mv (t·m)', 'Fu (t)', 'Vu (t)', 'Mvu (t·m)'],
+               [[int(e['nivel'][i]), float(Wi[i]), h_ent[i], float(H[i]), float(e['hWi'][i]), float(Fi[i]),
+                 float(Vi[i]), float(Mv[i]), float(e['Fu'][i]), float(e['Vu'][i]), float(e['Mvu'][i])] for i in range(n)]
+               + [['Σ', float(Wi.sum()), '', '', float(np.asarray(e['hWi']).sum()), float(Fi.sum()), '', float(Mv.sum()),
+                   float(np.asarray(e['Fu']).sum()), '', float(np.asarray(e['Mvu']).sum())]], 4)]
+    Vi_est, Vi_din = float(Fi.sum()), float(res['tabla_din']['F'].sum())
+    B.append(texto(f'Factor de escala: V_est / V_din = {Vi_est:.4f} / {Vi_din:.4f} = {res["factor_escala"]:.4f}'
+                   + ('' if res['factor_aplicado'] > 1 else '   (no se escala: el dinámico ya cumple)')))
+    if res['factor_aplicado'] > 1:
+        te = res['tabla_din_esc']
+        Fe = np.asarray(te['F'], float)
+        Ve = np.cumsum(Fe)
+        Mve = Fe * np.asarray(te['h'], float)
+        B.append(tabla('Fuerzas dinámicas escaladas al 100 % del estático',
+                       ['Nivel', 'Fi (t)', 'Vi (t)', 'Mv (t·m)', 'Fu (t)', 'Vu (t)', 'Mvu (t·m)'],
+                       [[int(te['nivel'][i]), float(Fe[i]), float(Ve[i]), float(Mve[i]), float(te['Fu'][i]), float(te['Vu'][i]),
+                         float(te['Mvu'][i])] for i in range(n)]
+                       + [['Σ', float(Fe.sum()), '', float(Mve.sum()), float(np.asarray(te['Fu']).sum()), '',
+                           float(np.asarray(te['Mvu']).sum())]], 4))
+    B.append(figura('Diagramas de Fu, Vu y Mvu (estático)', ame.fig_diagramas(res, 'estatico'), 12.5))
     return B
 
 
@@ -771,7 +804,5 @@ def compacto(res, metodo='ambos'):
     if metodo in ('ambos', 'modal'):
         B += _compacto_modal(res)
     if metodo in ('ambos', 'estatico') and 'tabla_est' in res:
-        B.append(seccion('C', 'Método estático y factor de escalamiento'))
-        B += _sin_explicaciones(detalle_estatico(res))
-        B.append(figura('Diagramas de Fu, Vu y Mvu (estático)', ame.fig_diagramas(res, 'estatico'), 12.5))
+        B += _compacto_estatico(res)
     return B

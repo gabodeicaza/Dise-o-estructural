@@ -90,7 +90,7 @@ def objetivo_diseno(grupo, intensidad, subgrupo=None):
                  Op. continua   Ocup. inmediata   Seg. de vida   Prev. de colapso
     Frecuente        B  (A1, A2 también cumplen)
     Ocasional        A1, A2         B
-    Base de diseño   A1             A2                B
+    Base de diseño   A1, A2 (Tabla 3.1.1: objetivos 4 y 6)    B
     MC (infrecuente)                A1                A2             B
 
     Un grupo A sin subgrupo ('A') se toma como A2. Devuelve un dict con la clave del estado de cálculo
@@ -113,10 +113,6 @@ def objetivo_diseno(grupo, intensidad, subgrupo=None):
     if intensidad == 'Ocasional':
         return dl('Sa(BD)·2.5·Ks, sin factor de carga') if grupo == 'A' else oi('Sa(BD)/R′ con Q = 1 y R′ = 0.75·R')
     if intensidad == 'Base de diseño':
-        if a1:
-            return dl('Sa(BD)·Ks, sin factor de carga',
-                      'Operación continua con el sismo base de diseño (A1): se usa Sa(BD)·Ks como en limitación de daño; '
-                      'confirma con la norma si lleva otro factor.')
         if grupo == 'A':
             return oi('Sa(BD)/R′ con Q = 1 y R′ = 0.75·R')
         return dict(clave='SV', desempeno='Seguridad de vida', espectro="Sa(BD)/(Q′·R′) con R′ = R", revisa=revisa_r, nota='')

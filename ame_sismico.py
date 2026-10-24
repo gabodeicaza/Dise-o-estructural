@@ -338,7 +338,7 @@ def _ajustar_periodo(p, T_med):
 
 
 def _params_norma(d, material):
-    """Irregularidades (γc), torsión accidental, método estático y R = 1 en materiales distintos del concreto."""
+    """Irregularidades (γc), torsión accidental, método estático y R = 1 si el material queda fuera de las tablas."""
     irreg = d.get('irreg') or []
     if isinstance(irreg, str):
         irreg = re.findall(r'5\.[23]\.\d', irreg)
@@ -347,8 +347,7 @@ def _params_norma(d, material):
     zona = str(d.get('zona') or '').strip().upper()
     if zona and zona not in ntc.LIMITES_ALTURA_ESTATICO:
         raise ValueError('La zona geotécnica debe ser I, II o III.')
-    r1 = d.get('R1_otros', True)
-    r1 = True if r1 == '' else _flag(r1)
+    r1 = material == 'Otro'      # NTC 3.3: R = 1 solo fuera de las tablas 4.3.x (concreto, acero, mampostería: R = k1·R0 + k2)
     crit = str(d.get('criterio_estatico') or '').lower()
     criterio_est = 'maximo' if ('máx' in crit or 'max' in crit or 'matlab' in crit) else 'apuntes'
     rd = str(d.get('R_dist') or '').lower()
@@ -361,7 +360,7 @@ def _params_norma(d, material):
                 norm_modal=_norm_modal(d.get('norm_modal')),
                 b_planta=_num_opc(d, 'b_planta', None), zona=zona,
                 regular=str(d.get('regularidad') or 'Regular').lower().startswith('reg'),
-                R_unitaria=(material != 'Concreto') and r1, R1_otros=r1)
+                R_unitaria=r1, R1_otros=r1)
 
 
 def grupo_sismo(tipo):
@@ -1030,7 +1029,7 @@ def _frp(p, clave='SV'):
 
 
 def _R(p, Q, T):
-    """Sobrerresistencia R = k1·R0 + k2 (R = 1 en materiales distintos del concreto, apuntes p. 11)."""
+    """Sobrerresistencia R = k1·R0 + k2 (NTC 3.3); R = 1 solo para material 'Otro' (fuera de las tablas 4.3.x)."""
     T = np.asarray(T, float)
     if p.get('R_unitaria'):
         return np.ones_like(T)
@@ -2421,7 +2420,7 @@ EJEMPLOS_MODELO = {
         niveles=[dict(h='6', sin_losa='1', cargas='2 2 2 0'), dict(h='3', cargas='2.5 2.5 2.5 2.5'),
                  dict(h='3', cargas='2 2 2 0'), dict(h='4', sin_losa='1', cargas='2 2 2 0'),
                  dict(h='3', cargas='2.5 2.5 2.5 2.5')],
-        fc='', subgrupo='A2', intensidad='Infrecuente', Q='2', k1='0.8', zeta='0.03', R1_otros=False,
+        fc='', subgrupo='A2', intensidad='Infrecuente', Q='2', k1='0.8', zeta='0.03',
         a0='166', c='625', Ta='0.5', Tb='1.8', k='0.525', Ts='0.6', factor_Fu='1.1', mult_V='1'),
 }
 

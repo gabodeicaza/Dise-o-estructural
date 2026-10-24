@@ -508,15 +508,15 @@ def test_cortante_basal_minimo():
     assert (not r2['normativa']['vmin']['cumple']) == any('Cortante basal mínimo' in t for _, t in r2['avisos'])
 
 
-def test_R_igual_a_uno_en_materiales_distintos_del_concreto():
-    r = correr(EJ5)
-    assert r['p']['R_unitaria'] and all(f[4] == pytest.approx(1.0 * 1.0) for f in r['QR'])
+def test_R_segun_material():
+    r = correr(EJ5)                                   # acero: R = k1·R0 + k2 (tablas 4.3.2)
+    assert not r['p']['R_unitaria'] and r['QR'][0][4] > 1.7
     d = copy.deepcopy(EJ5)
-    d['R1_otros'] = False
+    d.update(material='Otro', E='2040000')                            # fuera de las tablas: R = 1
     r2 = correr(d)
-    assert not r2['p']['R_unitaria'] and r2['QR'][0][4] > 1.7
-    assert r2['V_din'] < r['V_din']                  # con R = 1 las fuerzas de diseño son mayores
-    assert not correr(EJ2)['p']['R_unitaria']        # concreto: R = k1·R0 + k2
+    assert r2['p']['R_unitaria'] and all(f[4] == pytest.approx(1.0 * 1.0) for f in r2['QR'])
+    assert r['V_din'] < r2['V_din']
+    assert not correr(EJ2)['p']['R_unitaria']
 
 
 def test_amortiguamiento_por_material():
@@ -547,7 +547,7 @@ def test_avisos_normativos():
     # grupo A: el estático no aplica
     assert 'método estático no aplica' in textos(correr(dict(copy.deepcopy(EJ2), subgrupo='A1')))
     # R = 1 y ζ del acero
-    assert 'R = 1' in textos(correr(EJ5))
+    assert 'R = 1' in textos(correr(dict(EJ5, material='Otro', E='2040000')))
     # intensidad distinta de la base: recordar el espectro
     assert 'espectro SASID de esa intensidad' in textos(correr(dict(copy.deepcopy(EJ2), intensidad='Infrecuente')))
     # solo el estado de diseño marca alerta; los demás son referencia
@@ -700,8 +700,8 @@ def test_estatico_ocupacion_inmediata_Q_uno_R_prima_075R():
     assert not r['normativa']['estatico']['aplica']                         # grupo A: el estático no aplica
 
 
-def test_estatico_acero_R_igual_a_uno():
-    r = correr(EJ5)
+def test_estatico_material_otro_R_igual_a_uno():
+    r = correr(dict(EJ5, material='Otro', E='2040000'))
     assert r['estatico']['R_pl'] == 1.0 and r['estatico']['R_0'] == 1.0
 
 
@@ -752,8 +752,8 @@ def test_aviso_de_distorsion_estatica_y_criterio_matlab():
 
 # ---------------------------------------------------------------- análisis elástico (sin reducir) y comparación
 def test_elastico_igual_al_de_diseno_cuando_no_hay_reduccion():
-    """Acero con R = 1 y Q = 1: Q′ = 1 y R′ = 1, así que el espectro de diseño ES el elástico."""
-    r = correr(dict(EJ5, Q='1'))
+    """Material fuera de tablas (R = 1) y Q = 1: Q′ = 1 y R′ = 1, así que el espectro de diseño ES el elástico."""
+    r = correr(dict(EJ5, Q='1', material='Otro', E='2040000'))
     assert r['Sa_modal'][:, 0] == pytest.approx(r['elastico']['Sa'])
     assert r['elastico']['V_el'] == pytest.approx(r['V_din'])
     assert r['elastico']['tabla']['Fu'] == pytest.approx(r['tabla_din']['Fu'])
@@ -1082,7 +1082,7 @@ def test_marco_mixto_concreto_y_acero_por_nivel():
 @pytest.mark.parametrize('sub, intensidad, clave', [
     ('B', 'Frecuente', 'DL'), ('B', 'Ocasional', 'OI'), ('B', 'Base de diseño', 'SV'), ('B', 'Infrecuente', 'SV'),
     ('A2', 'Frecuente', 'DL'), ('A2', 'Ocasional', 'DL'), ('A2', 'Base de diseño', 'OI'), ('A2', 'Infrecuente', 'SV'),
-    ('A1', 'Frecuente', 'DL'), ('A1', 'Ocasional', 'DL'), ('A1', 'Base de diseño', 'DL'), ('A1', 'Infrecuente', 'OI')])
+    ('A1', 'Frecuente', 'DL'), ('A1', 'Ocasional', 'DL'), ('A1', 'Base de diseño', 'OI'), ('A1', 'Infrecuente', 'OI')])
 def test_matriz_del_pizarron_distingue_A1_y_A2(sub, intensidad, clave):
     assert ntc.objetivo_diseno(ntc.SUBGRUPOS[sub], intensidad, sub)['clave'] == clave
     assert correr(dict(EJ2, subgrupo=sub, intensidad=intensidad, espectros={
@@ -1090,9 +1090,9 @@ def test_matriz_del_pizarron_distingue_A1_y_A2(sub, intensidad, clave):
         'Infrecuente': dict(a0='300', c='1300', Ta='0.8', Tb='1.7', k='0.445', Ts='1.0')}))['clave'] == clave
 
 
-def test_B_en_MC_es_prevencion_de_colapso_y_A1_en_SBD_avisa_su_supuesto():
+def test_B_en_MC_es_prevencion_de_colapso_y_A1_en_SBD_es_ocupacion_inmediata():
     assert ntc.objetivo_diseno('B', 'Infrecuente', 'B')['desempeno'] == 'Prevención de colapso'
-    assert 'confirma con la norma' in ntc.objetivo_diseno('A', 'Base de diseño', 'A1')['nota']
+    assert ntc.objetivo_diseno('A', 'Base de diseño', 'A1')['clave'] == 'OI'          # Tabla 3.1.1 y examen 2
     assert ntc.objetivo_diseno('A', 'Base de diseño')['clave'] == 'OI'                # "A" sin subgrupo = A2
 
 
@@ -1417,7 +1417,7 @@ def test_el_pdf_ya_no_trae_la_seccion_final_de_alcances():
     ame_pdf.memoria_pdf(correr(EJ2), buf, proyecto='Prueba', autor='Pruebas')
     texto = ''.join(pg.get_text() for pg in pymupdf.open(stream=buf.getvalue(), filetype='pdf'))
     assert 'Alcances y limitaciones' not in texto and 'revisión de un ingeniero' not in texto
-    assert 'Avisos de coherencia' in texto
+    assert 'Avisos de coherencia' not in texto                  # los avisos se quedan en la página, no van al PDF
 
 
 def test_pagina_organizada_en_tabs_y_errores_no_la_rompen():
@@ -1548,8 +1548,8 @@ def test_pdf_con_formulas_y_letras_griegas():
     ame_pdf.memoria_pdf(correr(EJ2), buf, proyecto='Torre Ø', autor='Á')
     texto = ''.join(pg.get_text() for pg in pymupdf.open(stream=buf.getvalue(), filetype='pdf'))
     for esperado in ('Memoria de cálculo', 'λ', 'γ', 'Σ', 'Torre Ø', 'Resumen de resultados', 'Matrices de masa y de rigidez',
-                     'K (simbólica)', 'Periodos, frecuencias', 'Espectro y fuerzas sísmicas de diseño', 'Q·R′ (distorsiones)',
-                     'Fuerzas sísmicas de diseño', 'Método estático y factor de escalamiento'):
+                     'K (simbólica)', 'Periodos, frecuencias', 'Fuerzas sísmicas de diseño · modal espectral', 'Q·R′ (distorsiones)',
+                     'Combinación SRSS sin factor de carga', 'Momento de volteo de diseño', 'Método estático, factor de escala'):
         assert esperado in texto, esperado
     assert 'análisis elástico' not in texto.lower() and 'espectro elástico y de diseño' in texto.lower()
 
@@ -1787,9 +1787,9 @@ def test_exportar_modal_y_estatico_por_separado():
         buf = io.BytesIO()
         ame_pdf.memoria_pdf(r, buf, proyecto='P', autor='A', metodo=m)
         textos[m] = ''.join(pg.get_text() for pg in pymupdf.open(stream=buf.getvalue(), filetype='pdf'))
-    assert 'Matrices de masa y de rigidez' in textos['modal'] and 'Método estático y factor de escalamiento' not in textos['modal']
-    assert 'Método estático y factor de escalamiento' in textos['estatico'] and 'Matrices de masa y de rigidez' not in textos['estatico']
-    assert 'Coeficiente sísmico C' in textos['estatico'] and 'Periodos, frecuencias' in textos['modal']
+    assert 'Matrices de masa y de rigidez' in textos['modal'] and 'Método estático, factor de escala' not in textos['modal']
+    assert 'Método estático, factor de escala' in textos['estatico'] and 'Matrices de masa y de rigidez' not in textos['estatico']
+    assert 'Fuerzas estáticas' in textos['estatico'] and 'Periodos, frecuencias' in textos['modal']
     assert 'Σ Mvu' in textos['modal'] and 'Diagramas de Fu, Vu y Mvu' in textos['modal']
 
 

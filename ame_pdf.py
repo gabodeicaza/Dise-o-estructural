@@ -179,7 +179,7 @@ def _bloques(bloques, st, Ancho):
                                      ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'), ('ALIGN', (0, 0), (0, 0), 'CENTER'),
                                      ('TOPPADDING', (0, 0), (-1, -1), 8), ('BOTTOMPADDING', (0, 0), (-1, -1), 8),
                                      ('LEFTPADDING', (1, 0), (1, 0), 12)]))
-            E += [PageBreak(), ban, Spacer(1, 10)]
+            E += [Spacer(1, 14), CondPageBreak(9 * cm), ban, Spacer(1, 10)]
         elif t == 'sub':
             E += [CondPageBreak(6 * cm), Spacer(1, 8), P(b['texto'], 'h2')]
         elif t == 'figura':
@@ -284,18 +284,6 @@ def memoria_pdf(res, destino, proyecto='', autor='', metodo='ambos'):
 
     # ------------------------------------------------------------------ A, B y C (mismos bloques que la página)
     E.extend(_bloques(ame_detalle.compacto(res, metodo), st, Ancho))
-
-    # ------------------------------------------------------------------ avisos que conviene leer
-    graves = [(sev, txt) for sev, txt in res['avisos'] if sev in ('alerta', 'aviso')]
-    if graves:
-        E += [Spacer(1, 12), P('Avisos de coherencia', 'h2')]
-        rows = [[{'alerta': 'ALERTA', 'aviso': 'AVISO'}[sev], Paragraph(_escapar(txt), st['nota'])] for sev, txt in graves[:12]]
-        t = Table(rows, colWidths=[2 * cm, Ancho - 2 * cm])
-        t.setStyle(TableStyle([('FONTNAME', (0, 0), (0, -1), 'DejaVu-Bold'), ('FONTSIZE', (0, 0), (0, -1), 7.5),
-                               ('VALIGN', (0, 0), (-1, -1), 'TOP'), ('LINEBELOW', (0, 0), (-1, -1), 0.3, AZUL_CLARO)]
-                              + [('TEXTCOLOR', (0, i), (0, i), ROJO if sev == 'alerta' else AZUL_MED)
-                                 for i, (sev, _) in enumerate(graves[:12])]))
-        E.append(t)
 
     doc.build(E)
     return destino
