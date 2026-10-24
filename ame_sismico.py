@@ -1666,6 +1666,33 @@ def fig_modal(res):
     return fig
 
 
+def fig_espectros_comparados(res):
+    """Un solo gráfico: espectro elástico (SASID) y espectro de diseño, con los periodos de los modos."""
+    p, serie, T = res['p'], res['serie'], res['T']
+    el = espectro(dict(p, Ks=1.0), 1.0, 1.0, serie, dl=True)[0]
+    dis = res['curvas'][0]
+    Tmax = float(min(serie[-1], max(3.0, 1.25 * T.max())))
+    fig = Figure(figsize=(8.5, 3.8), dpi=100)
+    ax = fig.add_subplot(1, 1, 1)
+    ax.plot(serie, el, color=AZULES[1], lw=2, label='Espectro elástico Sa')
+    ax.plot(serie, dis, color=AZULES[0], lw=2, label=f'{rotulo_sa(res)} (diseño)')
+    ax.plot(T, _interp(T, serie, el), 'o', color=AZULES[1])
+    ax.plot(T, res['Sa_modal'][:, 0], 'o', color=AZULES[0])
+    for j, tj in enumerate(T):
+        if tj <= Tmax:
+            ax.annotate(f'T{j + 1}', (tj, res['Sa_modal'][j, 0]), textcoords='offset points', xytext=(3, -12), fontsize=7)
+    if res.get('a_min'):
+        ax.axhline(res['a_min'], color='#B3261E', ls='--', lw=1)
+        ax.text(Tmax * 0.98, res['a_min'], 'a_min', color='#B3261E', ha='right', va='bottom', fontsize=8)
+    ax.set_xlim(0, Tmax)
+    ax.set_xlabel('T (s)')
+    ax.set_ylabel('Sa (cm/s²)')
+    ax.grid(alpha=0.3)
+    ax.legend()
+    fig.tight_layout()
+    return fig
+
+
 def fig_espectro(res):
     p = res['p']
     fig = Figure(figsize=(8, 7), dpi=100)

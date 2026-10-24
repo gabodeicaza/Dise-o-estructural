@@ -798,7 +798,7 @@ def test_comparacion_de_metodos():
     import ame_detalle
     enc, filas = ame_detalle.resumen_metodos(r)
     assert [f[0] for f in filas] == ['Modal espectral', 'Estático', 'Modal espectral escalado']
-    assert 'ELÁSTICO' not in ame.reporte_texto(r).upper()
+    assert 'ANÁLISIS ELÁSTICO' not in ame.reporte_texto(r).upper()
 
 
 # ---------------------------------------------------------------- unidades y opciones contra "trampas"
@@ -1547,11 +1547,11 @@ def test_pdf_con_formulas_y_letras_griegas():
     buf = io.BytesIO()
     ame_pdf.memoria_pdf(correr(EJ2), buf, proyecto='Torre Ø', autor='Á')
     texto = ''.join(pg.get_text() for pg in pymupdf.open(stream=buf.getvalue(), filetype='pdf'))
-    for esperado in ('Memoria de cálculo', 'λ', 'γ', 'Σ', 'T < Tₐ', 'Torre Ø', 'Marco normativo (NTC-S 2023)',
-                     'Cortante basal mínimo', 'Cimentación', 'ANÁLISIS MODAL ESPECTRAL', 'ANÁLISIS ESTÁTICO',
-                     'Matriz de rigidez K', 'Factores de participación modal'):
-        assert esperado in texto
-    assert 'elástico' not in texto.lower()
+    for esperado in ('Memoria de cálculo', 'λ', 'γ', 'Σ', 'Torre Ø', 'Resumen de resultados', 'Matrices de masa y de rigidez',
+                     'K (simbólica)', 'Periodos, frecuencias', 'Espectro y fuerzas sísmicas de diseño', 'Q·R′ (distorsiones)',
+                     'Fuerzas sísmicas de diseño', 'Método estático y factor de escalamiento'):
+        assert esperado in texto, esperado
+    assert 'análisis elástico' not in texto.lower() and 'espectro elástico y de diseño' in texto.lower()
 
 
 def test_figuras_se_dibujan():
@@ -1787,9 +1787,10 @@ def test_exportar_modal_y_estatico_por_separado():
         buf = io.BytesIO()
         ame_pdf.memoria_pdf(r, buf, proyecto='P', autor='A', metodo=m)
         textos[m] = ''.join(pg.get_text() for pg in pymupdf.open(stream=buf.getvalue(), filetype='pdf'))
-    assert 'ANÁLISIS MODAL ESPECTRAL' in textos['modal'] and 'ANÁLISIS ESTÁTICO' not in textos['modal']
-    assert 'ANÁLISIS ESTÁTICO' in textos['estatico'] and 'ANÁLISIS MODAL ESPECTRAL' not in textos['estatico']
-    assert 'Coeficiente sísmico C' in textos['estatico'] and 'Valores propios' in textos['modal']
+    assert 'Matrices de masa y de rigidez' in textos['modal'] and 'Método estático y factor de escalamiento' not in textos['modal']
+    assert 'Método estático y factor de escalamiento' in textos['estatico'] and 'Matrices de masa y de rigidez' not in textos['estatico']
+    assert 'Coeficiente sísmico C' in textos['estatico'] and 'Periodos, frecuencias' in textos['modal']
+    assert 'Σ Mvu' in textos['modal'] and 'Diagramas de Fu, Vu y Mvu' in textos['modal']
 
 
 

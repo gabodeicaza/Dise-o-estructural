@@ -13,8 +13,8 @@ from reportlab.lib.styles import ParagraphStyle
 from reportlab.lib.units import cm
 from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
-from reportlab.platypus import (BaseDocTemplate, Frame, Image, KeepTogether, PageBreak, PageTemplate, Paragraph,
-                                Spacer, Table, TableStyle)
+from reportlab.platypus import (BaseDocTemplate, CondPageBreak, Frame, Image, KeepTogether, PageBreak, PageTemplate,
+                                Paragraph, Spacer, Table, TableStyle)
 
 import ame_detalle
 import ame_sismico as ame
@@ -48,6 +48,8 @@ def _estilos():
                           spaceBefore=14, spaceAfter=6, keepWithNext=1),
         h2=ParagraphStyle('h2', parent=base, fontName='DejaVu-Bold', fontSize=10.5, leading=14, textColor=AZUL_OSC,
                           spaceBefore=8, spaceAfter=3, keepWithNext=1),
+        h2s=ParagraphStyle('h2s', parent=base, fontName='DejaVu-Bold', fontSize=10.5, leading=14, textColor=AZUL_OSC,
+                           spaceBefore=8, spaceAfter=3),
         nota=ParagraphStyle('nota', parent=base, fontSize=8, leading=11, textColor=AZUL_MED),
         formula=ParagraphStyle('formula', parent=base, fontName='DejaVu-Italic', leftIndent=14, textColor=AZUL_OSC,
                                spaceAfter=2),
@@ -168,6 +170,21 @@ def _bloques(bloques, st, Ancho):
             expl.setStyle(TableStyle([('LINEBEFORE', (0, 0), (0, 0), 3, AZUL_MED), ('LEFTPADDING', (0, 0), (-1, -1), 10),
                                       ('TOPPADDING', (0, 0), (-1, -1), 5), ('BOTTOMPADDING', (0, 0), (-1, -1), 5)]))
             E += [Spacer(1, 26), KeepTogether([cab, Spacer(1, 4), expl]), Spacer(1, 8)]
+        elif t == 'seccion':
+            ban = Table([[Paragraph('<font color="white" size="15"><b>' + _escapar(b['letra']) + '</b></font>', st['base']),
+                          Paragraph('<font size="13"><b>' + _escapar(b['texto']) + '</b></font>', ParagraphStyle(
+                              'sec', parent=st['base'], textColor=colors.white, fontSize=13, leading=16))]],
+                        colWidths=[1.3 * cm, Ancho - 1.3 * cm])
+            ban.setStyle(TableStyle([('BACKGROUND', (0, 0), (-1, -1), NAVY), ('BACKGROUND', (0, 0), (0, 0), AZUL),
+                                     ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'), ('ALIGN', (0, 0), (0, 0), 'CENTER'),
+                                     ('TOPPADDING', (0, 0), (-1, -1), 8), ('BOTTOMPADDING', (0, 0), (-1, -1), 8),
+                                     ('LEFTPADDING', (1, 0), (1, 0), 12)]))
+            E += [PageBreak(), ban, Spacer(1, 10)]
+        elif t == 'sub':
+            E += [CondPageBreak(6 * cm), Spacer(1, 8), P(b['texto'], 'h2')]
+        elif t == 'figura':
+            img = _imagen(b['fig'], b['ancho'])
+            E += [CondPageBreak(img.drawHeight + 1.8 * cm), P(b['titulo'], 'h2'), img, Spacer(1, 10)]
         elif t == 'formula':
             E += [P(b['texto'], 'formula'), Spacer(1, 6)]
         elif t == 'matriz':
@@ -177,7 +194,7 @@ def _bloques(bloques, st, Ancho):
             filas = [[(Paragraph(_escapar(v), ParagraphStyle('tc', parent=st['base'], fontSize=7.5, leading=9.5, alignment=1))
                        if isinstance(v, str) and len(v) > 14 else v) for v in f] for f in b['filas']]
             fuente = 8 if len(b['enc']) <= 6 else 7
-            E += ([P(b['titulo'], 'h2')] if b['titulo'] else [])
+            E += ([Paragraph(_escapar(b['titulo']), st['h2s'] if len(b['filas']) > 8 else st['h2'])] if b['titulo'] else [])
             E += [_tabla(st, [_escapar(h) for h in b['enc']], filas, dec=b['dec'], fuente=fuente,
                          anchos=_anchos(b['enc'], b['filas'], Ancho)), Spacer(1, 12)]
         elif t in ('texto', 'nota'):
@@ -186,12 +203,18 @@ def _bloques(bloques, st, Ancho):
 
 
 def memoria_pdf(res, destino, proyecto='', autor='', metodo='ambos'):
-    """Genera la memoria de cálculo. `destino` es una ruta o un BytesIO. metodo: 'modal', 'estatico' o 'ambos'."""
+    """Memoria de cálculo compacta, como las de los exámenes: la estructura arriba, las matrices K y M con el planteamiento
+    de K, los periodos y formas modales, el espectro, las fuerzas por nivel y el método estático.
+    `destino` es una ruta o un BytesIO. metodo: 'modal', 'estatico' o 'ambos'."""
     _registrar_fuentes()
     st = _estilos()
     p, n = res['p'], res['p']['n']
     P = lambda txt, est='base': Paragraph(_escapar(txt), st[est])
     Ancho = letter[0] - 3.6 * cm
+    modal = metodo in ('ambos', 'modal')
+    estat = metodo in ('ambos', 'estatico') and 'tabla_est' in res
+    titulo_an = {(True, True): 'Análisis modal espectral y análisis estático', (True, False): 'Análisis modal espectral',
+                 (False, True): 'Análisis estático'}[(modal, estat)]
 
     def pie(canvas, doc):
         canvas.saveState()
@@ -199,207 +222,80 @@ def memoria_pdf(res, destino, proyecto='', autor='', metodo='ambos'):
         canvas.line(1.8 * cm, 1.5 * cm, letter[0] - 1.8 * cm, 1.5 * cm)
         canvas.setFont('DejaVu', 7.5)
         canvas.setFillColor(AZUL_MED)
-        canvas.drawString(1.8 * cm, 1.05 * cm, f'Memoria de cálculo · Análisis Modal Espectral'
-                                              + (f' · {proyecto}' if proyecto else ''))
+        canvas.drawString(1.8 * cm, 1.05 * cm, f'Memoria de cálculo · {titulo_an}' + (f' · {proyecto}' if proyecto else ''))
         canvas.drawRightString(letter[0] - 1.8 * cm, 1.05 * cm, f'Página {doc.page}')
         canvas.restoreState()
 
-    doc = BaseDocTemplate(destino, pagesize=letter, leftMargin=1.8 * cm, rightMargin=1.8 * cm, topMargin=1.8 * cm,
-                          bottomMargin=2 * cm, title='Memoria de cálculo - Análisis Modal Espectral',
-                          author=autor or 'AME')
+    doc = BaseDocTemplate(destino, pagesize=letter, leftMargin=1.8 * cm, rightMargin=1.8 * cm, topMargin=1.6 * cm,
+                          bottomMargin=2 * cm, title=f'Memoria de cálculo - {titulo_an}', author=autor or 'AME')
     doc.addPageTemplates([PageTemplate(id='p', frames=[Frame(doc.leftMargin, doc.bottomMargin, doc.width, doc.height,
                                                              id='f')], onPage=pie)])
     E = []
 
-    # ------------------------------------------------------------------ portada
-    banda = Table([[Paragraph('<font color="white" size="20"><b>Memoria de cálculo</b></font><br/>'
-                              '<font color="#81A4CD" size="11">Análisis Modal Espectral</font>', st['base'])]],
-                  colWidths=[Ancho])
-    banda.setStyle(TableStyle([('BACKGROUND', (0, 0), (-1, -1), NAVY), ('LEFTPADDING', (0, 0), (-1, -1), 16),
-                               ('TOPPADDING', (0, 0), (-1, -1), 18), ('BOTTOMPADDING', (0, 0), (-1, -1), 18)]))
-    E += [banda, Spacer(1, 8)]
-    meta = [['Proyecto', proyecto or '—'], ['Elaboró', autor or '—'],
-            ['Fecha', datetime.date.today().strftime('%d/%m/%Y')]]
-    t = Table(meta, colWidths=[3 * cm, Ancho - 3 * cm], hAlign='LEFT')
-    t.setStyle(TableStyle([('FONTNAME', (0, 0), (0, -1), 'DejaVu-Bold'), ('FONTNAME', (1, 0), (1, -1), 'DejaVu'),
-                           ('FONTSIZE', (0, 0), (-1, -1), 9), ('TEXTCOLOR', (0, 0), (-1, -1), NAVY),
-                           ('TEXTCOLOR', (0, 0), (0, -1), AZUL), ('LINEBELOW', (0, 0), (-1, -1), 0.4, AZUL_CLARO)]))
-    E.append(t)
+    # ------------------------------------------------------------------ portada: la estructura arriba
+    banda = Table([[Paragraph('<font color="white" size="19"><b>Memoria de cálculo</b></font><br/>'
+                              f'<font color="#81A4CD" size="10.5">{_escapar(titulo_an)}</font>', st['base']),
+                    Paragraph(f'<font color="#81A4CD" size="8.5">Proyecto: {_escapar(proyecto or "—")}<br/>'
+                              f'Elaboró: {_escapar(autor or "—")}<br/>'
+                              f'Fecha: {datetime.date.today().strftime("%d/%m/%Y")}</font>', st['base'])]],
+                  colWidths=[Ancho * 0.62, Ancho * 0.38])
+    banda.setStyle(TableStyle([('BACKGROUND', (0, 0), (-1, -1), NAVY), ('LEFTPADDING', (0, 0), (-1, -1), 14),
+                               ('TOPPADDING', (0, 0), (-1, -1), 12), ('BOTTOMPADDING', (0, 0), (-1, -1), 12),
+                               ('VALIGN', (0, 0), (-1, -1), 'MIDDLE')]))
+    E += [banda, Spacer(1, 6)]
+    if 'geom' in p:
+        E.append(_imagen(ame.fig_estructura(p), 13.4))
+    elif p.get('manual'):
+        E.append(P('La estructura se definió con las matrices K y M (sin geometría).', 'nota'))
 
-    # resumen
+    # resumen de resultados
     fe = res.get('factor_escala')
-    modal = metodo in ('ambos', 'modal')
-    estat = metodo in ('ambos', 'estatico') and 'tabla_est' in res
+    est_d = res['revision']['estados'][res['clave']]
     resumen = [['Periodo fundamental T₁', f'{res["T"][0]:.4f} s']]
     if modal:
-        resumen += [['Cortante basal modal espectral Vu', f'{res["V_din"]:.3f} t']]
+        resumen += [['Vu en la base · modal espectral', f'{res["V_din"]:.3f} t'],
+                    ['Σ Mvu · modal espectral', f'{res["tabla_din"]["Mvu"].sum():.2f} t·m']]
     if estat:
-        resumen += [['Cortante basal estático', f'{res["V_est"]:.3f} t']]
-    if modal and estat:
-        resumen += [['Factor de escala', f'{fe:.4f}']]
-    est = res['revision']['estados']
-    resumen += [[f'Distorsión máx. · {e["nombre"]}', f'{e["dist"].max():.5f}'
-                 + ('' if e['limite'] is None else f'  (límite {e["limite"]:g}: '
-                                                   + ('cumple' if e['dist'].max() <= e['limite'] else 'NO cumple') + ')')]
-                for e in est.values()]
-    E += [P('Resumen de resultados', 'h1'), _tabla(st, ['Concepto', 'Valor'], resumen, anchos=[8 * cm, Ancho - 8 * cm],
-                                                   fuente=9)]
-    if res['avisos']:
-        E += [P('Avisos principales', 'h2')]
-        for sev, txt in [a for a in res['avisos'] if a[0] != 'info'][:6]:
-            E.append(P(f'<font color="{"#B3261E" if sev == "alerta" else "#3E7CB1"}"><b>'
-                       f'{"ALERTA" if sev == "alerta" else "AVISO"}</b></font> · {txt}', 'nota'))
+        resumen += [['Vu en la base · estático', f'{res["tabla_est"]["Vu"][-1]:.3f} t']]
+        if modal:
+            resumen += [['Factor de escala (V estático / V modal)', f'{fe:.4f}']]
+    dmax = float(est_d['dist'].max())
+    resumen += [[f'Distorsión máx. · {est_d["nombre"]}', f'{dmax:.5f}' + ('' if est_d['limite'] is None else
+                                                                        f'  (límite {est_d["limite"]:g}: '
+                                                                        + ('cumple' if dmax <= est_d['limite'] else 'NO cumple') + ')')]]
+    # datos de entrada
+    pares = [['Material', p.get('material', 'Concreto')],
+             ['E', f'{p["E"]:,.0f} kg/cm²' if 'E' in p else 'K dada'],
+             ['Grupo / intensidad', f'{p.get("subgrupo") or p["grupo"]} · {p.get("intensidad", "Base de diseño")}'],
+             ['Estado límite', p['estado'] + (f' (Ks = {p["Ks"]:g})' if res['clave'] == 'DL' else '')],
+             ['Q · k₁', f'{", ".join(f"{q:g}" for q in p["Q"])} · {p["k1"]:g}'],
+             ['ζ · combinación', f'{p["zeta"]:g} · {p["combinacion"]}'],
+             ['Espectro SASID', f'a₀ {p["a0"]:g} · c {p["c"]:g} · Tₐ {p["Ta"]:g} · T_b {p["Tb"]:g} · k {p["k"]:g} · T_s {p["Ts"]:g}'],
+             ['Factor de carga FC', f'{p["factor_Fu"]:g}' if res['clave'] != 'DL' else '1 (sin factor de carga)']]
+    t_res = _tabla(st, ['Resultado', 'Valor'], [[Paragraph(_escapar(a_), st['nota']), Paragraph(_escapar(b_), st['nota'])]
+                                               for a_, b_ in resumen], anchos=[4.9 * cm, 3.9 * cm], fuente=8)
+    td = Table([[Paragraph('<b>' + _escapar(a_) + '</b>', ParagraphStyle('dl', parent=st['nota'], textColor=AZUL)),
+                 Paragraph(_escapar(str(b_)), st['nota'])] for a_, b_ in pares], colWidths=[2.7 * cm, 5.8 * cm])
+    td.setStyle(TableStyle([('VALIGN', (0, 0), (-1, -1), 'TOP'), ('LINEBELOW', (0, 0), (-1, -1), 0.3, AZUL_CLARO),
+                            ('TOPPADDING', (0, 0), (-1, -1), 3), ('BOTTOMPADDING', (0, 0), (-1, -1), 3)]))
+    lado = Table([[t_res, td]], colWidths=[Ancho * 0.51, Ancho * 0.49])
+    lado.setStyle(TableStyle([('VALIGN', (0, 0), (-1, -1), 'TOP'), ('LEFTPADDING', (0, 0), (-1, -1), 0)]))
+    E += [P('Resumen de resultados y datos de entrada', 'h2'), lado]
 
-    # ------------------------------------------------------------------ 1. datos
-    E += [P('Datos de entrada', 'h1')]
-    datos = [['Material', p.get('material', 'Concreto')], ['Módulo de elasticidad E', f'{p["E"]:,.0f} kg/cm²' if 'E' in p else 'No aplica (K dada)'],
-             ['Grupo / subgrupo', f'{p["grupo"]} / {p.get("subgrupo") or p["grupo"]}'],
-             ['Intensidad sísmica', p.get('intensidad', 'Base de diseño')],
-             ['Estado límite de diseño', p['estado'] + (f' (Ks = {p["Ks"]:g})' if res['clave'] == 'DL' else '')],
-             ['Q (valores)', ', '.join(f'{q:g}' for q in p['Q'])], ['k₁', f'{p["k1"]:g}'],
-             ['Espectro del sitio', f'a₀ = {p["a0"]:g} cm/s² · c = {p["c"]:g} cm/s² · Tₐ = {p["Ta"]:g} s · '
-                                    f'T_b = {p["Tb"]:g} s · k = {p["k"]:g} · T_s = {p["Ts"]:g} s'],
-             ['Dirección del sismo', p.get('direccion', 'X')],
-             ['Rigidez de vigas', 'Flexibles (marco plano)' if p.get('vigas') == 'flexibles' else 'Rígidas (marco de cortante)'],
-             ['Combinación modal', p['combinacion'] + f' (ζ = {p["zeta"]:g})'],
-             ['Factor Fu (FC)', f'{p["factor_Fu"]:g}']]
-    if p.get('ajuste_periodo'):
-        aj = p['ajuste_periodo']
-        datos.append(['Periodo medido', f'T₁ = {aj["T_medido"]:g} s → peso total W = {aj["W_total"]:.3f} t '
-                                       f'(con los pesos dados, T₁ = {aj["T_calculado"]:.4f} s)'])
-    if p.get('manual'):
-        datos = [r for r in datos if r[0] not in ('Dirección del sismo', 'Rigidez de vigas')] + [['Estructura', 'Matrices K y M dadas']]
-    E.append(_tabla(st, ['Parámetro', 'Valor'], [[a, Paragraph(b, st['base']) if len(b) > 40 else b] for a, b in datos],
-                    anchos=[5.5 * cm, Ancho - 5.5 * cm], fuente=8.5))
+    # ------------------------------------------------------------------ A, B y C (mismos bloques que la página)
+    E.extend(_bloques(ame_detalle.compacto(res, metodo), st, Ancho))
 
-    # ------------------------------------------------------------------ 2. estructura
-    E += [P('Descripción de la estructura', 'h1')]
-    if p.get('manual'):
-        E += [P('La estructura se definió con las matrices K y M (sin geometría). Los pesos salen de las masas '
-                '(W = m·g) salvo que se hayan dado.', 'nota'),
-              _tabla(st, ['Nivel', 'h (m)', 'W (t)', 'm (kg·s²/cm)'],
-                     [[i + 1, float(p['alturas'][i]), float(p['cargas'][i]), float(p['M'][i, i])] for i in range(n)], dec=3)]
-    if 'geom' in p:
-        E.append(_imagen(ame.fig_estructura(p), 17))
-    if 'info' in p:
-        enc = ['Nivel', 'h (m)', 'Nº col.', 'Nº art.', 'Sección (cm)', 'ΣI (cm⁴)', 'K nivel (kg/cm)', 'W (t)', 'm (kg·s²/cm)']
-        filas = [[r['nivel'], r['h'], r['ncol'], r['nart'], r['seccion'], r['I'], r['k'], r['W'], r['m']] for r in p['info']]
-        if p.get('vigas') == 'flexibles':
-            enc.append('Viga')
-            for f, r in zip(filas, p['info']):
-                f.append(r['viga'])
-        E += [P('Niveles', 'h2'), _tabla(st, enc, filas, dec=3, fuente=7.5)]
-        if p.get('vigas') != 'flexibles':
-            E.append(P('Rigidez de entrepiso con vigas rígidas: k = Σ 12·E·I / h³ por columna empotrada y '
-                       '3·E·I / h³ por columna articulada en su base.', 'nota'))
-        else:
-            E.append(P('Rigidez lateral: se ensambla la rigidez de columnas y vigas (flexión y axial) de un marco plano '
-                       'con diafragmas rígidos y se condensan los giros y desplazamientos verticales para dejar un '
-                       'grado de libertad lateral por nivel.', 'nota'))
-        if 'geom' in p:
-            filas_c = [[c['nivel'], c['eje'], c['x'], c['texto'], c['I'], ame.apoyo_txt(c), c['k']]
-                       for l in p['geom']['niveles'] for c in l['cols']]
-            E += [P('Columnas', 'h2'), _tabla(st, ['Nivel', 'Eje', 'x (m)', 'Sección (cm)', 'I (cm⁴)', 'Apoyo',
-                                                  'k (kg/cm)'], filas_c, dec=2, fuente=7.5)]
-
-    # ------------------------------------------------------------------ análisis (mismos bloques que la página)
-    def seccion(bloques, figuras):
-        E.append(PageBreak())
-        E.extend(_bloques(bloques, st, Ancho))
-        for titulo_, fig, ancho in figuras:
-            E.extend([P(titulo_, 'h2'), _imagen(fig, ancho), Spacer(1, 8)])
-
-    if modal:
-        seccion(ame_detalle.detalle_modal(res), [('Formas modales', ame.fig_modal(res), 17),
-                                                 ('Espectro de diseño', ame.fig_espectro(res), 15),
-                                                 ('Diagramas de Fu, Vu y Mvu (modal espectral)', ame.fig_diagramas(res), 17)])
-    if estat:
-        seccion(ame_detalle.detalle_estatico(res), [('Diagramas de Fu, Vu y Mvu (estático)', ame.fig_diagramas(res, 'estatico'), 17)])
-    E.append(PageBreak())
-
-    # ------------------------------------------------------------------ 6. marco normativo
-    nm = res['normativa']
-    E += [P('Marco normativo (NTC-S 2023)', 'h1'),
-          P('Reglas tomadas de los apuntes de Diseño Estructural (Dr. Rivero, Ibero). Los valores que los apuntes no traen '
-            '(por ejemplo, los límites γ de las tablas 4.3.x) son datos del proyecto.', 'nota')]
-    ancho_v = 5.6 * cm
-    E.append(_tabla(st, ['Concepto', 'Valor', 'Regla o fuente'],
-                    [[Paragraph(a, st['base']), Paragraph(b, st['base']), Paragraph(c, st['nota'])]
-                     for a, b, c in nm['factores']],
-                    anchos=[4.3 * cm, ancho_v, Ancho - 4.3 * cm - ancho_v], fuente=8, zebra=False))
-    if p.get('objetivo') and p['objetivo']['nota']:
-        E.append(P('<b>Nota:</b> ' + p['objetivo']['nota'], 'nota'))
-    v = nm.get('vmin')
-    if v:
-        E += [P('Cortante basal mínimo', 'h2'),
-              P('V ≥ FC · a_min · W  (a_min = 0.04/R′ para Ts ≤ 0.5 s, 0.06/R′ para Ts ≥ 1 s, lineal entre ambos)', 'formula'),
-              _tabla(st, ['a_min (g)', 'W total (t)', 'V mínimo (t)', 'V dinámico (t)', 'Cumple'],
-                     [[v['a_min_g'], v['W_T'], v['V_min'], v['V_din'],
-                       'Sí' if v['cumple'] else f'No (× {v["factor"]:.3f})']], dec=4)]
-    c = nm.get('cimentacion')
-    if c:
-        E += [P('Cimentación', 'h2'),
-              P('Los elementos mecánicos para diseñar la cimentación se multiplican por 0.65·R′.', 'formula'),
-              _tabla(st, ["R′ (T₁)", '0.65·R′', 'V (t)', 'Mvolteo (t·m)'], [[c['R_prima'], c['factor'], c['V'], c['M']]], dec=4)]
-    t = nm.get('torsion')
-    if t:
-        E += [P('Torsión accidental', 'h2'),
-              P('eₐᵢ = [0.05 + 0.05·(i−1)/(n−1)]·b  ·  Mt = Fu·eₐ   (b = dimensión de la planta perpendicular al análisis)',
-                'formula'),
-              _tabla(st, ['Nivel', 'eₐ (m)', 'Fu (t)', 'Mt (t·m)'],
-                     [[i + 1, float(t['e_a'][i]), float(t['Fu'][i]), float(t['Mt'][i])] for i in range(n - 1, -1, -1)], dec=4),
-              P('No incluye la excentricidad estática eₛ (necesita la planta) ni el efecto bidireccional 100% + 30%.', 'nota')]
-    e_ = nm['estatico']
-    E += [P('Método estático y participación modal', 'h2'),
-          P(f'Método estático: H = {e_["H"]:.1f} m' + (f' (límite {e_["limite"]:g} m, zona {e_["zona"]}, '
-            f'{"regular" if e_["regular"] else "irregular"})' if e_['limite'] else '') + ' → '
-            + ('aplicable.' if e_['aplica'] else 'no aplicable (grupo A o altura excedida): el factor de escala es solo de referencia.')),
-          _tabla(st, ['Modo', 'Masa efectiva', 'Acumulada'],
-                 [[j + 1, float(nm['modos']['m_ef'][j]), float(nm['modos']['acum'][j])] for j in range(n)], dec=4,
-                 anchos=[3 * cm, 4 * cm, 4 * cm]),
-          P(f'{nm["modos"]["n95"]} modo(s) alcanzan el 95% de la masa efectiva; modos con T ≥ 0.4 s: {nm["modos"]["n_T04"]}. '
-            'Los apuntes piden más de 3 modos, el 95% de la participación o todos los modos con T ≥ 0.4 s.', 'nota')]
-
-    # ------------------------------------------------------------------ 12. revisiones
-    rev = res['revision']
-    E += [P('Revisiones', 'h1'), P('Distorsiones de entrepiso', 'h2'),
-          P('Seguridad de vida y ocupación inmediata: desplazamientos × FC·Q·R′, con R′ ' + ('del plato (k₂ = 0, como en las hojas)' if p.get('R_dist', 'plato') == 'plato' else 'del periodo fundamental') + '. '
-            'Limitación de daños: Sa·Ks, sin factor de carga. Las distorsiones modales se combinan con el método elegido '
-            'y γ = Δ / h. El límite de ocupación inmediata y de seguridad de vida se reduce por irregularidad (γc). '
-            'Los límites γmáx vienen de las tablas 4.3.x de la norma: confírmalos. ★ = estado de diseño.', 'nota')]
-    lims = [[e['nombre'] + (' ★' if k == res['clave'] else ''),
-             f'{e["limite_base"]:g}' if e['limite_base'] is not None else 'sin definir', f'{e["gamma_c"]:g}',
-             f'{e["limite"]:g}' if e['limite'] is not None else 'sin definir'] for k, e in est.items()]
-    E.append(_tabla(st, ['Estado límite', 'γmáx', 'γc', 'Límite aplicado'], lims,
-                    anchos=[6 * cm, 3 * cm, 3 * cm, 4 * cm], fuente=8.5))
-    enc, filas = ame.tabla_distorsiones(res)
-    E += [Spacer(1, 4), _tabla(st, enc, filas, dec=5, fuente=8), Spacer(1, 4), _imagen(ame.fig_distorsiones(res), 12)]
-    pdt = ame.tabla_pdelta(res)
-    if pdt:
-        E += [P('Efectos P-Δ e irregularidades', 'h2'),
-              P('θ = P·δ / (V·h): P = peso acumulado sobre el entrepiso, δ = deriva elástica con las fuerzas de diseño, '
-                'V = cortante de entrepiso, h = altura. θ ≤ 0.10: se pueden ignorar; θ > 0.25: posible inestabilidad '
-                '(criterio general ASCE 7).', 'nota'),
-              _tabla(st, pdt[0], pdt[1], dec=4, fuente=8),
-              P(f'Irregularidad de masa (peso > 1.5 veces el de un piso adyacente): '
-                f'{", ".join(map(str, rev["irreg_masa"])) or "ninguna"}. '
-                f'Piso blando (rigidez efectiva < 70% del nivel superior o < 80% del promedio de tres): '
-                f'{", ".join(map(str, rev["irreg_rigidez"])) or "ninguno"}.', 'nota')]
-
-    # ------------------------------------------------------------------ 10. avisos
-    E += [P('Avisos de coherencia', 'h1')]
-    if res['avisos']:
-        rows = [[{'alerta': 'ALERTA', 'aviso': 'AVISO', 'info': 'INFO'}[sev], Paragraph(txt, st['base'])]
-                for sev, txt in res['avisos']]
-        t = Table(rows, colWidths=[2.2 * cm, Ancho - 2.2 * cm])
-        t.setStyle(TableStyle([('FONTNAME', (0, 0), (0, -1), 'DejaVu-Bold'), ('FONTSIZE', (0, 0), (0, -1), 8),
-                               ('VALIGN', (0, 0), (-1, -1), 'TOP'), ('LINEBELOW', (0, 0), (-1, -1), 0.3, AZUL_CLARO),
-                               ('TOPPADDING', (0, 0), (-1, -1), 4), ('BOTTOMPADDING', (0, 0), (-1, -1), 4)]
-                              + [('TEXTCOLOR', (0, i), (0, i), ROJO if sev == 'alerta' else AZUL_MED if sev == 'aviso' else AZUL_CLARO)
-                                 for i, (sev, _) in enumerate(res['avisos'])]))
+    # ------------------------------------------------------------------ avisos que conviene leer
+    graves = [(sev, txt) for sev, txt in res['avisos'] if sev in ('alerta', 'aviso')]
+    if graves:
+        E += [Spacer(1, 12), P('Avisos de coherencia', 'h2')]
+        rows = [[{'alerta': 'ALERTA', 'aviso': 'AVISO'}[sev], Paragraph(_escapar(txt), st['nota'])] for sev, txt in graves[:12]]
+        t = Table(rows, colWidths=[2 * cm, Ancho - 2 * cm])
+        t.setStyle(TableStyle([('FONTNAME', (0, 0), (0, -1), 'DejaVu-Bold'), ('FONTSIZE', (0, 0), (0, -1), 7.5),
+                               ('VALIGN', (0, 0), (-1, -1), 'TOP'), ('LINEBELOW', (0, 0), (-1, -1), 0.3, AZUL_CLARO)]
+                              + [('TEXTCOLOR', (0, i), (0, i), ROJO if sev == 'alerta' else AZUL_MED)
+                                 for i, (sev, _) in enumerate(graves[:12])]))
         E.append(t)
-    else:
-        E.append(P('Sin avisos.'))
 
     doc.build(E)
     return destino

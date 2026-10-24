@@ -41,6 +41,18 @@ def texto(txt):
     return dict(t='texto', texto=txt)
 
 
+def seccion(letra, texto_):
+    return dict(t='seccion', letra=letra, texto=texto_)
+
+
+def sub(texto_):
+    return dict(t='sub', texto=texto_)
+
+
+def figura(titulo_, fig, ancho):
+    return dict(t='figura', titulo=titulo_, fig=fig, ancho=ancho)
+
+
 def nota(txt):
     return dict(t='nota', texto=nota_limpia(txt))
 
@@ -145,6 +157,52 @@ def _k_simbolica(p):
 # ----------------------------------------------------------------------------
 # Análisis modal espectral
 # ----------------------------------------------------------------------------
+def _bloques_masas(p, M, nv):
+    n = p['n']
+    B = []
+    if p['cargas'] is not None:
+        filas = [[i + 1, float(p['cargas'][i]), f'{_g(p["cargas"][i])} t · 1000 / 981', float(M[i, i])] for i in range(n)]
+        B.append(tabla('Masa de cada nivel', ['Nivel', 'W (t)', 'm = W·1000 / g', 'm (kg·s²/cm)'], filas, 5))
+    else:
+        B.append(nota('Las masas vienen dadas directamente en la matriz M del problema.'))
+
+    B.append(matriz('M', M, 4, 'kg·s²/cm', nv, nv, latex_nombre=r'\mathbf{M}'))
+    return B
+
+
+def _bloques_rigidez(p, K, nv):
+    n = p['n']
+    B = []
+    if 'geom' in p:
+        filas = []
+        for c in _columnas_modelo(p):
+            tipo, exp, k, L = _tipo_y_expresion(c, p['alturas'])
+            nivel_txt = str(c['nivel']) + (f'–{c["hasta"]}' if c.get('hasta', c['nivel']) > c['nivel'] else '')
+            filas.append([nivel_txt, c['eje'], c['texto'], float(c['I']), float(c['E']), L / 100.0, tipo, exp, k])
+        B.append(tabla('Rigidez de cada columna  (k en kg/cm, I en cm⁴, E en kg/cm², L en m)',
+                       ['Nivel', 'Eje', 'Sección', 'I', 'E', 'L (m)', 'Tipo', 'Cálculo', 'k'], filas, 3))
+        sim, por_nivel, cruzan = _k_simbolica(p)
+        if sim is not None:
+            lineas = []
+            for nivel in sorted(por_nivel):
+                cs = [c for c in _columnas_modelo(p) if c['nivel'] == nivel and c.get('hasta', nivel) == nivel]
+                lineas.append(f'k_{nivel} = ' + ' + '.join(_g(c['k']) for c in cs) + f' = {_g(por_nivel[nivel])} kg/cm')
+            for c in cruzan:
+                lineas.append(f'k_c{c["eje"]} = {_g(c["k"])} kg/cm  (columna del eje {c["eje"]} que cruza del nivel {c["nivel"]} al {c["hasta"]})')
+            B.append(tabla('Rigidez de cada nivel (suma de sus columnas)', ['Rigidez del nivel'], [[l] for l in lineas]))
+            B.append(texto('Planteamiento de K con las rigideces de nivel:'))
+            B.append(matriz('K (simbólica)', np.zeros((n, n)), 0, '', nv, nv, simbolica=sim, latex_nombre=r'\mathbf{K}'))
+        else:
+            B.append(nota('Este modelo no es un marco de cortante simple (vigas flexibles o apoyos especiales): K se obtuvo '
+                          'por condensación estática del marco completo, no sumando k por nivel.'))
+        B.append(texto('Matriz K con números:'))
+    else:
+        B.append(nota('La matriz de rigidez viene dada directamente en el problema.'))
+    B.append(matriz('K', K, 4, 'kg/cm', nv, nv, latex_nombre=r'\mathbf{K}'))
+
+    return B
+
+
 def detalle_modal(res):
     p, n = res['p'], res['p']['n']
     clave = res['clave']
@@ -173,12 +231,7 @@ def detalle_modal(res):
     B.append(paso(2, 'Matriz de masas M',
                   'Voy a convertir el peso de cada nivel en masa, m = W / g, con g = 981 cm/s², y a colocarla en la diagonal de M.',
                   'M es diagonal porque la masa de cada piso se concentra en su nivel (modelo de cortante).'))
-    if p['cargas'] is not None:
-        filas = [[i + 1, float(p['cargas'][i]), f'{_g(p["cargas"][i])} t · 1000 / 981', float(M[i, i])] for i in range(n)]
-        B.append(tabla('Masa de cada nivel', ['Nivel', 'W (t)', 'm = W·1000 / g', 'm (kg·s²/cm)'], filas, 5))
-    else:
-        B.append(nota('Las masas vienen dadas directamente en la matriz M del problema.'))
-    B.append(matriz('M', M, 4, 'kg·s²/cm', nv, nv, latex_nombre=r'\mathbf{M}'))
+    B += _bloques_masas(p, M, nv)
 
     B_masa, B = B, []
     # ---- 3 rigidez
@@ -186,32 +239,7 @@ def detalle_modal(res):
     B.append(paso(3, 'Matriz de rigidez K',
                   'Voy a calcular la rigidez lateral de cada columna (12EI/L³ si está empotrada, 3EI/L³ si tiene una articulación, 0 con rodillo).',
                   'Después sumo las columnas de cada nivel (k_i) y ensamblo K: en la diagonal k_i + k_(i+1) y fuera de ella −k_(i+1).'))
-    if 'geom' in p:
-        filas = []
-        for c in _columnas_modelo(p):
-            tipo, exp, k, L = _tipo_y_expresion(c, p['alturas'])
-            nivel_txt = str(c['nivel']) + (f'–{c["hasta"]}' if c.get('hasta', c['nivel']) > c['nivel'] else '')
-            filas.append([nivel_txt, c['eje'], c['texto'], float(c['I']), float(c['E']), L / 100.0, tipo, exp, k])
-        B.append(tabla('3.1 Rigidez de cada columna  (k en kg/cm, I en cm⁴, E en kg/cm², L en m)',
-                       ['Nivel', 'Eje', 'Sección', 'I', 'E', 'L (m)', 'Tipo', 'Cálculo', 'k'], filas, 3))
-        sim, por_nivel, cruzan = _k_simbolica(p)
-        if sim is not None:
-            lineas = []
-            for nivel in sorted(por_nivel):
-                cs = [c for c in _columnas_modelo(p) if c['nivel'] == nivel and c.get('hasta', nivel) == nivel]
-                lineas.append(f'k_{nivel} = ' + ' + '.join(_g(c['k']) for c in cs) + f' = {_g(por_nivel[nivel])} kg/cm')
-            for c in cruzan:
-                lineas.append(f'k_c{c["eje"]} = {_g(c["k"])} kg/cm  (columna del eje {c["eje"]} que cruza del nivel {c["nivel"]} al {c["hasta"]})')
-            B.append(tabla('3.2 Rigidez de cada nivel (suma de sus columnas)', ['Rigidez del nivel'], [[l] for l in lineas]))
-            B.append(texto('3.3 Planteamiento de K con las rigideces de nivel:'))
-            B.append(matriz('K (simbólica)', np.zeros((n, n)), 0, '', nv, nv, simbolica=sim, latex_nombre=r'\mathbf{K}'))
-        else:
-            B.append(nota('Este modelo no es un marco de cortante simple (vigas flexibles o apoyos especiales): K se obtuvo '
-                          'por condensación estática del marco completo, no sumando k por nivel.'))
-        B.append(texto('3.4 Matriz K con números:'))
-    else:
-        B.append(nota('La matriz de rigidez viene dada directamente en el problema.'))
-    B.append(matriz('K', K, 4, 'kg/cm', nv, nv, latex_nombre=r'\mathbf{K}'))
+    B += _bloques_rigidez(p, K, nv)
 
     B_rig = B
     B = B_base
@@ -645,3 +673,105 @@ def bloques_a_hoja(ws, bloques):
     for col in range(1, 12):
         ws.column_dimensions[ws.cell(1, col).column_letter].width = 19
     ws.column_dimensions['A'].width = 24
+
+
+# ----------------------------------------------------------------------------
+# Formato compacto (PDF): como las memorias de los exámenes
+# ----------------------------------------------------------------------------
+def _sin_explicaciones(bloques):
+    """Quita el título grande y convierte cada paso en un subtítulo (sin sus dos líneas de explicación)."""
+    out = []
+    for b in bloques:
+        if b['t'] == 'titulo':
+            continue
+        out.append(sub(f'{b["texto"]}') if b['t'] == 'paso' else b)
+    return out
+
+
+def _compacto_modal(res):
+    p, n = res['p'], res['p']['n']
+    nv = _niveles(n)
+    M, K = np.asarray(p['M'], float), np.asarray(p['K'], float)
+    modos = [f'Modo {j + 1}' for j in range(n)]
+    B = [seccion('A', 'Matrices de masa y de rigidez, periodos y formas modales')]
+    aj = p.get('ajuste_periodo')
+    if aj:
+        B.append(sub('Peso obtenido del periodo medido'))
+        B += [b for b in _bloques_ajuste(p, aj, M, K) if b['t'] != 'paso']
+    else:
+        B.append(sub('Matriz de masas M'))
+        B += _bloques_masas(p, M, nv)
+    B.append(sub('Matriz de rigidez K'))
+    B += [b for b in _bloques_rigidez(p, K, nv) if b['t'] != 'texto']
+    lam, w, f, T, fi = res['lam'], res['w'], res['f'], res['T'], np.asarray(res['fi'], float)
+    mo = res['normativa']['modos']
+    B += [sub('Periodos, frecuencias, participación y formas modales'),
+          tabla('', ['Modo', 'λ = ω² (rad/s)²', 'ω (rad/s)', 'f (Hz)', 'T (s)', 'γ', 'Masa efectiva'],
+                [[j + 1, float(lam[j]), float(w[j]), float(f[j]), float(T[j]), float(res['gam'][j]), float(mo['m_ef'][j])]
+                 for j in range(n)], 5),
+          matriz('Φ (formas modales; cada columna es un modo)', fi, 5, '', nv, modos),
+          figura('Formas modales', ame.fig_modal(res), 17)]
+
+    # ---- B. espectro y fuerzas
+    clave_q = ame.CLAVE_ESTADO[p['estado']]
+    dl = res['clave'] == 'DL'
+    pq = p if clave_q == 'SV' else dict(p, Q=np.array([1.0]))
+    Sa_el = ame._interp(T, res['serie'], ame.espectro(dict(p, Ks=1.0), 1.0, 1.0, res['serie'], dl=True)[0])
+    Sa_d = np.asarray(res['Sa_modal'][:, 0], float)
+    B.append(seccion('B', 'Espectro y fuerzas sísmicas de diseño · modal espectral'))
+    quiero = ('Q', 'k1', 'R0', 'k2', 'R = ', "R′", 'Q·R′ (distorsiones)', 'FC·Q·R′', 'γc', 'Ks', 'Amortiguamiento')
+    filas_n = [[a_, b_] for a_, b_, _ in res['normativa']['factores'] if str(a_).startswith(quiero)]
+    pares = []
+    for i in range(0, len(filas_n), 2):
+        pares.append(filas_n[i] + (filas_n[i + 1] if i + 1 < len(filas_n) else ['', '']))
+    B.append(tabla('Parámetros del espectro y de la reducción', ['Concepto', 'Valor', 'Concepto', 'Valor'], pares))
+    if dl:
+        enc = ['Modo', 'T (s)', 'Sa(T) elástica (cm/s²)', 'Ks', 'Sa·Ks (cm/s²)', 'en g']
+        filas = [[j + 1, float(T[j]), float(Sa_el[j]), float(p['Ks']), float(Sa_d[j]), float(Sa_d[j] / G)] for j in range(n)]
+    else:
+        q_, r_ = ame._q_r(pq, float(pq['Q'][0]), T, clave_q)
+        k2 = [0.0 if p['R_unitaria'] else float(ame._k2(T[j], p['Ta'])) for j in range(n)]
+        enc = ['Modo', 'T (s)', 'Sa(T) elástica (cm/s²)', "Q'", 'k₂', "R'", "Q'·R'", "Sa/(Q'R') (cm/s²)", 'en g']
+        filas = [[j + 1, float(T[j]), float(Sa_el[j]), float(q_[j]), k2[j], float(r_[j]), float(q_[j] * r_[j]), float(Sa_d[j]),
+                  float(Sa_d[j] / G)] for j in range(n)]
+    B.append(tabla('Ordenada espectral de cada modo', enc, filas, 4))
+    if res.get('a_min'):
+        B.append(nota(f'Ordenada mínima a_min = {res["a_min"]:.4f} cm/s² ({res["a_min_g"]:.5f} g).'))
+    B.append(figura('Espectro elástico y de diseño', ame.fig_espectros_comparados(res), 14))
+
+    d, F = np.asarray(res['d'], float), np.asarray(res['F'], float)
+    Ff = np.asarray(res['F_final'], float)
+    B += [sub('Desplazamientos y fuerzas modales'),
+          matriz('δ (cada columna es un modo)', d, 6, 'cm', nv, modos),
+          matriz('F (cada columna es un modo)', F, 3, 'kg', nv, modos),
+          formula('', f'Combinación {p["combinacion"]}: ' + {'SRSS': 'F_i = √( Σ_j F_ij² )', 'CQC': 'F_i = √( Σ_j Σ_k ρ_jk F_ij F_ik )'}.get(
+              p['combinacion'].split()[0], 'F_i = Σ_j |F_ij|')),
+          tabla('Fuerza de cada modo y combinada, por nivel (kg)', ['Nivel'] + modos + ['Combinada'],
+                [[i + 1] + [float(F[i, j]) for j in range(n)] + [float(Ff[i])] for i in range(n - 1, -1, -1)], 2)]
+    t_ = res['tabla_din']
+    FC = 1.0 if dl else p['factor_Fu']
+    B += [sub(f'Fuerzas sísmicas de diseño (FC = {FC:g})'),
+          tabla('', ['Nivel', 'H (m)', 'F (t)', 'Fu (t)', 'Vu (t)', 'Mvu (t·m)'],
+                [[int(t_['nivel'][i]), float(t_['h'][i]), float(t_['F'][i]), float(t_['Fu'][i]), float(t_['Vu'][i]),
+                  float(t_['Mvu'][i])] for i in range(n)], 4),
+          texto(f'Vu en la base = {float(t_["Vu"][-1]):.4f} t     Σ Mvu (momento de volteo) = {float(t_["Mvu"].sum()):.4f} t·m'),
+          figura('Diagramas de Fu, Vu y Mvu', ame.fig_diagramas(res), 12.5)]
+    if not dl:
+        qr = [b_ for a_, b_, _ in res['normativa']['factores'] if str(a_).startswith('Q·R′ (distorsiones)')]
+        if qr:
+            B.append(texto(f"Factor Q·R′ por el que se multiplican las distorsiones elásticas: {qr[0]}"))
+    enc, filas = ame.tabla_distorsiones(res)
+    B.append(tabla('Distorsiones de entrepiso por estado límite', enc, filas, 5))
+    return B
+
+
+def compacto(res, metodo='ambos'):
+    """Bloques de la memoria compacta: A (matrices y modos), B (espectro y fuerzas) y C (estático)."""
+    B = []
+    if metodo in ('ambos', 'modal'):
+        B += _compacto_modal(res)
+    if metodo in ('ambos', 'estatico') and 'tabla_est' in res:
+        B.append(seccion('C', 'Método estático y factor de escalamiento'))
+        B += _sin_explicaciones(detalle_estatico(res))
+        B.append(figura('Diagramas de Fu, Vu y Mvu (estático)', ame.fig_diagramas(res, 'estatico'), 12.5))
+    return B
