@@ -2355,6 +2355,8 @@ EJEMPLOS_MODELO = {
     # Problema de tarea: 4 niveles; C1 50x50 de concreto (E = 221.35944 t/cm²) y C2 = IR 305x21.1 de acero (E = 2.1e6 kg/cm²).
     # En el piso del nivel 3 no hay losa en la crujía 3, así que la columna del eje 4 es una sola de 7 m (del piso 2 al 4).
     # Vigas: 25x50 de concreto en los pisos 1 y 2; IR 305x21.1 de acero en los pisos 3 y 4 (la ampliación).
+    # Conexión acero-concreto: el enunciado del profesor dice que lleva placa base con anclas y sin cartabones, por lo que se
+    # asume una articulación (apoyo fijo): las columnas de acero se articulan en su base (3EI/L³).
     # Espectro: valores de la captura del problema (grupo A, ocupación inmediata, sismo base de diseño).
     'Ejemplo 12 (tarea: columnas mixtas y piso sin losa en una crujía)': dict(
         crujias='5 4 4.5', vigas='rigidas', material='Concreto', direccion='X', unidad_E='t/cm²', E='221.35944',
