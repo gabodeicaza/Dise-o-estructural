@@ -594,6 +594,13 @@ def mostrar_bloques(bloques):
         elif t == 'paso':
             st.markdown(f'<div class="det-paso"><span class="n">PASO {b["n"]}</span><span class="tt">{b["texto"]}</span></div>'
                         f'<div class="det-expl">{"<br>".join(b["expl"])}</div>', unsafe_allow_html=True)
+        elif t == 'destacado':
+            st.markdown(f'**{b["titulo"]}**')
+            for i0 in range(0, len(b['items']), 4):
+                cols_d = st.columns(min(4, len(b['items']) - i0))
+                for col_d, (e_, v_, dt_) in zip(cols_d, b['items'][i0:i0 + 4]):
+                    col_d.metric(e_, v_)
+                    col_d.caption(dt_)
         elif t == 'formula':
             st.latex(b['latex'])
         elif t == 'matriz':
@@ -742,6 +749,7 @@ with T_res:
         tab = dict(zip(NOMBRES, st.tabs(NOMBRES)))
         with tab['Resumen']:
             st.markdown(f'**Análisis de diseño: {p["estado"]}** · {res["n_modos"]} de {n} modos · {p["combinacion"]}')
+            mostrar_bloques(ame_detalle.bloques_aceleraciones(res))
             enc, filas = ame_detalle.resumen_metodos(res)
             mostrar(pd.DataFrame(filas, columns=enc), 3)
             if fe > 1:

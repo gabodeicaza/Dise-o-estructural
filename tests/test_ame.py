@@ -1984,3 +1984,31 @@ def test_pagina_herramienta_masas_desde_los_modos():
     assert not at.exception
     assert at.session_state['modo'].startswith('Matrices') and at.session_state['alturas_txt'] == '3 3'
     assert at.session_state['M_txt'].split()[0].startswith('0.0152916')
+
+
+def test_aceleraciones_destacadas_en_todos_los_analisis():
+    import ame_detalle
+    from openpyxl import load_workbook
+    r = correr(EJ7)
+    bq = ame_detalle.bloques_aceleraciones(r)
+    assert [b['t'] for b in bq] == ['destacado', 'destacado']
+    modal, est = bq
+    assert len(modal['items']) == r['p']['n'] and modal['items'][0][1].endswith(' g') and modal['items'][0][2].endswith('cm/s²')
+    assert f'{r["estatico"]["C"]:.5f} g' == est['items'][0][1]
+    # detalle paso a paso (página, texto y Excel), PDF compacto
+    for B in (ame_detalle.detalle_modal(r), ame_detalle.detalle_estatico(r), ame_detalle.compacto(r, 'ambos')):
+        assert any(b['t'] == 'destacado' for b in B)
+    assert 'ACELERACIONES ESPECTRALES DE DISEÑO' in ame.reporte_texto(r) and 'ACELERACIÓN DEL MÉTODO ESTÁTICO' in ame.reporte_texto(r)
+    buf = io.BytesIO()
+    ame.exportar_excel(r, buf)
+    wb = load_workbook(io.BytesIO(buf.getvalue()))
+    textos = ' '.join(str(c.value) for ws in wb for fila in ws.iter_rows() for c in fila if c.value is not None)
+    assert 'Aceleraciones espectrales de diseño' in textos and 'Aceleración del método estático' in textos
+    pymupdf = pytest.importorskip('pymupdf')
+    pdf = io.BytesIO()
+    ame_pdf.memoria_pdf(r, pdf, proyecto='P', autor='A')
+    texto_pdf = ''.join(pg.get_text() for pg in pymupdf.open(stream=pdf.getvalue(), filetype='pdf'))
+    assert 'Aceleraciones espectrales de diseño' in texto_pdf and 'Aceleración del método estático' in texto_pdf
+    # limitación de daño también las muestra (Sa·Ks)
+    dl = correr(dict(EJ2, intensidad='Frecuente'))
+    assert 'Sa·Ks' in ame_detalle.items_aceleraciones_modal(dl)[0][0]

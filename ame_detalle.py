@@ -41,6 +41,11 @@ def texto(txt):
     return dict(t='texto', texto=txt)
 
 
+def destacado(titulo_, items):
+    """Cifras grandes y evidentes: items = [(etiqueta, valor, detalle)] con valor y detalle ya en texto."""
+    return dict(t='destacado', titulo=titulo_, items=[list(i) for i in items])
+
+
 def seccion(letra, texto_):
     return dict(t='seccion', letra=letra, texto=texto_)
 
@@ -157,6 +162,33 @@ def _k_simbolica(p):
 # ----------------------------------------------------------------------------
 # Análisis modal espectral
 # ----------------------------------------------------------------------------
+def items_aceleraciones_modal(res):
+    """(etiqueta, 'x g', 'y cm/s²') de la ordenada espectral de diseño de cada modo."""
+    T = res['T']
+    Sa = np.asarray(res['Sa_modal'][:, 0], float)
+    nombre = 'Sa·Ks' if res['clave'] == 'DL' else 'Sa de diseño'
+    return [(f'Modo {j + 1} · T = {float(T[j]):.4f} s ({nombre})', f'{Sa[j] / G:.5f} g', f'{Sa[j]:.3f} cm/s²')
+            for j in range(len(T))]
+
+
+def items_aceleraciones_estatico(res):
+    """Coeficiente sísmico C del método estático, en g y en cm/s²."""
+    se = res['estatico']
+    items = [('Coeficiente sísmico C (gobierna: ' + str(se['gobierna']) + ')', f'{se["C"]:.5f} g', f'{se["C"] * G:.3f} cm/s²')]
+    if 'C_pl' in se and 'C_0' in se:
+        items += [('En el plato del espectro', f'{se["C_pl"]:.5f} g', f'{se["C_pl"] * G:.3f} cm/s²'),
+                  ('En T = 0', f'{se["C_0"]:.5f} g', f'{se["C_0"] * G:.3f} cm/s²')]
+    return items
+
+
+def bloques_aceleraciones(res):
+    """Las aceleraciones de todos los análisis, para el resumen."""
+    B = [destacado('Aceleraciones espectrales de diseño · modal espectral', items_aceleraciones_modal(res))]
+    if 'tabla_est' in res:
+        B.append(destacado('Aceleración del método estático', items_aceleraciones_estatico(res)))
+    return B
+
+
 def _bloques_masas(p, M, nv):
     n = p['n']
     B = []
@@ -300,7 +332,8 @@ def detalle_modal(res):
               f_sa,
               formula(r'S_a^{\,diseño}(T_j)=S_a(T_j)\cdot K_s', 'Sa_diseño(T_j) = Sa(T_j) · Ks'),
               tabla('', ['Modo', 'T (s)', 'Sa(T) elástica (cm/s²)', 'Ks', 'Sa·Ks (cm/s²)', 'Sa·Ks (g)'],
-                    [[j + 1, float(T[j]), float(Sa_el[j]), float(p['Ks']), float(Sa_d[j]), float(Sa_d[j] / G)] for j in range(n)], 5)]
+                    [[j + 1, float(T[j]), float(Sa_el[j]), float(p['Ks']), float(Sa_d[j]), float(Sa_d[j] / G)] for j in range(n)], 5),
+              destacado('Aceleraciones espectrales de diseño', items_aceleraciones_modal(res))]
     else:
         q_, r_ = ame._q_r(pq, Q0, T, clave_q)
         B += [paso(6, 'Ordenadas espectrales de cada modo',
@@ -314,7 +347,8 @@ def detalle_modal(res):
               formula(r'a_j=\dfrac{S_a(T_j)}{Q^{\prime}(T_j)\,R^{\prime}(T_j)}', "a_j = Sa(T_j) / (Q'(T_j) · R'(T_j))"),
               tabla('', ['Modo', 'T (s)', 'Sa(T) elástica (cm/s²)', "Q'", "R'", "Q'·R'", "Sa/(Q'R') (cm/s²)", 'en g'],
                     [[j + 1, float(T[j]), float(Sa_el[j]), float(q_[j]), float(r_[j]), float(q_[j] * r_[j]), float(Sa_d[j]),
-                      float(Sa_d[j] / G)] for j in range(n)], 5)]
+                      float(Sa_d[j] / G)] for j in range(n)], 5),
+              destacado('Aceleraciones espectrales de diseño', items_aceleraciones_modal(res))]
         if res.get('a_min'):
             B.append(nota(f'Ordenada mínima a_min = {res["a_min"]:.4f} cm/s² ({res["a_min_g"]:.5f} g).'))
     if p.get('Sa_manual') is not None:
@@ -452,7 +486,8 @@ def detalle_estatico(res):
                l1, f'Para este problema gobierna {se["gobierna"]}: C = {se["C"]:.6f} g.'),
           formula(r'C=\max\left\{\dfrac{c}{Q^{\prime}R^{\prime}}\ (\text{plato}),\ \dfrac{a_0}{Q^{\prime}R^{\prime}}\ (T=0)\right\}',
                   "C = máx { c/(Q'R') en el plato ; a0/(Q'R') en T = 0 }"),
-          tabla('', enc, filas, 5)]
+          tabla('', enc, filas, 5),
+          destacado('Aceleración del método estático', items_aceleraciones_estatico(res))]
 
     # ---- 3 cortante basal
     WT = float(se['W_T'])
@@ -542,6 +577,8 @@ def bloques_a_texto(bloques):
             for fila in b['filas']:
                 s.append('  '.join(f'{_fmt(v, b["dec"]):>16}' for v in fila))
             s.append('')
+        elif t == 'destacado':
+            s += [b['titulo'].upper()] + [f'   {e}:  {v}   ({dt})' for e, v, dt in b['items']] + ['']
         elif t in ('texto', 'nota'):
             s += [b['texto'], '']
     return '\n'.join(s)
@@ -667,6 +704,18 @@ def bloques_a_hoja(ws, bloques):
                         c_.number_format = fmt(b['dec'])
                 sig()
             sig(2)
+        elif t == 'destacado':
+            amarillo = PatternFill('solid', fgColor='FFF2CC')
+            esc(b['titulo'], font=Font(bold=True, size=12, color='13315C'))
+            sig()
+            for e_, v_, dt_ in b['items']:
+                esc(e_, 1, font=Font(bold=True, size=11), fill=amarillo)
+                for col in (2, 3):
+                    ws.cell(fila[0], col).fill = amarillo
+                esc(v_, 4, font=Font(bold=True, size=14, color='1D4E89'), fill=amarillo, alignment=Alignment(horizontal='center'))
+                esc(dt_, 5, font=Font(size=11), fill=amarillo, alignment=Alignment(horizontal='center'))
+                sig()
+            sig(2)
         elif t in ('texto', 'nota'):
             esc(b['texto'], font=Font(italic=(t == 'nota'), size=10))
             sig(2)
@@ -734,6 +783,7 @@ def _compacto_modal(res):
         enc = ['Modo', 'T (s)', 'Sa elástica (cm/s²)', "Q'·R'", 'Sa diseño (cm/s²)', 'Sa diseño (g)', 'Partic.']
         filas = [[j + 1, float(T[j]), float(Sa_el[j]), float(q_[j] * r_[j]), float(Sa_d[j]), float(Sa_d[j] / G), gam[j]]
                  for j in range(n)]
+    B.append(destacado('Aceleraciones espectrales de diseño', items_aceleraciones_modal(res)))
     B.append(tabla('Aceleraciones espectrales y factores de participación modal', enc, filas, 5))
     B.append(texto(f'Suma de los factores de participación = {sum(gam):.5f}'
                    + (f'     Ordenada mínima a_min = {res["a_min"]:.4f} cm/s² ({res["a_min_g"]:.5f} g)' if res.get('a_min') else '')))
@@ -772,8 +822,8 @@ def _compacto_estatico(res):
     H = np.asarray(e['h'], float)
     h_ent = [float(H[i] - (H[i + 1] if i + 1 < n else 0.0)) for i in range(n)]      # altura de entrepiso, arriba -> abajo
     B = [seccion('C', 'Método estático, factor de escala y fuerzas escaladas'),
-         texto(f'cₛ = {se["C"]:.5f} g   (gobierna {se["gobierna"]};  V = cₛ·ΣW = {se["C"]:.5f} · {float(se["W_T"]):.4f} t = '
-               f'{se["C"] * float(se["W_T"]):.4f} t)'),
+         destacado('Aceleración del método estático', items_aceleraciones_estatico(res)),
+         texto(f'V = cₛ·ΣW = {se["C"]:.5f} · {float(se["W_T"]):.4f} t = {se["C"] * float(se["W_T"]):.4f} t'),
          tabla('Fuerzas estáticas', ['Niv.', 'Peso Wi (t)', 'Alt. entrepiso (m)', 'Hi (m)', 'Wi·Hi', 'Fi (t)', 'Vi (t)',
                                      'Mv (t·m)', 'Fu (t)', 'Vu (t)', 'Mvu (t·m)'],
                [[int(e['nivel'][i]), float(Wi[i]), h_ent[i], float(H[i]), float(e['hWi'][i]), float(Fi[i]),

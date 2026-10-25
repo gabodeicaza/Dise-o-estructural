@@ -182,6 +182,19 @@ def _bloques(bloques, st, Ancho):
             E += [Spacer(1, 14), CondPageBreak(9 * cm), ban, Spacer(1, 10)]
         elif t == 'sub':
             E += [CondPageBreak(6 * cm), Spacer(1, 8), P(b['texto'], 'h2')]
+        elif t == 'destacado':
+            celdas = [[Paragraph('<b>' + _escapar(e_) + '</b>', ParagraphStyle('de', parent=st['nota'], textColor=NAVY)),
+                       Paragraph('<font size="14"><b>' + _escapar(v_) + '</b></font>',
+                                 ParagraphStyle('dv', parent=st['base'], textColor=AZUL, alignment=1, leading=17)),
+                       Paragraph(_escapar(dt_), ParagraphStyle('dd', parent=st['nota'], alignment=1))]
+                      for e_, v_, dt_ in b['items']]
+            tt = Table(celdas, colWidths=[Ancho * 0.5, Ancho * 0.25, Ancho * 0.25])
+            tt.setStyle(TableStyle([('BACKGROUND', (0, 0), (-1, -1), colors.HexColor('#FFF4D6')),
+                                    ('LINEBELOW', (0, 0), (-1, -2), 0.4, colors.white),
+                                    ('BOX', (0, 0), (-1, -1), 0.8, colors.HexColor('#E3B341')),
+                                    ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+                                    ('TOPPADDING', (0, 0), (-1, -1), 5), ('BOTTOMPADDING', (0, 0), (-1, -1), 5)]))
+            E += [KeepTogether([P(b['titulo'], 'h2'), tt]), Spacer(1, 8)]
         elif t == 'figura':
             img = _imagen(b['fig'], b['ancho'])
             E += [CondPageBreak(img.drawHeight + 1.8 * cm), P(b['titulo'], 'h2'), img, Spacer(1, 10)]
