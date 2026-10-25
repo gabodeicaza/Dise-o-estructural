@@ -771,6 +771,16 @@ with T_res:
                 st.caption('El factor de escala es menor o igual que 1: las fuerzas dinámicas ya cumplen y no se escalan.')
             st.caption('M volteo entrepiso = momento de volteo en la base de ese entrepiso (Σ Fu·(z − z de la base)); el del '
                        'primer entrepiso es el momento de volteo total en la cimentación.')
+            if 'tabla_est' in res:
+                e = res['tabla_est']
+                st.divider()
+                st.markdown('**Análisis estático**')
+                st.pyplot(ame.fig_diagramas(res, 'estatico'))
+                Fi_ = np.asarray(e['Fi'], float)
+                mostrar(pd.DataFrame({'Nivel': e['nivel'], 'h (m)': e['h'], 'W (t)': e['Wi'], 'F (t)': Fi_,
+                                      'V (t)': np.cumsum(Fi_), 'Mv = F·h (t·m)': Fi_ * np.asarray(e['h'], float),
+                                      'Fu (t)': e['Fu'], 'Vu (t)': e['Vu'], 'Mvu (t·m)': e['Mvu']}))
+                st.caption('Fuerzas del método estático: F = C·W·h/Σ(W·h)·ΣW, con el factor de carga ya aplicado en Fu, Vu y Mvu.')
         with tab['Revisiones']:
             rev = res['revision']
             st.markdown('**Distorsiones de entrepiso por estado límite** (★ = estado de diseño)')
