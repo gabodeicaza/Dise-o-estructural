@@ -78,6 +78,38 @@ IRREGULARIDADES = {
     '5.3.2': 'Reducción brusca de rigidez lateral',
 }
 
+# Factor γc elegido a mano (tablas C5.4.2, C5.5.3 y C5.6.3). La primera opción deja que se calcule con las condiciones marcadas.
+GAMMA_C_AUTO = 'Automático (según las condiciones marcadas)'
+GAMMA_C_OPCIONES = {
+    GAMMA_C_AUTO: None,
+    '1.00 · estructura regular': 1.0,
+    '0.80 · 1 condición de irregularidad (C5.4.2)': 0.8,
+    '0.70 · 2 condiciones (C5.4.2)': 0.7,
+    '0.60 · 3 o más condiciones (C5.4.2) / fuerte torsión sola (C5.5.3)': 0.6,
+    '0.50 · fuerte torsión con otra irregularidad (C5.5.3)': 0.5,
+    '0.33 · fuertemente irregular en elevación (C5.6.3)': 0.33,
+}
+
+
+def gamma_c_elegido(sel):
+    """(factor, texto) del γc elegido a mano, o None si se deja automático. Acepta la etiqueta de la lista o un número."""
+    if sel is None or str(sel).strip() == '' or str(sel).strip() == GAMMA_C_AUTO:
+        return None
+    if sel in GAMMA_C_OPCIONES:
+        f = GAMMA_C_OPCIONES[sel]
+    else:
+        try:
+            f = float(str(sel).split()[0].replace(',', '.'))
+        except ValueError:
+            raise ValueError(f'Factor γc no válido: {sel}.')
+    if not 0 < f <= 1:
+        raise ValueError('El factor γc debe estar entre 0 y 1.')
+    txt = f'γc = {f:g}·γmáx (elegido a mano).'
+    if f == 0.33:
+        txt += " Se debe diseñar el entrepiso débil (y los de abajo) con Q′ = 1 y revisar con análisis no lineal paso a paso."
+    return f, txt
+
+
 FACTOR_CIMENTACION = 0.65        # elementos mecánicos de cimentación = 0.65·R′ (p. 9, inciso 3)
 FACTOR_R_OI = 0.75               # R′ = 0.75·R en ocupación inmediata, R′ = R en seguridad de vida (p. 10)
 ZETA_MATERIAL = {'Concreto': 0.05, 'Acero': 0.03}   # amortiguamiento crítico (p. 14)

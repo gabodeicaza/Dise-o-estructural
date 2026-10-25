@@ -443,6 +443,21 @@ def test_limitacion_de_danos_sin_factor_de_carga():
     assert r['revision']['estados']['DL']['gamma_c'] == 1.0
 
 
+def test_gamma_c_elegido_a_mano_manda_sobre_las_condiciones():
+    assert ntc.gamma_c_elegido(ntc.GAMMA_C_AUTO) is None and ntc.gamma_c_elegido('') is None
+    assert ntc.gamma_c_elegido('0.50 · fuerte torsión con otra irregularidad (C5.5.3)')[0] == 0.5
+    assert ntc.gamma_c_elegido('0.7')[0] == pytest.approx(0.7)
+    with pytest.raises(ValueError):
+        ntc.gamma_c_elegido('1.5')
+    base = correr(EJ2)
+    assert base['p']['gamma_c'] == 1.0
+    r = correr(dict(EJ2, gamma_c_sel='0.60 · 3 o más condiciones (C5.4.2) / fuerte torsión sola (C5.5.3)', irreg=['5.3.2']))
+    assert r['p']['gamma_c'] == pytest.approx(0.6)                       # el elegido manda sobre el automático (0.8)
+    est = r['revision']['estados'][r['clave']]
+    if est['limite'] is not None:
+        assert est['limite'] == pytest.approx(est['limite_base'] * 0.6)
+
+
 @pytest.mark.parametrize('irreg, fuerte_t, fuerte_e, esperado', [
     ([], False, False, 1.0), (['5.3.2'], False, False, 0.8), (['5.2.1', '5.2.3'], False, False, 0.7),
     (['5.2.1', '5.2.3', '5.3.1'], False, False, 0.6), ([], True, False, 0.6), (['5.3.1'], True, False, 0.5),

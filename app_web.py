@@ -69,7 +69,7 @@ MAX_EJES = 20
 DEFECTOS = dict(captura=CAPTURAS[0], crujias='', volado_izq='', volado_der='', subgrupo='B', intensidad='Base de diseño', direccion='X', estado='Automático', Ks='',
                 Q='4', k1='1.0', combinacion='SRSS', zeta='', material='Concreto', E='', fc='', clase=CLASES[0],
                 vigas=VIGAS[0], factor_Fu='1.1', mult_V='1', lim_dl='0.004', lim_sv='0.03', lim_oi='0.005',
-                irreg=[], fuerte_torsion=False, fuerte_elev=False, zona='', regularidad='Regular', b_planta='',
+                irreg=[], fuerte_torsion=False, fuerte_elev=False, gamma_c_sel=ntc.GAMMA_C_AUTO, zona='', regularidad='Regular', b_planta='',
                 R1_otros=True, proyecto='', autor='', modo=MODOS[0], K_txt='', M_txt='', unidades=UNIDADES[0],
                 alturas_txt='', pesos_txt='', criterio_estatico=CRITERIOS[0], unidad_espectro='cm/s²',
                 unidad_E='kg/cm²', unidad_fc='kg/cm²', unidad_seccion='cm', modos=MODOS_OPC[0], modos_n='',
@@ -474,9 +474,13 @@ with T_sismo:
                        help='1 condición: γc = 0.8 · 2: 0.7 · 3 o más: 0.6. Solo aplica a ocupación inmediata y seguridad de vida.')
         st.checkbox('Fuertemente irregular por torsión (5.2.2)', key='fuerte_torsion')
         st.checkbox('Fuertemente irregular en elevación (5.3.3)', key='fuerte_elev')
+        st.selectbox('Factor γc de corrección del límite de distorsión', list(ntc.GAMMA_C_OPCIONES), key='gamma_c_sel',
+                     help='Automático lo calcula con las condiciones marcadas arriba (tablas C5.4.2, C5.5.3 y C5.6.3). '
+                          'Elige un valor si el ejercicio ya te dice cuál usar. Solo aplica a ocupación inmediata y seguridad de vida.')
         gc, gc_txt = ntc.gamma_c(st.session_state['irreg'], st.session_state['fuerte_torsion'],
                                  st.session_state['fuerte_elev'])
-        st.caption(gc_txt)
+        gc_elegido = ntc.gamma_c_elegido(st.session_state['gamma_c_sel'])
+        st.caption(gc_elegido[1] if gc_elegido else gc_txt)
 
     with st.expander('Otros datos normativos'):
         st.text_input('Amortiguamiento ζ', key='zeta', help='Vacío: 0.05 concreto, 0.03 acero. Se usa en CQC; '

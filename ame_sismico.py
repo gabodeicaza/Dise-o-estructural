@@ -344,6 +344,9 @@ def _params_norma(d, material):
         irreg = re.findall(r'5\.[23]\.\d', irreg)
     ft, fe = _flag(d.get('fuerte_torsion')), _flag(d.get('fuerte_elev'))
     gc, txt = ntc.gamma_c(irreg, ft, fe)
+    manual = ntc.gamma_c_elegido(d.get('gamma_c_sel'))
+    if manual:
+        gc, txt = manual
     zona = str(d.get('zona') or '').strip().upper()
     if zona and zona not in ntc.LIMITES_ALTURA_ESTATICO:
         raise ValueError('La zona geotécnica debe ser I, II o III.')
