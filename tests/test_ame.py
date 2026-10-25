@@ -1903,3 +1903,84 @@ def test_ejemplo_16_torre_de_acero_coincide_con_la_hoja_de_un_companero():
         f['apoyo'] = 'Empotrado'
     assert correr(mal)['p']['K'][0, 0] == pytest.approx(40782.0, abs=0.1)
     assert any('poco usual para acero' in tx for _, tx in correr(mal)['avisos'])
+
+
+# ---------------------------------------------------------------- problema inverso: masas desde los modos
+import ame_inverso as inv  # noqa: E402
+
+K_EX2 = np.array([[39.44148, -19.7207407], [-19.7207407, 19.72074074]])
+PHI_EX2 = np.array([[1.0, 1.0], [1.5542, -0.80425]])
+
+
+def test_masas_desde_modos_reproduce_el_examen_2():
+    r = inv.masas_desde_modos(K_EX2, [0.26205, 0.10448], PHI_EX2, longitudes=[10, 8])
+    assert r['masas'] == pytest.approx([0.015291679, 0.012232253], rel=1e-3)
+    assert r['pesos'] == pytest.approx([15.00114, 11.99984], rel=1e-3)
+    assert r['w_dist'] == pytest.approx([1.5001, 1.5000], rel=1e-3)
+    assert r['off'] < 1e-3 and not r['avisos']
+    assert r['T_comprobado'] is not None
+
+
+def test_masas_desde_modos_ida_y_vuelta_con_cualquier_estructura():
+    p = ame.preparar(EJ6)
+    K, M = p['K'], p['M']
+    lam, fi = np.linalg.eig(np.linalg.solve(M, K))
+    orden = np.argsort(lam.real)
+    lam, fi = lam.real[orden], fi.real[:, orden]
+    r = inv.masas_desde_modos(K, lam, fi, entrada=inv.ENTRADAS[3], unidad_K='kg/cm')
+    assert r['masas'] == pytest.approx(np.diag(M), rel=1e-6)
+    assert r['pesos'] == pytest.approx(np.diag(M) * 981 / 1000, rel=1e-6)          # kg·s²/cm -> t
+
+
+def test_masas_desde_modos_entradas_equivalentes_y_rigideces_de_entrepiso():
+    T = np.array([0.26205, 0.10448])
+    a = inv.masas_desde_modos(K_EX2, T, PHI_EX2)
+    b = inv.masas_desde_modos(K_EX2, 2 * np.pi / T, PHI_EX2, entrada=inv.ENTRADAS[1])
+    c = inv.masas_desde_modos(K_EX2, 1 / T, PHI_EX2, entrada=inv.ENTRADAS[2])
+    assert b['masas'] == pytest.approx(a['masas']) and c['masas'] == pytest.approx(a['masas'])
+    assert inv.matriz_k_de_rigideces([19.72074, 19.72074]) == pytest.approx(np.array([[39.44148, -19.72074], [-19.72074, 19.72074]]))
+
+
+@pytest.mark.parametrize('K, valores, phi, texto', [
+    (K_EX2, [0.26, 0.10], np.array([[1.0, 1.0]]), 'deben ser una matriz de 2×2'),
+    (K_EX2, [0.26], PHI_EX2, 'Hacen falta 2 valores'),
+    (K_EX2, [0.26, -0.1], PHI_EX2, 'mayores que cero'),
+    (K_EX2, [0.26, 0.10], np.array([[1.0, 1.0], [2.0, 2.0]]), 'singular'),
+    (np.array([[2.0, -1.0], [0.0, 1.0]]), [0.26, 0.10], PHI_EX2, 'simétrica')])
+def test_masas_desde_modos_errores_claros(K, valores, phi, texto):
+    with pytest.raises(ValueError, match=texto):
+        inv.masas_desde_modos(K, valores, phi)
+
+
+def test_masas_desde_modos_avisa_si_los_datos_no_son_consistentes():
+    r = inv.masas_desde_modos(K_EX2, [0.30, 0.10], PHI_EX2)           # periodos y formas que no corresponden a masas concentradas
+    assert r['avisos']
+    assert any('Paso' in str(b.get('n', '')) or b['t'] == 'paso' for b in inv.bloques(r))
+
+
+def test_masas_desde_modos_texto_para_el_modo_de_matrices():
+    r = inv.masas_desde_modos(K_EX2, [0.26205, 0.10448], PHI_EX2)
+    m_txt, w_txt = inv.texto_M(r)
+    d = dict(modo='matrices', unidades='t, cm', alturas='3 3', pesos=w_txt, K=inv.texto_K(K_EX2), M=m_txt, subgrupo='A2',
+             intensidad='Infrecuente', material='Concreto', Q='2', k1='0.8', zeta='0.05', combinacion='SRSS', factor_Fu='1.1',
+             mult_V='1', estado='Seguridad de vida',
+             espectros={'Infrecuente': dict(a0='103', c='625', Ta='0.4', Tb='1.6', k='0.605', Ts='0.5')})
+    res = correr(d)
+    assert res['tabla_din']['Vu'][-1] == pytest.approx(4.7217, rel=1e-3)           # solución del profesor
+    assert res['tabla_din']['Mvu'].sum() == pytest.approx(2196.2277 / 100, rel=1e-3)
+
+
+def test_pagina_herramienta_masas_desde_los_modos():
+    from streamlit.testing.v1 import AppTest
+    at = AppTest.from_file(str(Path(__file__).resolve().parents[1] / 'app_web.py'), default_timeout=90).run()
+    assert not at.exception
+    assert any('MASAS A PARTIR DE LOS MODOS' in m.value for m in at.markdown)
+    boton = lambda: [b for b in at.button if b.key == 'inv_usar'][0]
+    assert boton().disabled                                   # sin alturas no se puede usar en el análisis
+    at.text_input(key='inv_alturas').set_value('3 3').run()
+    assert not boton().disabled
+    boton().click()
+    at.run()
+    assert not at.exception
+    assert at.session_state['modo'].startswith('Matrices') and at.session_state['alturas_txt'] == '3 3'
+    assert at.session_state['M_txt'].split()[0].startswith('0.0152916')

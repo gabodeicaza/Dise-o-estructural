@@ -13,6 +13,7 @@ import streamlit as st
 import ame_ntc as ntc
 import ame_detalle
 import ame_dimensionado as dim
+import ame_inverso as inv
 import ame_pdf
 import ame_sismico as ame
 from ame_revision import COMBINACIONES
@@ -863,7 +864,7 @@ with T_res:
 
 # ------------------------------------------------------------------ 4 · herramientas
 with T_herr:
-    sub_calc, sub_dim = st.tabs(['Calculadora de EI', 'Dimensionar · resolver al revés'])
+    sub_calc, sub_dim, sub_inv = st.tabs(['Calculadora de EI', 'Dimensionar · resolver al revés', 'Masas desde los modos'])
     with sub_calc:
         st.caption('Cada fila es un miembro con su propia sección y su propio E. Agrega las filas que necesites con el + de la '
                    'tabla. Obtienes I, EI y, si das la altura, la rigidez lateral de la columna. Copia el texto de la sección '
@@ -989,3 +990,69 @@ with T_herr:
                             st.rerun()
                     else:
                         st.caption('Con la captura por columna, escribe estas secciones en la tabla de columnas.')
+    with sub_inv:
+        st.markdown('**Masas y pesos a partir de los modos** · conoces K, los periodos y las formas modales (estructura existente) '
+                    'y el programa despeja la matriz de masas: A = Φ·Λ·Φ⁻¹ y M⁻¹ = A·K⁻¹.')
+        c1, c2 = st.columns(2)
+        k_modo = c1.radio('Rigidez', ['Rigideces de entrepiso k₁, k₂, …', 'Matriz K completa'], key='inv_k_modo', horizontal=True)
+        unidad_k = c2.radio('Unidad de K', list(inv.UNIDADES_K), key='inv_unidad_k', horizontal=True)
+        if k_modo.startswith('Rigideces'):
+            k_txt = st.text_input('Rigidez de cada entrepiso, del nivel 1 al último', value='19.72074 19.72074', key='inv_k_vec',
+                                  help='Con ellas se arma la K tridiagonal de un edificio de cortante.')
+        else:
+            k_txt = st.text_area('Matriz K (una fila por renglón)', value='39.44148 -19.7207407\n-19.7207407 19.72074074',
+                                 key='inv_k_mat', height=110)
+        c1, c2 = st.columns(2)
+        ent = c1.selectbox('Dato de cada modo', list(inv.ENTRADAS), key='inv_entrada')
+        v_txt = c2.text_input('Valores (modo 1 primero)', value='0.26205 0.10448', key='inv_valores',
+                              help='El orden debe ser el de las columnas de las formas modales.')
+        c1, c2 = st.columns([2, 1])
+        phi_txt = c1.text_area('Formas modales: una fila por nivel y una columna por modo', value='1 1\n1.5542 -0.80425',
+                               key='inv_phi', height=110)
+        orient = c2.radio('Orden de las filas', list(inv.ORIENTACIONES), key='inv_orient')
+        c1, c2 = st.columns(2)
+        l_txt = c1.text_input('Longitud de cada nivel (m), opcional', value='10 8', key='inv_long',
+                              help='Para obtener la carga distribuida w = W/L. Del nivel 1 al último.')
+        h_txt = c2.text_input('Alturas de entrepiso (m), opcional', value='', key='inv_alturas',
+                              help='Solo si vas a usar el resultado en el análisis.')
+        r_inv = None
+        try:
+            K_in = (ame.parse_matriz(k_txt, 'K') if not k_modo.startswith('Rigideces')
+                    else inv.matriz_k_de_rigideces(ame.parse_vector(k_txt, 'rigideces de entrepiso')))
+            Phi_in = ame.parse_matriz(phi_txt, 'formas modales')
+            if orient == inv.ORIENTACIONES[1]:
+                Phi_in = Phi_in[::-1]
+            r_inv = inv.masas_desde_modos(K_in, ame.parse_vector(v_txt, 'valores de los modos'), Phi_in, entrada=ent,
+                                          unidad_K=unidad_k,
+                                          longitudes=ame.parse_vector(l_txt, 'longitudes') if l_txt.strip() else None)
+        except ValueError as e_inv:
+            st.error(str(e_inv))
+        if r_inv is not None:
+            for aviso in r_inv['avisos']:
+                st.warning(aviso)
+            cols_inv = {'Nivel': np.arange(1, r_inv['n'] + 1),
+                        f'm ({"t" if unidad_k == "t/cm" else "kg"}·s²/cm)': r_inv['masas'], 'W (t)': r_inv['pesos']}
+            if r_inv['w_dist'] is not None:
+                cols_inv['w (t/m)'] = r_inv['w_dist']
+            mostrar(pd.DataFrame(cols_inv), 5)
+            m_txt_inv, w_txt_inv = inv.texto_M(r_inv)
+
+            def usar_masas():
+                st.session_state['modo'] = MODOS[1]
+                st.session_state['K_txt'] = inv.texto_K(r_inv['K'])
+                st.session_state['M_txt'] = m_txt_inv
+                st.session_state['pesos_txt'] = w_txt_inv
+                st.session_state['unidades'] = UNIDADES[1] if unidad_k == 't/cm' else UNIDADES[0]
+                st.session_state['alturas_txt'] = h_txt.strip()
+
+            try:
+                h_ok = ame.parse_vector(h_txt, 'alturas').size == r_inv['n'] if h_txt.strip() else False
+            except ValueError:
+                h_ok = False
+            st.button('Usar esta K y M en el análisis', key='inv_usar', on_click=usar_masas, disabled=not h_ok,
+                      help='Pasa K, M, los pesos y las alturas a la pestaña «Estructura» en el modo de matrices. Después '
+                           'captura el sismo en «Sismo y norma».')
+            if not h_ok:
+                st.caption(f'Para usar el resultado en el análisis escribe las {r_inv["n"]} alturas de entrepiso (m).')
+            with st.expander('Procedimiento paso a paso', expanded=True):
+                mostrar_bloques(inv.bloques(r_inv))
