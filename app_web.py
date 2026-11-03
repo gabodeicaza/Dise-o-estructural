@@ -257,7 +257,7 @@ with st.sidebar:
                'dimensionado) están en la pestaña 4.')
 
 T_est, T_sismo, T_res, T_herr, T_p3, T_p6 = st.tabs(['1 · Estructura', '2 · Sismo y norma', '3 · Resultados', '4 · Herramientas',
-                                                     '5 · Tercer parcial', '6 · Pórtico y armado'])
+                                                     '5 · Tercer parcial', '6 · Diagramas'])
 
 # ------------------------------------------------------------------ 1 · estructura
 _capt_ahora = st.session_state['captura']
@@ -1072,4 +1072,4 @@ with T_p3:
     ui_parcial3.mostrar()
 
 with T_p6:
-    ui_porticos.mostrar(res, st.session_state.get('crujias', ''))
+    ui_porticos.mostrar(res, st.session_state.get('crujias', ''), modelo, datos)

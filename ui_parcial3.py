@@ -77,10 +77,11 @@ def _mamposteria():
         with st.expander('Procedimiento', expanded=True):
             _pasos(r['pasos'])
         st.markdown('**Entrepiso completo (varios muros en una dirección)**')
+        conf_m = {c: st.column_config.NumberColumn(c, step=0.01, format='%g') for c in ['t', 'L', 'H', 'Pn', 'Vu']}
         df = st.data_editor(pd.DataFrame({'muro': ['A', 'C', 'D', 'E'], 't': [14.0] * 4, 'L': [150.0, 500.0, 400.0, 200.0],
                                           'H': [250.0] * 4, 'Pn': [12142.9, 20250.0, 16200.0, 8100.0],
                                           'Vu': [6020.0, 9960.0, 8340.0, 3250.0]}), num_rows='dynamic', key='mv_tabla',
-                            hide_index=True, width='stretch')
+                            hide_index=True, width='stretch', column_config=conf_m)
         muros = [dict(nombre=str(f['muro']), t=f['t'], L=f['L'], H=f['H'], Pn=f['Pn'], Vu=f['Vu'])
                  for _, f in df.dropna().iterrows() if f['L'] > 0 and f['t'] > 0]
         if muros:
@@ -104,7 +105,8 @@ def _mamposteria():
         R0 = c3.number_input('R0', 1.0, 3.0, 2.0, key='me_R0')
         k1 = c4.number_input('k1', 0.5, 1.5, 1.0, key='me_k1')
         niv = st.data_editor(pd.DataFrame({'Nivel': ['2 (azotea)', '1'], 'W (t)': [70.0, 80.0], 'h (m)': [5.0, 2.5]}),
-                             num_rows='dynamic', key='me_tabla', hide_index=True, width='stretch')
+                             num_rows='dynamic', key='me_tabla', hide_index=True, width='stretch',
+                             column_config={c: st.column_config.NumberColumn(c, step=0.01, format='%g') for c in ['W (t)', 'h (m)']})
         niv = niv.dropna()
         if len(niv) >= 1 and (niv['W (t)'] > 0).all() and (niv['h (m)'] > 0).all():
             e = p3.estatico(niv['W (t)'], niv['h (m)'], c_, k_, Q, R0, k1, 'OI' if estado.startswith('OI') else 'SV', FC)

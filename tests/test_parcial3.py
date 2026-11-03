@@ -120,11 +120,56 @@ def test_envolvente_ida_regreso_simetria_y_diseno():
     assert (env[k]['Mmin'] <= np.minimum(ida[k]['M'], reg[k]['M']) + 1e-9).all()
     sim = 0.5 * (ida[k]['M'] + reg[k]['M'])                   # la parte sin sismo es la misma en ida y regreso
     assert sim == pytest.approx(pt.combinar(res, (1.1, 0, 1.1, 0))[k]['M'])
-    d = pt.disenar_viga(env, k, 25, 50, 5, 250, 4200, 40)
+    d = pt.disenar_viga(env, k, 25, 50, 250, 4200, 20, 20, '#5', '#5')
     sup = [s for s in d['secciones'] if s['lecho'] == 'superior']
-    assert all(s['armado']['As'] >= s['As'] for s in d['secciones'] if s['armado'])
+    assert all(s['armado']['As'] >= s['As'] - 1e-9 and s['armado']['MR'] >= s['Mu'] - 1e-9 for s in d['secciones'] if s['armado'])
     assert d['cortante']['s_usar'] in (5, 10, 15, 20)
     assert [s['posicion'] for s in sup] == ['izquierdo', 'centro', 'derecho']
+    assert set(pt.resumen_vigas(env, res, 250, 4200, {})) == {k_ for k_ in env if k_[0] == 'b'}
+
+
+def test_varilla_sugerida_h_10_sin_7():
+    pt = _portico()[0]
+    assert pt.varilla_sugerida(50)[0] == '#5'
+    assert pt.varilla_sugerida(70)[0] == '#6' and 'no existe' in pt.varilla_sugerida(70)[1]
+    assert pt.varilla_sugerida(30)[0] == '#3'
+
+
+def test_lechos_y_seccion_estrecha():
+    pt = _portico()[0]
+    ok = pt.distribuir_lechos(4, 1.59, 25, 4, 0.95)
+    assert ok['capas'] == [4] and ok['sep_libre'] >= ok['sep_min']
+    s = pt.distribuir_lechos(7, 1.59, 25, 4, 0.95)
+    assert len(s['capas']) == 2 and s['r'] > 4 + 0.95 + 0.79
+    sec = pt.armar_seccion(10.0, 25, 50, 250, 4200, '#5')
+    assert sec['armado']['MR'] >= 10.0
+    pt.figura_secciones(pt.disenar_viga(pt.envolvente(_portico()[1], pt.combinaciones('B'))[0], ('b', 1, 1), 25, 50, 250, 4200,
+                                        20, 20, '#5', '#5'))
+
+
+def test_geometria_sin_losa_columna_continua_y_volado():
+    import ame_porticos as pt
+    E = 14000 * 250 ** 0.5
+    geo = pt.geo_simple([4, 4], [3, 3], [(40, 40), (30, 30)], [(25, 50)] * 2, E,
+                        dict(CM=[2, 2], CV=[.5] * 2, CVacc=[.3] * 2))
+    # nivel 1: sin losa en el tramo 2; el eje 3 no tiene viga en el piso 1 → columna continua hasta el piso 2
+    geo['niveles'][0]['sin'] = {1}
+    for c in geo['niveles'][0]['cols']:
+        if c['eje'] == 3:
+            c['hasta'] = 2
+    for c in geo['niveles'][1]['cols']:
+        if c['eje'] == 3:
+            c['omitir'] = True
+    geo['niveles'][1]['vd'] = 1.5
+    geo['niveles'][1]['etiquetas'] = [1, 2, 'vd']
+    for caso in ('CM', 'CV', 'CVacc'):
+        geo['niveles'][1]['q'][caso] = geo['niveles'][1]['q'][caso] + [1.0]
+    res = pt.resolver_geo(geo, [3.0, 6.0])
+    assert sum(res['caso']['S']['diag'][('c', 1, e)]['V'][0] for e in (1, 2)) + \
+        res['caso']['S']['diag'][('c', 1, 3)]['V'][0] == pytest.approx(9.0, rel=1e-6)
+    assert ('b', 1, 2) not in res['caso']['CM']['diag'] and ('b', 2, 3) in res['caso']['CM']['diag']
+    # el volado de carga 1 t/m y 1.5 m: M en el empotramiento = -wL²/2 (gravedad pura)
+    assert res['caso']['CM']['diag'][('b', 2, 3)]['M'][0] != 0
 
 
 def test_pestana_porticos_sin_errores():
