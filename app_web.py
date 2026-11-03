@@ -16,6 +16,7 @@ import ame_dimensionado as dim
 import ame_inverso as inv
 import ame_pdf
 import ame_sismico as ame
+import ui_parcial3
 from ame_revision import COMBINACIONES
 from ame_secciones import AYUDA_SECCIONES
 
@@ -254,7 +255,8 @@ with st.sidebar:
     st.caption('Flujo: 1 · Estructura → 2 · Sismo y norma → 3 · Resultados. Las herramientas (calculadora de EI y '
                'dimensionado) están en la pestaña 4.')
 
-T_est, T_sismo, T_res, T_herr = st.tabs(['1 · Estructura', '2 · Sismo y norma', '3 · Resultados', '4 · Herramientas'])
+T_est, T_sismo, T_res, T_herr, T_p3 = st.tabs(['1 · Estructura', '2 · Sismo y norma', '3 · Resultados', '4 · Herramientas',
+                                               '5 · Tercer parcial'])
 
 # ------------------------------------------------------------------ 1 · estructura
 _capt_ahora = st.session_state['captura']
@@ -1064,3 +1066,6 @@ with T_herr:
                 st.caption(f'Para usar el resultado en el análisis escribe las {r_inv["n"]} alturas de entrepiso (m).')
             with st.expander('Procedimiento paso a paso', expanded=True):
                 mostrar_bloques(inv.bloques(r_inv))
+
+with T_p3:
+    ui_parcial3.mostrar()
