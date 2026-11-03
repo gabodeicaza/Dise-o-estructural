@@ -17,6 +17,7 @@ import ame_inverso as inv
 import ame_pdf
 import ame_sismico as ame
 import ui_parcial3
+import ui_porticos
 from ame_revision import COMBINACIONES
 from ame_secciones import AYUDA_SECCIONES
 
@@ -255,8 +256,8 @@ with st.sidebar:
     st.caption('Flujo: 1 · Estructura → 2 · Sismo y norma → 3 · Resultados. Las herramientas (calculadora de EI y '
                'dimensionado) están en la pestaña 4.')
 
-T_est, T_sismo, T_res, T_herr, T_p3 = st.tabs(['1 · Estructura', '2 · Sismo y norma', '3 · Resultados', '4 · Herramientas',
-                                               '5 · Tercer parcial'])
+T_est, T_sismo, T_res, T_herr, T_p3, T_p6 = st.tabs(['1 · Estructura', '2 · Sismo y norma', '3 · Resultados', '4 · Herramientas',
+                                                     '5 · Tercer parcial', '6 · Pórtico y armado'])
 
 # ------------------------------------------------------------------ 1 · estructura
 _capt_ahora = st.session_state['captura']
@@ -1069,3 +1070,6 @@ with T_herr:
 
 with T_p3:
     ui_parcial3.mostrar()
+
+with T_p6:
+    ui_porticos.mostrar(res, st.session_state.get('crujias', ''))

@@ -1,4 +1,5 @@
 """Tercer parcial: valida contra los ejemplos de los apuntes del Dr. Rivero (pp. 24-35) y la guía recalculada."""
+import numpy as np
 import pytest
 
 import ame_parcial3 as p
@@ -90,3 +91,46 @@ def test_pestana_tercer_parcial_sin_errores():
     assert any(m.label == 'FE' for m in at.metric)          # mampostería
     assert any(m.label == 'MR (t·m)' for m in at.metric)    # concreto
     assert any(m.label == 'VBu (t)' for m in at.metric)     # viento / estático
+
+
+# ----------------------------------------------------------------- pórtico, envolvente y armado
+def _portico():
+    import ame_porticos as pt
+    E = 14000 * 250 ** 0.5
+    return pt, pt.resolver([4, 5], [3, 3, 3], [(40, 40)] * 3, [(25, 50)] * 3, E,
+                           dict(CM=[2, 2, 2], CV=[.5] * 3, CVacc=[.3] * 3), [3, 6, 9])
+
+
+def test_portico_equilibrio_y_empotramiento_perfecto():
+    pt, res = _portico()
+    assert sum(res['caso']['S']['diag'][('c', 1, e)]['V'][0] for e in (1, 2, 3)) == pytest.approx(18.0)
+    E = 14000 * 250 ** 0.5
+    r1 = pt.resolver([5], [3], [(300, 300)], [(25, 50)], E, dict(CM=[1.0], CV=[0.0], CVacc=[0.0]), [0.0])
+    d = r1['caso']['CM']['diag'][('b', 1, 1)]
+    assert d['M'][0] == pytest.approx(-25 / 12, rel=0.01) and d['M'][20] == pytest.approx(25 / 24, rel=0.01)   # wL²/12 y wL²/24
+
+
+def test_envolvente_ida_regreso_simetria_y_diseno():
+    pt, res = _portico()
+    env, mats = pt.envolvente(res, pt.combinaciones('B'))
+    ida, reg, grav = mats['Sismo ida (+)'], mats['Sismo regreso (−)'], mats['Gravedad']
+    k = ('b', 2, 1)
+    # el sismo suma a un lado y resta al otro: la envolvente cubre ambos y la gravedad
+    assert (env[k]['Mmax'] >= np.maximum(ida[k]['M'], reg[k]['M']) - 1e-9).all()
+    assert (env[k]['Mmin'] <= np.minimum(ida[k]['M'], reg[k]['M']) + 1e-9).all()
+    sim = 0.5 * (ida[k]['M'] + reg[k]['M'])                   # la parte sin sismo es la misma en ida y regreso
+    assert sim == pytest.approx(pt.combinar(res, (1.1, 0, 1.1, 0))[k]['M'])
+    d = pt.disenar_viga(env, k, 25, 50, 5, 250, 4200, 40)
+    sup = [s for s in d['secciones'] if s['lecho'] == 'superior']
+    assert all(s['armado']['As'] >= s['As'] for s in d['secciones'] if s['armado'])
+    assert d['cortante']['s_usar'] in (5, 10, 15, 20)
+    assert [s['posicion'] for s in sup] == ['izquierdo', 'centro', 'derecho']
+
+
+def test_pestana_porticos_sin_errores():
+    pytest.importorskip('streamlit')
+    from pathlib import Path
+    from streamlit.testing.v1 import AppTest
+    at = AppTest.from_file(str(Path(__file__).resolve().parent.parent / 'app_web.py'), default_timeout=180).run()
+    assert not at.exception, [e.value for e in at.exception]
+    assert len(at.tabs) >= 8
