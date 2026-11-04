@@ -35,16 +35,15 @@ def combinaciones(grupo='B', estabilidad=False, FC_acc=1.1):
 
 
 def varilla_sugerida(h):
-    """Regla del profesor: el número de la varilla ≈ h(cm)/10. Devuelve (varilla disponible ≤ h/10, texto)."""
+    """Regla del profesor: el número de la varilla ≈ h(cm)/10; si ese número no existe (no hay #7) se toma la siguiente
+    disponible hacia arriba (h = 70 → #8). Devuelve (varilla, texto)."""
     ref = h / 10.0
-    disp = [v for v, n in NUM_VARILLA.items() if n <= ref + 1e-9] or ['#3']
-    elegida = disp[-1]
-    if abs(ref - round(ref)) < 1e-9 and f'#{int(round(ref))}' in NUM_VARILLA:
-        txt = f'h/10 = {ref:g} → varilla #{int(round(ref))}.'
-    elif abs(ref - round(ref)) < 1e-9:
-        txt = f'h/10 = {ref:g} → no existe la #{int(round(ref))}: elige la {elegida} o la siguiente disponible.'
+    disp = [v for v, n in NUM_VARILLA.items() if n >= ref - 1e-9]
+    elegida = disp[0] if disp else list(NUM_VARILLA)[-1]
+    if f'#{ref:g}' in NUM_VARILLA:
+        txt = f'h/10 = {ref:g} → varilla #{ref:g}.'
     else:
-        txt = f'h/10 = {ref:g} → como máximo la {elegida} (no hay varillas intermedias).'
+        txt = f'h/10 = {ref:g} → no existe la #{ref:g}: se toma la siguiente disponible, {elegida}.'
     return elegida, txt
 
 
@@ -58,7 +57,7 @@ def _etiquetas(nv, ne):
     return nv['etiquetas'] if 'etiquetas' in nv else _tramos_nivel(nv['vi'], nv['vd'], ne - 1)
 
 
-def geo_simple(spans, alturas, col_secc, vig_secc, E, cargas, base='Empotrada', fi_col=1.0, fi_vig=1.0):
+def geo_simple(spans, alturas, col_secc, vig_secc, E, cargas, base='Empotrada', fi_col=1.0, fi_vig=1.0, pp=0.0):
     """Pórtico regular: col_secc/vig_secc = [(b, h)] por nivel (h en el plano del pórtico); cargas = dict de listas por
     piso (valor único por piso o lista por crujía)."""
     xs = np.concatenate([[0.0], np.cumsum(spans)])
@@ -73,12 +72,14 @@ def geo_simple(spans, alturas, col_secc, vig_secc, E, cargas, base='Empotrada', 
         for caso in ('CM', 'CV', 'CVacc'):
             v = cargas.get(caso, [0.0] * n)[k]
             q[caso] = list(v) if isinstance(v, (list, tuple, np.ndarray)) else [float(v)] * (ne - 1)
+            if caso == 'CM' and pp:
+                q[caso] = [x + pp * vb * vh / 1e4 for x in q[caso]]
         niveles.append(dict(cols=cols, viga=dict(A=vb * vh, I=fi_vig * vb * vh ** 3 / 12, E=E, b=vb, h=vh), sin=set(),
                             vi=0.0, vd=0.0, q=q))
     return dict(xs=xs, alturas=list(alturas), niveles=niveles, E=E)
 
 
-def geo_modelo(modelo, datos, cargas_txt):
+def geo_modelo(modelo, datos, cargas_txt, pp=0.0):
     """Geometría del modelo de la pestaña 1 (vigas flexibles). cargas_txt[k] = dict(CM, CV, CVacc) con texto «un valor
     para todos los tramos o uno por tramo» (volado izq. + crujías + volado der.), t/m."""
     import ame_sismico as ame
@@ -108,6 +109,10 @@ def geo_modelo(modelo, datos, cargas_txt):
             q[caso] = list(map(float, v))
         vg = nv['viga']
         h_v = float(vg['alto'])
+        if pp:                              # peso propio de la viga (t/m); un volado sin carga no tiene viga
+            for i_, et in enumerate(etiquetas):
+                if et not in ('vi', 'vd') or any(q[c][i_] for c in q):
+                    q['CM'][i_] += pp * vg['A'] / 1e4
         cols = []
         for c in nv['cols']:
             eq = float(c['eq'])
@@ -255,9 +260,9 @@ def resolver_geo(geo, F_sismo):
     return salida
 
 
-def resolver(spans, alturas, col_secc, vig_secc, E, cargas, F_sismo, base='Empotrada', fi_col=1.0, fi_vig=1.0):
+def resolver(spans, alturas, col_secc, vig_secc, E, cargas, F_sismo, base='Empotrada', fi_col=1.0, fi_vig=1.0, pp=0.0):
     """Pórtico regular de captura rápida (ver geo_simple)."""
-    return resolver_geo(geo_simple(spans, alturas, col_secc, vig_secc, E, cargas, base, fi_col, fi_vig), F_sismo)
+    return resolver_geo(geo_simple(spans, alturas, col_secc, vig_secc, E, cargas, base, fi_col, fi_vig, pp), F_sismo)
 
 
 def combinar(res, coef):
@@ -292,21 +297,49 @@ def desplazamientos(res, caso='S'):
 
 
 # ================================================================ armado por lechos
-def distribuir_lechos(n, db, b, rec, est_db):
+def _capa(m, db, util, x0, sep_min, nmax):
+    """Posiciones (cm, desde la cara izquierda de la sección) de m barras en un lecho. Si caben sueltas se reparten parejo;
+    si no, se agrupan de 2 en 2 (pareja de barras pegadas, la impar al centro) y se reparten los grupos. Devuelve
+    (xs, tamaños de grupo, separación libre mínima entre grupos)."""
+    if m <= nmax:
+        sizes = [1] * m
+    else:
+        pares = m // 2
+        sizes = [2] * (pares // 2) + ([1] if m % 2 else []) + [2] * (pares - pares // 2)
+    ancho = sum(sizes) * db
+    gap = (util - ancho) / (len(sizes) - 1) if len(sizes) > 1 else util - ancho
+    x, xs = x0 - db / 2 + (0 if len(sizes) > 1 else gap / 2), []
+    for s in sizes:
+        xs += [x + db / 2 + i * db for i in range(s)]
+        x += s * db + (gap if len(sizes) > 1 else 0)
+    return xs, sizes, gap
+
+
+def distribuir_lechos(n, db, b, rec, est_db, agrupar=True):
     """Reparte n barras de diámetro db (cm) en lechos dentro del ancho b. Separación libre mínima = máx(db, 2.5 cm) entre
-    barras y entre lechos. Devuelve capas (barras por lecho), r al centroide (cm), separación libre del primer lecho,
-    y si cabe en 3 lechos como máximo."""
+    barras (o entre grupos) y entre lechos. Con agrupar=True, cuando no caben sueltas en un lecho se ponen de 2 en 2 pegadas
+    antes de pasar a un segundo lecho. Devuelve capas (barras por lecho), xs (posición de cada barra por lecho), r al
+    centroide (cm), separación libre mínima, y si cabe en 3 lechos como máximo."""
     sep_min = max(db, 2.5)
     util = b - 2 * (rec + est_db)
     nmax = max(1, int((util + sep_min) // (db + sep_min)))
-    capas, resto = [], n
+    gmax = max(1, int((util + sep_min) // (2 * db + sep_min)))
+    cap = max(nmax, 2 * gmax) if agrupar else nmax
+    x0 = rec + est_db + db / 2
+    x1 = b - rec - est_db - db / 2
+    capas, xs, grupos, gaps, resto = [], [], [], [], n
     while resto > 0:
-        capas.append(min(nmax, resto))
-        resto -= capas[-1]
+        m = min(cap, resto)
+        resto -= m
+        px, sizes, gap = _capa(m, db, x1 - x0 + db, x0, sep_min, nmax)
+        capas.append(m)
+        xs.append(px)
+        grupos.append(sizes)
+        gaps.append(gap if len(sizes) > 1 else util)
     ys = [rec + est_db + db / 2 + i * (db + sep_min) for i in range(len(capas))]
     r = sum(c * y for c, y in zip(capas, ys)) / n
-    sep1 = (util - capas[0] * db) / (capas[0] - 1) if capas[0] > 1 else util
-    return dict(capas=capas, r=r, sep_libre=sep1, sep_min=sep_min, nmax=nmax, cabe=len(capas) <= 3)
+    return dict(capas=capas, xs=xs, grupos=grupos, r=r, sep_libre=min(gaps), sep_min=sep_min, nmax=nmax, cap=cap,
+                agrupado=any(s == 2 for g in grupos for s in g), cabe=len(capas) <= 3, ys=ys)
 
 
 def desarrollo_flexion(Mu_tm, b, h, r, fc, fy, signo=''):
@@ -338,7 +371,7 @@ def desarrollo_flexion(Mu_tm, b, h, r, fc, fy, signo=''):
     return As_d, lin, True, lim
 
 
-def armar_seccion(Mu_tm, b, h, fc, fy, varilla, rec=4.0, est_db=0.95, signo=''):
+def armar_seccion(Mu_tm, b, h, fc, fy, varilla, rec=4.0, est_db=0.95, signo='', agrupar=True):
     """Dimensiona una sección con la varilla elegida: calcula As con la d real del acero en lechos (se itera) y propone el
     número de barras. Devuelve dict con As, lineas, armado (n, varilla, capas, As real, MR, cabe, r, d)."""
     db, a_bar = DIAMETROS[varilla], p3.VARILLAS[varilla]
@@ -348,13 +381,13 @@ def armar_seccion(Mu_tm, b, h, fc, fy, varilla, rec=4.0, est_db=0.95, signo=''):
         if As is None:
             return dict(As=None, lineas=lin, ok=False, lim=lim, armado=None, Mu=Mu_tm)
         n = max(2, math.ceil(As / a_bar - 1e-9))
-        lech = distribuir_lechos(n, db, b, rec, est_db)
+        lech = distribuir_lechos(n, db, b, rec, est_db, agrupar)
         if abs(lech['r'] - r) < 0.02:
             break
         r = lech['r']
     n_ini = n
     for _ in range(30):                           # sube barras mientras el MR con la d real no alcance
-        lech = distribuir_lechos(n, db, b, rec, est_db)
+        lech = distribuir_lechos(n, db, b, rec, est_db, agrupar)
         As_real = n * a_bar
         MR = p3.momento_resistente(As_real, b, h - lech['r'], fc, fy) / 1e5
         if MR + 1e-9 >= Mu_tm or not lech['cabe']:
@@ -365,9 +398,10 @@ def armar_seccion(Mu_tm, b, h, fc, fy, varilla, rec=4.0, est_db=0.95, signo=''):
     lin = list(lin)
     lin.append(f'Varilla {varilla} (Ø {db:.2f} cm, a = {a_bar} cm²): n = As/a = {As / a_bar:.2f} → {n_ini} barras'
                + (f'; con la d real suben a {n}' if n != n_ini else ''))
-    lin.append(f'Lechos: {" + ".join(map(str, lech["capas"]))} barras (caben {lech["nmax"]} por lecho; separación libre '
-               f'mínima {lech["sep_min"]:.2f} cm; en el primer lecho queda {lech["sep_libre"]:.2f} cm) → r al centroide = {lech["r"]:.2f} cm, '
-               f'd = {h - lech["r"]:.2f} cm')
+    forma = ('agrupadas de 2 en 2 (pegadas) ' if lech['agrupado'] else '')
+    lin.append(f'Lechos: {" + ".join(map(str, lech["capas"]))} barras {forma}(sueltas caben {lech["nmax"]} por lecho; separación libre '
+               f'mínima {lech["sep_min"]:.2f} cm; entre barras/grupos queda {lech["sep_libre"]:.2f} cm) → r al centroide = '
+               f'{lech["r"]:.2f} cm, d = {h - lech["r"]:.2f} cm')
     lin.append(f'As real = {n}{varilla} = {As_real:.2f} cm²; MR = {MR:.2f} t·m {"≥" if MR + 1e-9 >= Mu_tm else "<"} Mu = {Mu_tm:.2f} t·m')
     if not lech['cabe']:
         lin.append('No caben en 3 lechos: aumenta el ancho, el peralte o usa una varilla mayor.')
@@ -375,11 +409,11 @@ def armar_seccion(Mu_tm, b, h, fc, fy, varilla, rec=4.0, est_db=0.95, signo=''):
         lin.append(f'As real > As,máx = {lim2["As_max"]:.2f} cm²: cambia la sección.')
     return dict(As=As, lineas=lin, ok=ok_f, lim=lim2, Mu=Mu_tm,
                 armado=dict(armado=f'{n}{varilla}', n=n, varilla=varilla, capas=lech['capas'], As=As_real, MR=MR, cabe=lech['cabe'],
-                            sep_libre=lech['sep_libre'], sep_min=lech['sep_min'], r=lech['r'], d=h - lech['r']))
+                            sep_libre=lech['sep_libre'], sep_min=lech['sep_min'], r=lech['r'], d=h - lech['r'], lech=lech))
 
 
 def disenar_viga(env, clave, b, h, fc, fy, cara_i, cara_d, sup_var, inf_var, est_var='#3', rec=4.0, fy_est=4200.0,
-                 lambda_=1.0):
+                 lambda_=1.0, agrupar=True):
     """Diseña una viga con su envolvente: seis secciones (izq., centro, der. × superior, inferior) con las varillas elegidas
     y los estribos. cara_i/cara_d = distancia del eje al paño de la columna (cm; 0 en un extremo libre)."""
     e = env[clave]
@@ -398,7 +432,7 @@ def disenar_viga(env, clave, b, h, fc, fy, cara_i, cara_d, sup_var, inf_var, est
     for nombre, i in pos.items():
         for lecho, Mu in (('superior', max(0.0, -Mmin[i])), ('inferior', max(0.0, Mmax[i]))):
             var = sup_var if lecho == 'superior' else inf_var
-            s = armar_seccion(Mu, b, h, fc, fy, var, rec, est_db, '−' if lecho == 'superior' else '+')
+            s = armar_seccion(Mu, b, h, fc, fy, var, rec, est_db, '−' if lecho == 'superior' else '+', agrupar)
             s.update(posicion=nombre, lecho=lecho, x=x[i] / 100)
             secciones.append(s)
 
@@ -436,7 +470,7 @@ def caras_columna(geo, clave):
     return hcol(j), hcol(j + 1)
 
 
-def resumen_vigas(env, res, fc, fy, elecciones, est_var='#3', rec=4.0):
+def resumen_vigas(env, res, fc, fy, elecciones, est_var='#3', rec=4.0, agrupar=True):
     """Diseña todas las vigas. elecciones[clave] = (varilla superior, varilla inferior); si falta, la sugerida por h/10."""
     out = {}
     geo = res['geo']
@@ -446,7 +480,7 @@ def resumen_vigas(env, res, fc, fy, elecciones, est_var='#3', rec=4.0):
         b, h = e['b'], e['h']
         sup, inf = elecciones.get(clave, (varilla_sugerida(h)[0],) * 2)
         ci, cd = caras_columna(geo, clave)
-        out[clave] = disenar_viga(env, clave, b, h, fc, fy, ci, cd, sup, inf, est_var, rec)
+        out[clave] = disenar_viga(env, clave, b, h, fc, fy, ci, cd, sup, inf, est_var, rec, agrupar=agrupar)
     return out
 
 
