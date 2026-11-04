@@ -187,6 +187,8 @@ def cargar(d):
                 st.session_state[f'apoyo_{i}'] = est
         except (ValueError, KeyError, TypeError):
             pass
+    if isinstance(d.get('porticos'), dict):          # el ejemplo también llena la pestaña de diagramas
+        ui_porticos.precargar(d['porticos'])
     st.session_state['ver'] = st.session_state.get('ver', 0) + 1
 
 

@@ -2427,6 +2427,21 @@ EJEMPLOS_MODELO = {
                  dict(h='3', cargas='2.5 2.5 2.5 2.5')],
         fc='', subgrupo='A2', intensidad='Infrecuente', Q='2', k1='0.8', zeta='0.03',
         a0='166', c='625', Ta='0.5', Tb='1.8', k='0.525', Ts='0.6', factor_Fu='1.1', mult_V='1'),
+    # Ejercicio de clase (tercer parcial): «Diseñe la viga del nivel 1». Marco de 5 niveles y 6 ejes (5 6 5 5 7 m), columnas de
+    # 70x70, vigas de 35x70, E = 221,359.44 kg/cm². El nivel 4 llega al eje 5 y el 5 al eje 4 (el resto, sin losa ni columna).
+    # Cargas 10, 10, 10.8, 11.6 y 10 t/m (CM + CVacc) y fuerzas 5, 5, 10, 15 y 20 t. Grupo A: agrega el peso propio.
+    # El espectro es ilustrativo (el ejercicio da las fuerzas); 'porticos' llena la pestaña «6 · Diagramas».
+    'Ejemplo 17 (clase: viga del nivel 1, marco de 5 niveles y 6 ejes, columnas 70x70)': dict(
+        crujias='5 6 5 5 7', vigas='flexibles', material='Concreto', direccion='X', unidad_E='kg/cm²', E='221359.44',
+        niveles=[dict(h='3.5', ejes='todos', seccion='70x70', viga='35x70', cargas='10'),
+                 dict(h='3.5', ejes='todos', seccion='70x70', viga='35x70', cargas='10'),
+                 dict(h='3.5', ejes='todos', seccion='70x70', viga='35x70', cargas='10.8'),
+                 dict(h='4.5', ejes='1 2 3 4 5', seccion='70x70', viga='35x70', sin_losa='5', cargas='11.6'),
+                 dict(h='4', ejes='1 2 3 4', seccion='70x70', viga='35x70', sin_losa='4 5', cargas='10')],
+        fc='250', subgrupo='A2', intensidad='Base de diseño', Q='2', k1='1.0', zeta='0.05',
+        a0='114', c='320', Ta='0.9', Tb='2.2', k='0.390', Ts='0.5', factor_Fu='1.1', mult_V='1',
+        porticos=dict(CM=['10', '10', '10.8', '11.6', '10'], F=['5', '5', '10', '15', '20'], fc=250.0, fy=4200.0, grupo='A',
+                      peso_propio=True, gravedad=False, paño=False, estribo='#4', rec=3.0)),
 }
 
 

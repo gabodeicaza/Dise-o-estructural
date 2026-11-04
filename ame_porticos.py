@@ -21,13 +21,13 @@ DIAMETROS = {'#3': 0.95, '#4': 1.27, '#5': 1.59, '#6': 1.91, '#8': 2.54, '#10': 
 NUM_VARILLA = {'#3': 3, '#4': 4, '#5': 5, '#6': 6, '#8': 8, '#10': 10}
 
 
-def combinaciones(grupo='B', estabilidad=False, FC_acc=1.1):
+def combinaciones(grupo='B', estabilidad=False, FC_acc=1.1, gravedad=True):
     """Combinaciones de diseño como coeficientes sobre (CM, CV, CVacc, S): gravitacional, sismo de ida y de regreso
     (apuntes p. 2: FC = 1.1 con CM + CVacc + sismo; 0.9 en estabilidad)."""
     fcm, fcv = (1.5, 1.7) if grupo == 'A' else (1.3, 1.5)
-    c = {'Gravedad': (fcm, fcv, 0.0, 0.0),
-         'Sismo ida (+)': (FC_acc, 0.0, FC_acc, FC_acc),
-         'Sismo regreso (−)': (FC_acc, 0.0, FC_acc, -FC_acc)}
+    c = {'Gravedad': (fcm, fcv, 0.0, 0.0)} if gravedad else {}
+    c.update({'Sismo ida (+)': (FC_acc, 0.0, FC_acc, FC_acc),
+              'Sismo regreso (−)': (FC_acc, 0.0, FC_acc, -FC_acc)})
     if estabilidad:
         c['Estabilidad ida (+)'] = (0.9, 0.0, 0.0, FC_acc)
         c['Estabilidad regreso (−)'] = (0.9, 0.0, 0.0, -FC_acc)
@@ -470,7 +470,7 @@ def caras_columna(geo, clave):
     return hcol(j), hcol(j + 1)
 
 
-def resumen_vigas(env, res, fc, fy, elecciones, est_var='#3', rec=4.0, agrupar=True):
+def resumen_vigas(env, res, fc, fy, elecciones, est_var='#3', rec=4.0, agrupar=True, paño=True):
     """Diseña todas las vigas. elecciones[clave] = (varilla superior, varilla inferior); si falta, la sugerida por h/10."""
     out = {}
     geo = res['geo']
@@ -479,7 +479,7 @@ def resumen_vigas(env, res, fc, fy, elecciones, est_var='#3', rec=4.0, agrupar=T
             continue
         b, h = e['b'], e['h']
         sup, inf = elecciones.get(clave, (varilla_sugerida(h)[0],) * 2)
-        ci, cd = caras_columna(geo, clave)
+        ci, cd = caras_columna(geo, clave) if paño else (0.0, 0.0)
         out[clave] = disenar_viga(env, clave, b, h, fc, fy, ci, cd, sup, inf, est_var, rec, agrupar=agrupar)
     return out
 
@@ -784,7 +784,7 @@ def figura_secciones(dis):
 
 
 # ================================================================ viga continua del nivel: corrido, bastones y anclaje
-def armado_nivel(env, res, k, fc, fy, var_sup, var_inf, est_var='#3', rec=4.0, agrupar=True):
+def armado_nivel(env, res, k, fc, fy, var_sup, var_inf, est_var='#3', rec=4.0, agrupar=True, paño=True):
     """Armado de la viga del nivel k como viga continua (procedimiento de clase):
     1) puntos de diseño a), b), c)… (caras de apoyo y centros de cada crujía);
     2) varillas corridas arriba y abajo con área ≥ As,mín y ≥ 50 % de la mayor As real;
@@ -799,7 +799,7 @@ def armado_nivel(env, res, k, fc, fy, var_sup, var_inf, est_var='#3', rec=4.0, a
     dis, P, Mx, Mn, max_paso = {}, [], [], [], 0.0
     for c in claves:
         e = env[c]
-        ci, cd = caras_columna(geo, c)
+        ci, cd = caras_columna(geo, c) if paño else (0.0, 0.0)
         dis[c] = disenar_viga(env, c, e['b'], e['h'], fc, fy, ci, cd, var_sup, var_inf, est_var, rec, agrupar=agrupar)
         x, L = e['x'] * 100, e['x'][-1] * 100
         mx, mn = e['Mmax'].copy(), e['Mmin'].copy()

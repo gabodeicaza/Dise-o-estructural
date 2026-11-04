@@ -14,6 +14,18 @@ COLS = ['Nivel', 'h (m)', 'Col b (cm)', 'Col h (cm)', 'Viga b (cm)', 'Viga h (cm
 COLS_TXT = ['Nivel', 'CM (t/m)', 'CV máx (t/m)', 'CV acc (t/m)', 'F sismo (t)']
 FUENTES_F = {'Dinámico (SRSS)': 'tabla_din', 'Dinámico escalado al estático': 'tabla_din_esc', 'Estático': 'tabla_est'}
 VARS = list(pt.DIAMETROS)
+OPC_MODELO = ['Modelo de la pestaña 1 (tramos sin losa, columnas continuas, secciones por nivel, volados)',
+              'Pórtico regular (captura rápida)']
+
+
+def precargar(p):
+    """Llena la pestaña con los datos de un ejemplo (clave 'porticos' del ejemplo): cargas por nivel, fuerzas y opciones."""
+    n = len(p['CM'])
+    st.session_state['p6_ver'] = st.session_state.get('p6_ver', 0) + 1
+    st.session_state['p6_dft'] = pd.DataFrame({'Nivel': range(1, n + 1), 'CM (t/m)': list(p['CM']), 'CV máx (t/m)': ['0'] * n,
+                                               'CV acc (t/m)': ['0'] * n, 'F sismo (t)': list(p['F'])})
+    st.session_state.update({'p6_fm': OPC_MODELO[0], 'p6_fc': p['fc'], 'p6_fy': p['fy'], 'p6_grupo': p['grupo'],
+                             'p6_pp': p['peso_propio'], 'p6_grav': p['gravedad'], 'p6_paño': p['paño'], 'p6_est': p['estribo'], 'p6_rec': p['rec']})
 VARS_BARRA = [v for v in VARS if v != '#10'] + ['#10']
 
 
@@ -53,6 +65,7 @@ def _traer(res_sismo, crujias, fuente):
     df = df.copy()
     df['h (m)'] = [_g(round(x, 4)) for x in h]
     df['F sismo (t)'] = [_g(round(x, 4)) for x in F]
+    st.session_state['p6_ver'] = st.session_state.get('p6_ver', 0) + 1
     st.session_state['p6_df'] = df
     tx = st.session_state.get('p6_dft')
     if tx is None or len(tx) != len(F):
@@ -81,9 +94,7 @@ def mostrar(res_sismo=None, crujias_txt='', modelo=None, datos=None):
                '(ductilidad baja, apuntes pp. 31–35).')
     usa_modelo = False
     hay_modelo = modelo is not None and datos is not None and modelo.get('vigas') == 'flexibles'
-    fuente_modelo = st.radio('Geometría del pórtico', ['Modelo de la pestaña 1 (tramos sin losa, columnas continuas, secciones por nivel, volados)',
-                                                       'Pórtico regular (captura rápida)'], key='p6_fm',
-                             index=0 if hay_modelo else 1, horizontal=False)
+    fuente_modelo = st.radio('Geometría del pórtico', OPC_MODELO, key='p6_fm', index=0 if hay_modelo else 1)
     usa_modelo = fuente_modelo.startswith('Modelo')
     if usa_modelo and not hay_modelo:
         st.warning('Para usar el modelo de la pestaña 1 elige **Flexibles (marco plano)** en el tipo de vigas y captura la viga '
@@ -111,6 +122,10 @@ def mostrar(res_sismo=None, crujias_txt='', modelo=None, datos=None):
                          help='Suma γ·b·h (t/m) de la viga de cada nivel a la carga muerta de todos sus tramos.')
     gam = c3.number_input('γ del concreto (t/m³)', 2.0, 2.6, 2.4, 0.05, key='p6_gam', disabled=not usa_pp)
     pp = gam if usa_pp else 0.0
+    paño = st.checkbox('Diseñar en el paño de la columna (como ETABS); desactívalo para usar el momento en el eje del apoyo', True,
+                       key='p6_paño', help='En el ejercicio de clase se diseña con el valor del diagrama en el eje del apoyo.')
+    usa_grav = st.checkbox('Incluir la combinación de gravedad (1.3 CM + 1.5 CV; Grupo A: 1.5 / 1.7) en la envolvente', True,
+                           key='p6_grav', help='Desactívala para diseñar solo con CM + CVacc ± sismo, como en el ejercicio de clase.')
 
     if usa_modelo:
         n = len(datos['niveles'])
@@ -128,7 +143,7 @@ def mostrar(res_sismo=None, crujias_txt='', modelo=None, datos=None):
         conf = {c: st.column_config.TextColumn(c) for c in COLS_TXT[1:4]}
         conf['F sismo (t)'] = st.column_config.TextColumn('F sismo (t)')
         conf['Nivel'] = st.column_config.NumberColumn('Nivel', format='%d', disabled=True)
-        tx = st.data_editor(st.session_state['p6_dft'], hide_index=True, width='stretch', key='p6_editor_t', column_config=conf,
+        tx = st.data_editor(st.session_state['p6_dft'], hide_index=True, width='stretch', key=f'p6_editor_t_{st.session_state.get("p6_ver", 0)}', column_config=conf,
                             disabled=['Nivel'])
         try:
             cargas_txt = [dict(CM=r['CM (t/m)'], CV=r['CV máx (t/m)'], CVacc=r['CV acc (t/m)']) for _, r in tx.iterrows()]
@@ -154,7 +169,7 @@ def mostrar(res_sismo=None, crujias_txt='', modelo=None, datos=None):
         fi_col = c2.number_input('Factor de I en columnas', 0.1, 1.0, 1.0, 0.05, key='p6_fic')
         conf = {c: st.column_config.TextColumn(c) for c in COLS[1:]}
         conf['Nivel'] = st.column_config.NumberColumn('Nivel', step=1, format='%d', disabled=True)
-        df = st.data_editor(st.session_state['p6_df'], num_rows='dynamic', hide_index=True, width='stretch', key='p6_editor',
+        df = st.data_editor(st.session_state['p6_df'], num_rows='dynamic', hide_index=True, width='stretch', key=f'p6_editor_{st.session_state.get("p6_ver", 0)}',
                             column_config=conf).dropna()
         if len(df) < 1:
             st.info('Captura al menos un nivel.')
@@ -182,7 +197,8 @@ def mostrar(res_sismo=None, crujias_txt='', modelo=None, datos=None):
         geo = res['geo']
 
     ne = res['ne']
-    combos = pt.combinaciones(grupo, estab)
+    todas = pt.combinaciones(grupo, estab)
+    combos = pt.combinaciones(grupo, estab, gravedad=usa_grav)
     env, mats = pt.envolvente(res, combos)
     ux, dist = pt.desplazamientos(res)
     with st.expander('Combinaciones de carga usadas'):
@@ -211,7 +227,7 @@ def mostrar(res_sismo=None, crujias_txt='', modelo=None, datos=None):
         st.caption('Distorsiones del sismo de ida sin factor de carga: ' + ' · '.join(
             f'N{i + 1}: {d:.5f}' for i, d in enumerate(dist)) + '. Revisa con tu análisis sísmico los límites γ.')
     with tabs[1]:
-        _fig(pt.figura_diagrama(res, mats['Gravedad'], selector('p6_t1'), f'Gravedad {combos["Gravedad"][:2]}', **kw))
+        _fig(pt.figura_diagrama(res, pt.combinar(res, todas['Gravedad']), selector('p6_t1'), f'Gravedad {todas["Gravedad"][:2]}', **kw))
     with tabs[2]:
         _fig(pt.figura_diagrama(res, mats['Sismo ida (+)'], selector('p6_t2'), 'Sismo de ida: 1.1(CM + CVacc) + 1.1 S', **kw))
     with tabs[3]:
@@ -250,7 +266,7 @@ def mostrar(res_sismo=None, crujias_txt='', modelo=None, datos=None):
                                            'inferior': st.column_config.SelectboxColumn('Varilla inferior', options=VARS, required=True),
                                            'b': st.column_config.NumberColumn(format='%g'), 'h': st.column_config.NumberColumn(format='%g')})
     elec = {k: (r['superior'], r['inferior']) for k, (_, r) in zip(claves, ed.iterrows())}
-    dis = pt.resumen_vigas(env, res, fc, fy, elec, est_var, rec, agrupar)
+    dis = pt.resumen_vigas(env, res, fc, fy, elec, est_var, rec, agrupar, paño)
 
     # advertencia viga más ancha que la columna
     for k in claves:
@@ -299,7 +315,7 @@ def mostrar(res_sismo=None, crujias_txt='', modelo=None, datos=None):
         vs = c2.selectbox('Varilla superior', VARS, index=VARS.index(sug), key=f'p6_nvs_{nivel}_{sug}')
         vi = c3.selectbox('Varilla inferior', VARS, index=VARS.index(sug), key=f'p6_nvi_{nivel}_{sug}')
         st.caption(txt_sug + ' Los renders y tablas de esta pestaña usan estas varillas para toda la viga del nivel.')
-        niv = pt.armado_nivel(env, res, nivel, fc, fy, vs, vi, est_var, rec, agrupar)
+        niv = pt.armado_nivel(env, res, nivel, fc, fy, vs, vi, est_var, rec, agrupar, paño)
         if niv is None:
             st.info('Ese nivel no tiene vigas con carga.')
         else:

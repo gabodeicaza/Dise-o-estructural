@@ -234,3 +234,39 @@ def test_viga_continua_corrido_bastones_y_anclaje():
             if s_['armado']:
                 assert nf * a + 1e-9 >= s_['As'] - 0.5      # tolerancia: la d de la envolvente es la mínima del nivel
     pt.figura_alzado(niv, res)
+
+
+def test_ejemplo_17_clase_viga_del_nivel_1():
+    """El ejercicio de clase: marco de 5 niveles y 6 ejes; los Mu del pizarrón salen en el eje del apoyo (1-2 % por la d)."""
+    import ame_porticos as pt
+    import ame_sismico as ame
+    ej = next(v for k, v in ame.EJEMPLOS_MODELO.items() if k.startswith('Ejemplo 17'))
+    p = ej['porticos']
+    geo = pt.geo_modelo(ame.preparar(ej), ej, [dict(CM=c, CV='0', CVacc='0') for c in p['CM']], pp=2.4)
+    res = pt.resolver_geo(geo, [float(x) for x in p['F']])
+    assert sum(res['caso']['S']['diag'][k]['V'][0] for k in res['caso']['S']['diag'] if k[0] == 'c' and k[1] == 1) == pytest.approx(55.0)
+    env, _ = pt.envolvente(res, pt.combinaciones('A', False, gravedad=False))
+    e1, e5 = env[('b', 1, 1)], env[('b', 1, 5)]
+    assert -e1['Mmin'][0] == pytest.approx(41.6, rel=0.02)                      # a)
+    assert e5['Mmax'].max() == pytest.approx(26.7, rel=0.02)                    # i) centro de la última crujía
+    assert -e5['Mmin'][0] == pytest.approx(59.9, rel=0.02) or -e5['Mmin'].min() == pytest.approx(59.9, rel=0.02)
+    niv = pt.armado_nivel(env, res, 1, 250, 4200, '#8', '#8', est_var='#4', rec=3.0, paño=False)
+    assert niv['n_corr'] == {'superior': 3, 'inferior': 3}                       # 50 % de 30.42 = 15.21 cm² → 3#8
+    assert niv['Mu_max'] == pytest.approx(59.9, rel=0.02) and niv['Vu_max'] == pytest.approx(44.3, rel=0.03)
+    assert niv['MR_max'] == pytest.approx(86.16, rel=0.02) and niv['V_lim'] == pytest.approx(71.4, rel=0.01)
+
+
+def test_cargar_ejemplo_17_llena_la_pestana_de_diagramas():
+    pytest.importorskip('streamlit')
+    from pathlib import Path
+    from streamlit.testing.v1 import AppTest
+    import ame_sismico as ame
+    at = AppTest.from_file(str(Path(__file__).resolve().parent.parent / 'app_web.py'), default_timeout=180).run()
+    nombre = next(k for k in ame.EJEMPLOS_MODELO if k.startswith('Ejemplo 17'))
+    at.sidebar.selectbox(key='ejemplo').select(nombre)
+    at.sidebar.button[0].click()
+    at.run()
+    assert not at.exception, [e.value for e in at.exception]
+    assert list(at.session_state['p6_dft']['F sismo (t)']) == ['5', '5', '10', '15', '20']
+    assert at.session_state['p6_grupo'] == 'A' and at.session_state['p6_pp'] is True and at.session_state['p6_paño'] is False
+    assert all('muro' in e.value for e in at.error), [e.value for e in at.error]   # el único aviso es el de muros (pestaña 5)

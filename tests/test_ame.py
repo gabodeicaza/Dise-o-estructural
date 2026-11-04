@@ -25,7 +25,7 @@ from ame_revision import combinar, irregularidades, rho_cqc, theta_pdelta  # noq
 from ame_secciones import parse_secciones  # noqa: E402
 
 EJ = ame.EJEMPLOS_MODELO
-EJ1, EJ2, EJ3, EJ4, EJ5, EJ6, EJ7, EJ8, EJ9, EJ10, EJ11, EJ12, EJ13, EJ14, EJ15, EJ16 = list(EJ.values())
+EJ1, EJ2, EJ3, EJ4, EJ5, EJ6, EJ7, EJ8, EJ9, EJ10, EJ11, EJ12, EJ13, EJ14, EJ15, EJ16, *_ = list(EJ.values())
 # Los ejemplos 12 y 13 vienen con el acero articulado (3EI/h³, como la solución del examen); EJ12 y EJ13 son su variante empotrada.
 EJ12_SOL, EJ13_SOL = EJ12, EJ13
 EJ12 = copy.deepcopy(EJ12_SOL)
