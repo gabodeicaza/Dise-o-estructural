@@ -132,6 +132,13 @@ def mostrar(res_sismo=None, crujias_txt='', modelo=None, datos=None):
         st.info('La geometría (columnas por eje, secciones por nivel, vigas, tramos sin losa, columnas que cruzan pisos y '
                 'apoyos) es la de la pestaña 1. Aquí solo captura las cargas por tramo (un valor para todos o uno por tramo: '
                 'volado izq. + crujías + volado der., t/m) y las fuerzas sísmicas.')
+        import ame_sismico as ame
+        ej17 = next((v['porticos'] for k, v in ame.EJEMPLOS_MODELO.items() if k.startswith('Ejemplo 17')), None)
+        if ej17 and str(datos.get('crujias', '')).split() == ['5', '6', '5', '5', '7'] and n == len(ej17['CM']):
+            st.button('Llenar cargas, fuerzas y opciones con los datos del ejercicio de clase (Ejemplo 17)', key='p6_ej17',
+                      on_click=lambda: precargar(ej17),
+                      help='CM = 10, 10, 10.8, 11.6, 10 t/m; F = 5, 5, 10, 15, 20 t; Grupo A con peso propio; solo combinaciones con '
+                           'sismo; momentos en el eje del apoyo; estribo #4 y recubrimiento de 3 cm.')
         tx = st.session_state.get('p6_dft')
         if tx is None or len(tx) != n:
             tx = _defecto_txt(n)
