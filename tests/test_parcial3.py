@@ -131,7 +131,8 @@ def test_envolvente_ida_regreso_simetria_y_diseno():
 def test_varilla_sugerida_h_10_sin_7():
     pt = _portico()[0]
     assert pt.varilla_sugerida(50)[0] == '#5'
-    assert pt.varilla_sugerida(70)[0] == '#6' and 'no existe' in pt.varilla_sugerida(70)[1]
+    assert pt.varilla_sugerida(70)[0] == '#8' and 'no existe' in pt.varilla_sugerida(70)[1]   # no hay #7: la siguiente
+    assert pt.varilla_sugerida(45)[0] == '#5' and pt.varilla_sugerida(100)[0] == '#10'
     assert pt.varilla_sugerida(30)[0] == '#3'
 
 
@@ -179,3 +180,57 @@ def test_pestana_porticos_sin_errores():
     at = AppTest.from_file(str(Path(__file__).resolve().parent.parent / 'app_web.py'), default_timeout=180).run()
     assert not at.exception, [e.value for e in at.exception]
     assert len(at.tabs) >= 8
+
+
+def test_tablas_aceptan_decimales_como_texto():
+    import pandas as pd
+    import ui_porticos
+    df = pd.DataFrame({'h (m)': ['3.5', '2,75', ' 4 ']})
+    assert list(ui_porticos._numeros(df, ['h (m)'])['h (m)']) == [3.5, 2.75, 4.0]
+    assert ui_porticos._numeros(pd.DataFrame({'h (m)': ['3.5', 'x']}), ['h (m)']) is None
+
+
+def test_barras_agrupadas_de_dos_en_dos_como_en_clase():
+    import ame_porticos as pt
+    # b = 35, rec 3, estribo #4 (1.27), 6#8: no caben sueltas en un lecho → 3 parejas con 5.61 cm entre grupos (pizarrón)
+    l6 = pt.distribuir_lechos(6, 2.54, 35, 3, 1.27)
+    assert l6['capas'] == [6] and l6['agrupado'] and l6['sep_libre'] == pytest.approx(5.61, abs=0.01)
+    # sin agrupar se va a un segundo lecho
+    assert pt.distribuir_lechos(6, 2.54, 35, 3, 1.27, agrupar=False)['capas'] == [5, 1]
+    # 5#8 caben sueltas; no se agrupan
+    assert not pt.distribuir_lechos(5, 2.54, 35, 3, 1.27)['agrupado']
+
+
+def test_peso_propio():
+    import ame_porticos as pt
+    E = 14000 * 250 ** 0.5
+    a = pt.resolver([5], [3], [(300, 300)], [(35, 70)], E, dict(CM=[1.0], CV=[0.0], CVacc=[0.0]), [0.0])
+    b = pt.resolver([5], [3], [(300, 300)], [(35, 70)], E, dict(CM=[1.0], CV=[0.0], CVacc=[0.0]), [0.0], pp=2.4)
+    w = 1.0 + 2.4 * 0.35 * 0.70
+    assert b['caso']['CM']['diag'][('b', 1, 1)]['M'][0] == pytest.approx(-w * 25 / 12, rel=0.01)
+    assert a['caso']['CM']['diag'][('b', 1, 1)]['M'][0] == pytest.approx(-25 / 12, rel=0.01)
+
+
+def test_viga_continua_corrido_bastones_y_anclaje():
+    import ame_porticos as pt
+    n = 3
+    res = pt.resolver([4, 5], [3] * n, [(40, 40)] * n, [(35, 70)] * n, 14000 * 250 ** .5,
+                      dict(CM=[6] * n, CV=[1] * n, CVacc=[.5] * n), [8, 16, 24], pp=2.4)
+    env, _ = pt.envolvente(res, pt.combinaciones('A', False))
+    niv = pt.armado_nivel(env, res, 1, 250, 4200, '#8', '#8', est_var='#4', rec=3.0)
+    # corrido: ≥ As,mín y ≥ 50 % de la mayor As real, mínimo 2 barras
+    a = 5.07
+    assert niv['n_corr']['superior'] * a >= max(niv['lim']['As_min'], 0.5 * niv['As_real_max']) - 1e-9
+    assert niv['n_corr']['superior'] >= 2 and niv['bastones']
+    # cada bastón se ancla d más allá de donde se requiere (salvo que llegue al extremo de la viga)
+    P = niv['P']
+    for q in niv['bastones']:
+        assert q['x_ini'] <= q['req_ini'] + 1e-9 and q['x_fin'] >= q['req_fin'] - 1e-9
+        assert (q['req_ini'] - q['x_ini']) == pytest.approx(q['d'] / 100) or q['x_ini'] == pytest.approx(P.min()) or q['x_ini'] > P.min()
+    # en cada punto el acero final (corrido + bastones) alcanza la As requerida
+    for q in niv['puntos']:
+        for lecho, nf in (('superior', q['n_sup']), ('inferior', q['n_inf'])):
+            s_ = next(s for s in niv['dis'][q['clave']]['secciones'] if s['posicion'] == q['posicion'] and s['lecho'] == lecho)
+            if s_['armado']:
+                assert nf * a + 1e-9 >= s_['As'] - 0.5      # tolerancia: la d de la envolvente es la mínima del nivel
+    pt.figura_alzado(niv, res)

@@ -721,60 +721,239 @@ def figura_viga(env, dis, mats=None):
     return fig
 
 
-def figura_secciones(dis):
-    """Cortes de la viga en apoyo izquierdo, centro y apoyo derecho con las barras elegidas, los estribos y las
-    separaciones libres; las barras que no cumplen la separación o que no caben se marcan en rojo."""
-    plt = _plt()
+def _dibuja_seccion(ax, b, h, rec, est_db, sup, inf):
+    """Dibuja una sección con estribo y barras. sup/inf = dict(lech=distribuir_lechos(...), varilla=...) o None.
+    Devuelve True si alguna barra no cumple la separación libre o no cabe en 3 lechos (se pintan en rojo)."""
     from matplotlib.patches import Circle, FancyBboxPatch, Rectangle
+    ax.add_patch(Rectangle((0, 0), b, h, fc='#E8EEF6', ec='#13315C', lw=2))
+    ax.add_patch(FancyBboxPatch((rec, rec), b - 2 * rec, h - 2 * rec, boxstyle='round,pad=0,rounding_size=1.5', fc='none',
+                                ec='#3E7CB1', lw=2.2))
+    malo = False
+    for lecho, a in (('superior', sup), ('inferior', inf)):
+        if not a:
+            continue
+        lech, db = a['lech'], DIAMETROS[a['varilla']]
+        rojo = lech['sep_libre'] + 1e-6 < lech['sep_min'] or not lech['cabe']
+        malo = malo or rojo
+        for xs_, y in zip(lech['xs'], lech['ys']):
+            yy = y if lecho == 'inferior' else h - y
+            for xx in xs_:
+                ax.add_patch(Circle((xx, yy), db / 2, fc='#D63B3B' if rojo else '#13315C', ec='black', lw=0.8, zorder=5))
+    ax.set_xlim(-6, b + 6)
+    ax.set_ylim(-4, h + 6)
+    ax.set_aspect('equal')
+    ax.axis('off')
+    return malo
+
+
+def figura_secciones(dis):
+    """Cortes de la viga en apoyo izquierdo, centro y apoyo derecho con las barras elegidas (sueltas o agrupadas de 2 en 2),
+    los estribos y las separaciones libres; las barras que no cumplen la separación o que no caben se marcan en rojo."""
+    plt = _plt()
     b, h, rec = dis['b'], dis['h'], dis['rec']
     est_db = DIAMETROS[dis['est_var']]
     fig, axs = plt.subplots(1, 3, figsize=(15, max(6.5, 15 / 3 * (h + 20) / (b + 12) + 1.5)))
     for ax, pn in zip(axs, ('izquierdo', 'centro', 'derecho')):
-        ax.add_patch(Rectangle((0, 0), b, h, fc='#E8EEF6', ec='#13315C', lw=2))
-        ax.add_patch(FancyBboxPatch((rec, rec), b - 2 * rec, h - 2 * rec, boxstyle='round,pad=0,rounding_size=1.5', fc='none',
-                                    ec='#3E7CB1', lw=2.2))
-        malo = False
+        ss = {lc: next(s for s in dis['secciones'] if s['posicion'] == pn and s['lecho'] == lc) for lc in ('superior', 'inferior')}
+        pars = {lc: (dict(lech=s['armado']['lech'], varilla=s['armado']['varilla']) if s['armado'] else None) for lc, s in ss.items()}
+        malo = _dibuja_seccion(ax, b, h, rec, est_db, pars['superior'], pars['inferior'])
         textos = []
-        for lecho in ('superior', 'inferior'):
-            s = next(s for s in dis['secciones'] if s['posicion'] == pn and s['lecho'] == lecho)
+        for lecho, s in ss.items():
             a = s['armado']
             if not a:
                 textos.append((f'{lecho}: sin solución', '#B00020'))
                 continue
-            db = DIAMETROS[a['varilla']]
-            sep_min = max(db, 2.5)
-            util = b - 2 * (rec + est_db)
-            y = rec + est_db + db / 2
-            restan = a['n']
-            for capa in a['capas']:
-                m_c = min(capa, restan)
-                restan -= m_c
-                xs_ = [b / 2] if m_c == 1 else list(np.linspace(rec + est_db + db / 2, b - rec - est_db - db / 2, m_c))
-                sep = (xs_[1] - xs_[0] - db) if m_c > 1 else util
-                if sep + 1e-6 < sep_min:
-                    malo = True
-                yy = y if lecho == 'inferior' else h - y
-                for xx in xs_:
-                    ax.add_patch(Circle((xx, yy), db / 2, fc='#D63B3B' if sep + 1e-6 < sep_min else '#13315C', ec='black', lw=0.8,
-                                        zorder=5))
-                y += db + sep_min
+            forma = ' agrupadas 2 en 2' if a['lech']['agrupado'] else ''
             col = '#B00020' if (not a['cabe'] or not s['ok']) else '#13315C'
-            textos.append((f'{"Sup." if lecho == "superior" else "Inf."}: {a["armado"]} ({" + ".join(map(str, a["capas"]))} por lecho)\n'
+            textos.append((f'{"Sup." if lecho == "superior" else "Inf."}: {a["armado"]} ({" + ".join(map(str, a["capas"]))} por lecho{forma})\n'
                            f'As = {a["As"]:.2f} cm² · MR = {a["MR"]:.2f} / Mu = {s["Mu"]:.2f} t·m', col))
-        xpos = next(s for s in dis['secciones'] if s['posicion'] == pn)['x']
-        ax.text(b / 2, h + 4.5, f'{pn.capitalize()} · x = {xpos:.2f} m', ha='center', fontsize=11, fontweight='bold', color='#0B2545')
+        ax.text(b / 2, h + 5.5, f'{pn.capitalize()} · x = {ss["superior"]["x"]:.2f} m', ha='center', fontsize=11, fontweight='bold',
+                color='#0B2545')
         for i, (tx, c) in enumerate(textos):
-            ax.text(b / 2, -3 - 5.5 * i, tx, ha='center', va='top', fontsize=8.2, color=c)
+            ax.text(b / 2, -6 - 6.5 * i, tx, ha='center', va='top', fontsize=8.2, color=c)
         ax.text(b / 2, h + 1, f'b = {b:g} cm', ha='center', fontsize=8, color='#555')
         ax.text(-1.5, h / 2, f'h = {h:g} cm', rotation=90, va='center', ha='right', fontsize=8, color='#555')
-        ax.set_xlim(-8, b + 8)
-        ax.set_ylim(-3 - 5.5 * 2 - 6, h + 8)
-        ax.set_aspect('equal')
-        ax.axis('off')
+        ax.set_ylim(-6 - 6.5 * 2 - 8, h + 9)
         if malo:
             ax.text(b / 2, h / 2, 'SEPARACIÓN\nINSUFICIENTE', ha='center', va='center', fontsize=12, color='#B00020', alpha=0.4,
                     fontweight='bold')
     fig.suptitle(f'Secciones de la viga {b:g}×{h:g} cm · rec. {rec:g} cm · estribo {dis["est_var"]} @ '
                  f'{dis["cortante"].get("s_usar", "—")} cm ({dis["cortante"]["ramas"]} ramas)', fontsize=12, color='#0B2545')
+    fig.tight_layout()
+    return fig
+
+
+# ================================================================ viga continua del nivel: corrido, bastones y anclaje
+def armado_nivel(env, res, k, fc, fy, var_sup, var_inf, est_var='#3', rec=4.0, agrupar=True):
+    """Armado de la viga del nivel k como viga continua (procedimiento de clase):
+    1) puntos de diseño a), b), c)… (caras de apoyo y centros de cada crujía);
+    2) varillas corridas arriba y abajo con área ≥ As,mín y ≥ 50 % de la mayor As real;
+    3) bastones donde la As requerida (envolvente) supera lo corrido;
+    4) cada bastón se ancla una distancia d más allá del punto donde ya no se requiere en el diagrama Mu.
+    Devuelve None si el nivel no tiene vigas con carga."""
+    claves = sorted([c for c in env if c[0] == 'b' and c[1] == k], key=lambda c: env[c]['p'][0])
+    if not claves:
+        return None
+    geo = res['geo']
+    b, h = env[claves[0]]['b'], env[claves[0]]['h']
+    dis, P, Mx, Mn, max_paso = {}, [], [], [], 0.0
+    for c in claves:
+        e = env[c]
+        ci, cd = caras_columna(geo, c)
+        dis[c] = disenar_viga(env, c, e['b'], e['h'], fc, fy, ci, cd, var_sup, var_inf, est_var, rec, agrupar=agrupar)
+        x, L = e['x'] * 100, e['x'][-1] * 100
+        mx, mn = e['Mmax'].copy(), e['Mmin'].copy()
+        fi, fd = int(np.argmin(np.abs(x - ci))), int(np.argmin(np.abs(x - (L - cd))))
+        if fd > fi:                                  # dentro de la columna se usa el valor del paño
+            mx[:fi], mn[:fi] = mx[fi], mn[fi]
+            mx[fd + 1:], mn[fd + 1:] = mx[fd], mn[fd]
+        P.append(e['p'])
+        Mx.append(mx)
+        Mn.append(mn)
+        max_paso = max(max_paso, float(np.max(np.diff(e['p']))))
+    P, Mx, Mn = np.concatenate(P), np.concatenate(Mx), np.concatenate(Mn)
+    seg = np.concatenate([[0], np.cumsum(np.diff(P) > 1.5 * max_paso)])        # tramos sin losa separan segmentos
+
+    secs = [s for d in dis.values() for s in d['secciones'] if s['armado']]
+    d_sup = min([s['armado']['d'] for s in secs if s['lecho'] == 'superior'] or [h - 5.0])
+    d_inf = min([s['armado']['d'] for s in secs if s['lecho'] == 'inferior'] or [h - 5.0])
+    a_sup, a_inf = p3.VARILLAS[var_sup], p3.VARILLAS[var_inf]
+    lim = p3.limites_flexion(b, min(d_sup, d_inf), fc, fy)
+    As_real_max = max([s['armado']['As'] for s in secs] or [0.0])
+    As_corr = max(lim['As_min'], 0.5 * As_real_max)
+    n_corr = {'superior': max(2, math.ceil(As_corr / a_sup - 1e-9)), 'inferior': max(2, math.ceil(As_corr / a_inf - 1e-9))}
+
+    def req(M, d):
+        l_ = p3.limites_flexion(b, d, fc, fy)
+        if M <= 0:
+            return l_['As_min']
+        r_ = p3.area_requerida(M * 1e5, b, d, fc, fy)
+        return max(l_['As_min'], r_ if r_ is not None else l_['As_max'])
+    req_sup = np.array([req(max(0.0, -m), d_sup) for m in Mn])
+    req_inf = np.array([req(max(0.0, m), d_inf) for m in Mx])
+    bastones = []
+    for lecho, rq, a_, var, d in (('superior', req_sup, a_sup, var_sup, d_sup), ('inferior', req_inf, a_inf, var_inf, d_inf)):
+        need = np.ceil(rq / a_ - 1e-9)
+        for j in range(1, int(need.max() - n_corr[lecho]) + 1):
+            mask = need >= n_corr[lecho] + j
+            i = 0
+            while i < len(P):
+                if not mask[i]:
+                    i += 1
+                    continue
+                i1 = i
+                while i1 + 1 < len(P) and mask[i1 + 1] and seg[i1 + 1] == seg[i]:
+                    i1 += 1
+                en_seg = np.where(seg == seg[i])[0]
+                xa, xb = float(P[i]), float(P[i1])
+                x_ini = max(float(P[en_seg[0]]), xa - d / 100)
+                x_fin = min(float(P[en_seg[-1]]), xb + d / 100)
+                bastones.append(dict(lecho=lecho, nivel=j, varilla=var, req_ini=xa, req_fin=xb, x_ini=x_ini, x_fin=x_fin,
+                                     L=x_fin - x_ini, d=d))
+                i = i1 + 1
+    puntos, letras = [], iter('abcdefghijklmnopqrstuvwxyz')
+    for c in claves:
+        x0 = float(env[c]['p'][0])
+        for pn in ('izquierdo', 'centro', 'derecho'):
+            s = next(s for s in dis[c]['secciones'] if s['posicion'] == pn)
+            puntos.append(dict(letra=next(letras, '·'), clave=c, posicion=pn, x=x0 + s['x']))
+
+    def n_final(lecho, x):
+        return n_corr[lecho] + sum(1 for q in bastones if q['lecho'] == lecho and q['x_ini'] - 1e-9 <= x <= q['x_fin'] + 1e-9)
+    for q in puntos:
+        q['n_sup'], q['n_inf'] = n_final('superior', q['x']), n_final('inferior', q['x'])
+    Mu_max = float(max(Mx.max(), -Mn.min()))
+    d_v = min(d_sup, d_inf)
+    MR_max = p3.momento_resistente(lim['As_max'], b, d_v, fc, fy) / 1e5
+    Vu_max = max(d['Vu'] for d in dis.values())
+    V_lim = 2.65 * p3.FR_CORTANTE * b * d_v * math.sqrt(fc) / 1000
+    return dict(nivel=k, claves=claves, dis=dis, P=P, req_sup=req_sup, req_inf=req_inf, n_corr=n_corr, bastones=bastones,
+                puntos=puntos, var_sup=var_sup, var_inf=var_inf, b=b, h=h, rec=rec, est_var=est_var, agrupar=agrupar,
+                As_real_max=As_real_max, As_corr=As_corr, d_sup=d_sup, d_inf=d_inf, lim=lim, n_final=n_final,
+                Mu_max=Mu_max, MR_max=MR_max, Vu_max=Vu_max, V_lim=V_lim, max_paso=max_paso,
+                pasos=[f'Subreforzada: MR(As,máx) = 0.9·{lim["As_max"]:.2f}·{fy:g}·(d − As,máx·fy/(2·b·f″c)) = {MR_max:.2f} t·m '
+                       f'{"≥" if MR_max >= Mu_max else "<"} Mu máx = {Mu_max:.2f} t·m → {"OK" if MR_max >= Mu_max else "cambia la sección"}',
+                       f'Cortante: V límite = 2.65·FR·b·d·√f′c = {V_lim:.1f} t {"≥" if V_lim >= Vu_max else "<"} Vu máx = {Vu_max:.1f} t → '
+                       f'{"OK" if V_lim >= Vu_max else "cambia la sección"}',
+                       f'Corrido: As,mín = {lim["As_min"]:.2f} cm²; 50 % de la mayor As real ({As_real_max:.2f}) = {0.5 * As_real_max:.2f} cm² → '
+                       f'{n_corr["superior"]}{var_sup} arriba y {n_corr["inferior"]}{var_inf} abajo, a todo lo largo y con ganchos en los extremos',
+                       'Bastones donde la As requerida (envolvente) supera lo corrido; cada uno se ancla una distancia d = '
+                       f'{d_sup:.1f} cm (sup.) / {d_inf:.1f} cm (inf.) más allá de donde ya no se requiere en el diagrama Mu'])
+
+
+def figura_alzado(niv, res):
+    """Alzado de la viga continua del nivel: corrido con ganchos, bastones con su longitud, puntos a), b)… y, abajo, la
+    sección en cada punto con las barras finales (corrido + bastones que pasan por ahí)."""
+    plt = _plt()
+    from matplotlib.gridspec import GridSpec
+    geo = res['geo']
+    k, b, h, rec = niv['nivel'], niv['b'], niv['h'], niv['rec']
+    est_db = DIAMETROS[niv['est_var']]
+    P = niv['P']
+    xs_ej = res['xs']
+    hv = h / 100.0
+    pts = niv['puntos']
+    ncol = min(len(pts), 8)
+    nfil = math.ceil(len(pts) / ncol)
+    ancho = float(np.clip(0.9 * (P.max() - P.min()) + 6, 14, 30))
+    fig = plt.figure(figsize=(ancho, 6.0 + 3.6 * nfil))
+    gs = GridSpec(1 + nfil, ncol, height_ratios=[2.4] + [1.6] * nfil, figure=fig)
+    ax = fig.add_subplot(gs[0, :])
+    corte = np.diff(P) > 1.5 * niv['max_paso']
+    inicios = [P[0]] + [P[i + 1] for i in range(len(P) - 1) if corte[i]]
+    fines = [P[i] for i in range(len(P) - 1) if corte[i]] + [P[-1]]
+    for a_, b_ in zip(inicios, fines):
+        ax.add_patch(plt.Rectangle((a_, 0), b_ - a_, hv, fc='#E8EEF6', ec='#13315C', lw=1.6, zorder=1))
+    for c in geo['niveles'][k - 1]['cols']:
+        if c.get('omitir'):
+            continue
+        xe, w = xs_ej[c['eje'] - 1], c['h'] / 100.0
+        ax.add_patch(plt.Rectangle((xe - w / 2, -0.45), w, 0.45, fc='#CFCFCF', ec='#555', hatch='///', lw=1, zorder=0))
+        ax.text(xe, -0.6, f'eje {c["eje"]}', ha='center', va='top', fontsize=8, color='#555')
+    yt, yb = hv - 0.07, 0.07
+    for lecho, y, n, var, col, sg in (('superior', yt, niv['n_corr']['superior'], niv['var_sup'], '#D63B3B', -1),
+                                      ('inferior', yb, niv['n_corr']['inferior'], niv['var_inf'], '#13315C', 1)):
+        for a_, b_ in zip(inicios, fines):
+            ax.plot([a_ + 0.05, b_ - 0.05], [y, y], color=col, lw=3.2, zorder=4, solid_capstyle='butt')
+            for xg in (a_ + 0.05, b_ - 0.05):          # ganchos al inicio y al final
+                ax.plot([xg, xg], [y, y + sg * 0.22 * hv], color=col, lw=3.2, zorder=4)
+        ax.annotate(f'{n}{var} corridas', (inicios[0], y), xytext=(inicios[0] - 0.3, y + (0.5 if lecho == 'superior' else -0.5)),
+                    fontsize=9, color=col, fontweight='bold', ha='right', arrowprops=dict(arrowstyle='-', color=col, lw=0.8))
+    grupos = {}                                       # bastones con el mismo tramo se rotulan juntos («2#8»)
+    for q in niv['bastones']:
+        grupos.setdefault((q['lecho'], round(q['x_ini'], 2), round(q['x_fin'], 2), q['varilla']), []).append(q)
+    cont = {'superior': 0, 'inferior': 0}
+    for (lecho, xi, xf, var), qs in sorted(grupos.items(), key=lambda kv: kv[0][1]):
+        sup = lecho == 'superior'
+        col = '#D63B3B' if sup else '#13315C'
+        for q in qs:
+            y = (yt - 0.06 * q['nivel']) if sup else (yb + 0.06 * q['nivel'])
+            ax.plot([xi, xf], [y, y], color=col, lw=2.2, zorder=5, solid_capstyle='butt')
+        i = cont[lecho]
+        cont[lecho] += 1
+        yy = hv + 0.4 + 0.5 * (i % 4) if sup else -0.9 - 0.5 * (i % 4)
+        ax.annotate(f'{len(qs)}{var}  L = {xf - xi:.2f} m', ((xi + xf) / 2, y), xytext=((xi + xf) / 2, yy),
+                    fontsize=8, ha='center', va='bottom' if sup else 'top', color=col, zorder=8,
+                    bbox=dict(boxstyle='round,pad=0.15', fc='white', ec=col, lw=0.6, alpha=0.95),
+                    arrowprops=dict(arrowstyle='-', color=col, lw=0.6, ls=':'))
+    for q in pts:
+        ax.plot([q['x'], q['x']], [-0.45, hv + 0.25], color='#777', lw=0.8, ls='--', zorder=2)
+        ax.text(q['x'], hv + 0.27, f'{q["letra"]})', ha='center', va='bottom', fontsize=9, fontweight='bold', color='#333')
+    ax.set_xlim(P.min() - 2.6, P.max() + 1.2)
+    ax.set_ylim(-3.1, hv + 2.9)
+    ax.set_yticks([])
+    ax.set_xlabel('x (m)')
+    for sp in ('top', 'right', 'left'):
+        ax.spines[sp].set_visible(False)
+    ax.set_title(f'Nivel {k} · viga {b:g}×{h:g} cm · corrido, bastones y anclaje (d = {niv["d_sup"]:.0f} cm) · vista no a escala vertical',
+                 fontsize=12, color='#0B2545')
+    for i, q in enumerate(pts):
+        a2 = fig.add_subplot(gs[1 + i // ncol, i % ncol])
+        ls_ = distribuir_lechos(q['n_sup'], DIAMETROS[niv['var_sup']], b, rec, est_db, niv['agrupar'])
+        li_ = distribuir_lechos(q['n_inf'], DIAMETROS[niv['var_inf']], b, rec, est_db, niv['agrupar'])
+        malo = _dibuja_seccion(a2, b, h, rec, est_db, dict(lech=ls_, varilla=niv['var_sup']), dict(lech=li_, varilla=niv['var_inf']))
+        a2.set_title(f'{q["letra"]}) x = {q["x"]:.2f} m', fontsize=9, color='#B00020' if malo else '#0B2545')
+        a2.text(b / 2, -6, f'sup {q["n_sup"]}{niv["var_sup"]} · inf {q["n_inf"]}{niv["var_inf"]}', ha='center', va='top', fontsize=7.5,
+                color='#B00020' if malo else '#13315C')
     fig.tight_layout()
     return fig

@@ -17,16 +17,29 @@ VARS = list(pt.DIAMETROS)
 VARS_BARRA = [v for v in VARS if v != '#10'] + ['#10']
 
 
+def _g(x):
+    return f'{x:g}'
+
+
+def _numeros(df, cols):
+    """Las tablas se capturan como texto (así se pueden escribir decimales como 3.5 o 3,5) y aquí se pasan a número.
+    Devuelve el DataFrame numérico o None si alguna celda no es un número."""
+    out = df.copy()
+    for c in cols:
+        out[c] = pd.to_numeric(out[c].astype(str).str.strip().str.replace(',', '.', regex=False), errors='coerce')
+    return out if not out[cols].isna().any().any() else None
+
+
 def _defecto(n=3):
-    return pd.DataFrame({'Nivel': range(1, n + 1), 'h (m)': [3.0] * n, 'Col b (cm)': [40.0] * n, 'Col h (cm)': [40.0] * n,
-                         'Viga b (cm)': [25.0] * n, 'Viga h (cm)': [50.0] * n, 'CM (t/m)': [2.0] * n,
-                         'CV máx (t/m)': [0.5] * n, 'CV acc (t/m)': [0.3] * n,
-                         'F sismo (t)': [3.0 * (i + 1) for i in range(n)]})
+    return pd.DataFrame({'Nivel': range(1, n + 1), 'h (m)': ['3'] * n, 'Col b (cm)': ['40'] * n, 'Col h (cm)': ['40'] * n,
+                         'Viga b (cm)': ['25'] * n, 'Viga h (cm)': ['50'] * n, 'CM (t/m)': ['2'] * n,
+                         'CV máx (t/m)': ['0.5'] * n, 'CV acc (t/m)': ['0.3'] * n,
+                         'F sismo (t)': [_g(3.0 * (i + 1)) for i in range(n)]})
 
 
 def _defecto_txt(n):
     return pd.DataFrame({'Nivel': range(1, n + 1), 'CM (t/m)': ['2'] * n, 'CV máx (t/m)': ['0.5'] * n, 'CV acc (t/m)': ['0.3'] * n,
-                         'F sismo (t)': [3.0 * (i + 1) for i in range(n)]})
+                         'F sismo (t)': [_g(3.0 * (i + 1)) for i in range(n)]})
 
 
 def _traer(res_sismo, crujias, fuente):
@@ -38,14 +51,14 @@ def _traer(res_sismo, crujias, fuente):
     if len(df) != len(F):
         df = _defecto(len(F))
     df = df.copy()
-    df['h (m)'] = h
-    df['F sismo (t)'] = F
+    df['h (m)'] = [_g(round(x, 4)) for x in h]
+    df['F sismo (t)'] = [_g(round(x, 4)) for x in F]
     st.session_state['p6_df'] = df
     tx = st.session_state.get('p6_dft')
     if tx is None or len(tx) != len(F):
         tx = _defecto_txt(len(F))
     tx = tx.copy()
-    tx['F sismo (t)'] = F
+    tx['F sismo (t)'] = [_g(round(x, 4)) for x in F]
     st.session_state['p6_dft'] = tx
     if crujias:
         st.session_state['p6_spans'] = crujias
@@ -90,6 +103,14 @@ def mostrar(res_sismo=None, crujias_txt='', modelo=None, datos=None):
     estab = c2.checkbox('Incluir estabilidad (0.9 CM ± sismo)', False, key='p6_estab')
     rec = c3.number_input('Recubrimiento libre (cm)', 1.5, 8.0, 4.0, 0.5, key='p6_rec')
     est_var = c4.selectbox('Estribo', ['#3', '#4'], key='p6_est')
+    c1, c2, c3 = st.columns(3)
+    agrupar = c1.checkbox('Permitir agrupar barras de 2 en 2 en un lecho', True, key='p6_agr',
+                          help='Si no caben sueltas en el ancho, se ponen de 2 en 2 pegadas antes de pasar a un segundo '
+                               'lecho (como en el ejercicio de clase: 6#8 en b = 35 cm).')
+    usa_pp = c2.checkbox('Agregar peso propio de la viga a CM', False, key='p6_pp',
+                         help='Suma γ·b·h (t/m) de la viga de cada nivel a la carga muerta de todos sus tramos.')
+    gam = c3.number_input('γ del concreto (t/m³)', 2.0, 2.6, 2.4, 0.05, key='p6_gam', disabled=not usa_pp)
+    pp = gam if usa_pp else 0.0
 
     if usa_modelo:
         n = len(datos['niveles'])
@@ -100,23 +121,23 @@ def mostrar(res_sismo=None, crujias_txt='', modelo=None, datos=None):
         if tx is None or len(tx) != n:
             tx = _defecto_txt(n)
             if ok_res:
-                tx['F sismo (t)'] = np.asarray(res_sismo[FUENTES_F[fuente]]['F'], float)[::-1]
+                tx['F sismo (t)'] = [_g(round(x, 4)) for x in np.asarray(res_sismo[FUENTES_F[fuente]]['F'], float)[::-1]]
             st.session_state['p6_dft'] = tx
         st.button('Traer fuerzas sísmicas del análisis', disabled=not ok_res, key='p6_traer2',
                   on_click=lambda: _traer(res_sismo, '', fuente))
         conf = {c: st.column_config.TextColumn(c) for c in COLS_TXT[1:4]}
-        conf['F sismo (t)'] = st.column_config.NumberColumn('F sismo (t)', step=0.01, format='%g')
+        conf['F sismo (t)'] = st.column_config.TextColumn('F sismo (t)')
         conf['Nivel'] = st.column_config.NumberColumn('Nivel', format='%d', disabled=True)
         tx = st.data_editor(st.session_state['p6_dft'], hide_index=True, width='stretch', key='p6_editor_t', column_config=conf,
                             disabled=['Nivel'])
         try:
             cargas_txt = [dict(CM=r['CM (t/m)'], CV=r['CV máx (t/m)'], CVacc=r['CV acc (t/m)']) for _, r in tx.iterrows()]
-            geo = pt.geo_modelo(modelo, datos, cargas_txt)
+            geo = pt.geo_modelo(modelo, datos, cargas_txt, pp)
             geo['E'] = E
-            F = [float(x) for x in tx['F sismo (t)']]
+            F = [float(str(x).strip().replace(',', '.')) for x in tx['F sismo (t)']]
             res = pt.resolver_geo(geo, F)
         except ValueError as e:
-            st.error(str(e))
+            st.error(str(e) if 'could not convert' not in str(e) else 'Escribe las fuerzas sísmicas como números (por ejemplo 3.5).')
             return
     else:
         if 'p6_df' not in st.session_state:
@@ -131,12 +152,16 @@ def mostrar(res_sismo=None, crujias_txt='', modelo=None, datos=None):
         c1, c2 = st.columns(2)
         fi_vig = c1.number_input('Factor de I en vigas (agrietamiento)', 0.1, 1.0, 1.0, 0.05, key='p6_fiv')
         fi_col = c2.number_input('Factor de I en columnas', 0.1, 1.0, 1.0, 0.05, key='p6_fic')
-        conf = {c: st.column_config.NumberColumn(c, step=0.01, format='%g', min_value=0.0) for c in COLS[1:]}
+        conf = {c: st.column_config.TextColumn(c) for c in COLS[1:]}
         conf['Nivel'] = st.column_config.NumberColumn('Nivel', step=1, format='%d', disabled=True)
         df = st.data_editor(st.session_state['p6_df'], num_rows='dynamic', hide_index=True, width='stretch', key='p6_editor',
                             column_config=conf).dropna()
         if len(df) < 1:
             st.info('Captura al menos un nivel.')
+            return
+        df = _numeros(df, COLS[1:])
+        if df is None:
+            st.error('Hay celdas vacías o que no son números. Escribe decimales con punto o coma (por ejemplo 3.5).')
             return
         try:
             spans = [float(x) for x in st.session_state['p6_spans'].replace(',', ' ').split()]
@@ -150,7 +175,7 @@ def mostrar(res_sismo=None, crujias_txt='', modelo=None, datos=None):
             res = pt.resolver(spans, list(df['h (m)']), list(zip(df['Col b (cm)'], df['Col h (cm)'])),
                               list(zip(df['Viga b (cm)'], df['Viga h (cm)'])), E,
                               dict(CM=list(df['CM (t/m)']), CV=list(df['CV máx (t/m)']), CVacc=list(df['CV acc (t/m)'])),
-                              F, base, fi_col, fi_vig)
+                              F, base, fi_col, fi_vig, pp)
         except (np.linalg.LinAlgError, ValueError):
             st.error('El pórtico es inestable o inconsistente: revisa las secciones y los apoyos.')
             return
@@ -176,7 +201,7 @@ def mostrar(res_sismo=None, crujias_txt='', modelo=None, datos=None):
     kw = dict(etiquetas=etiquetas, piso=piso, ancho=ancho, alto=alto)
 
     tabs = st.tabs(['Modelo', 'Gravedad', 'Sismo de ida', 'Sismo de regreso', 'Envolvente', 'Deformadas', 'Diseño por viga',
-                    'Secciones (render)', 'Resumen de acero'])
+                    'Viga continua del nivel', 'Secciones (render)', 'Resumen de acero'])
 
     def selector(clave):
         return 'M' if st.radio('Diagrama', ['Momento M', 'Cortante V'], horizontal=True, key=clave) == 'Momento M' else 'V'
@@ -225,7 +250,7 @@ def mostrar(res_sismo=None, crujias_txt='', modelo=None, datos=None):
                                            'inferior': st.column_config.SelectboxColumn('Varilla inferior', options=VARS, required=True),
                                            'b': st.column_config.NumberColumn(format='%g'), 'h': st.column_config.NumberColumn(format='%g')})
     elec = {k: (r['superior'], r['inferior']) for k, (_, r) in zip(claves, ed.iterrows())}
-    dis = pt.resumen_vigas(env, res, fc, fy, elec, est_var, rec)
+    dis = pt.resumen_vigas(env, res, fc, fy, elec, est_var, rec, agrupar)
 
     # advertencia viga más ancha que la columna
     for k in claves:
@@ -266,12 +291,61 @@ def mostrar(res_sismo=None, crujias_txt='', modelo=None, datos=None):
         st.caption('El armado superior en cada apoyo y el inferior corrido salen de las seis secciones. '
                    'Al menos 2 varillas corridas por lecho (apuntes p. 32).')
     with tabs[7]:
+        niveles = sorted({k[1] for k in claves})
+        c1, c2, c3 = st.columns(3)
+        nivel = c1.selectbox('Nivel', niveles, key='p6_nivel')
+        h_n = next(env[k]['h'] for k in claves if k[1] == nivel)
+        sug, txt_sug = pt.varilla_sugerida(h_n)
+        vs = c2.selectbox('Varilla superior', VARS, index=VARS.index(sug), key=f'p6_nvs_{nivel}_{sug}')
+        vi = c3.selectbox('Varilla inferior', VARS, index=VARS.index(sug), key=f'p6_nvi_{nivel}_{sug}')
+        st.caption(txt_sug + ' Los renders y tablas de esta pestaña usan estas varillas para toda la viga del nivel.')
+        niv = pt.armado_nivel(env, res, nivel, fc, fy, vs, vi, est_var, rec, agrupar)
+        if niv is None:
+            st.info('Ese nivel no tiene vigas con carga.')
+        else:
+            ok_v = niv['MR_max'] >= niv['Mu_max'] and niv['V_lim'] >= niv['Vu_max']
+            (st.success if ok_v else st.error)('La sección cumple las revisiones de la viga completa.' if ok_v else
+                                               'La sección no cumple una revisión de la viga completa: cámbiala.')
+            st.markdown('**Procedimiento** (como en clase)')
+            st.markdown('0. Revisiones: ' + niv['pasos'][0] + '  \n   ' + niv['pasos'][1])
+            st.markdown('1. Diseño por flexión en cada punto a), b), c)… (caras de apoyo y centros): tabla de abajo.')
+            st.markdown('2. ' + niv['pasos'][2])
+            st.markdown('3. ' + niv['pasos'][3])
+            st.markdown('4. Anclaje: la longitud de cada bastón ya incluye d más allá del punto donde deja de requerirse.')
+            _fig(pt.figura_alzado(niv, res))
+            filas = []
+            for q in niv['puntos']:
+                for lecho, nf in (('superior', q['n_sup']), ('inferior', q['n_inf'])):
+                    s_ = next(s for s in niv['dis'][q['clave']]['secciones'] if s['posicion'] == q['posicion'] and s['lecho'] == lecho)
+                    a = s_['armado']
+                    filas.append([f'{q["letra"]})', 'sup.' if lecho == 'superior' else 'inf.', q['x'], s_['Mu'],
+                                  s_['As'] if s_['As'] is not None else np.nan, a['armado'] if a else '—',
+                                  a['As'] if a else np.nan, f'{nf}{vs if lecho == "superior" else vi}'])
+            st.dataframe(pd.DataFrame(filas, columns=['Punto', 'Lecho', 'x (m)', 'Mu (t·m)', 'As req/usar (cm²)', 'As real propuesta',
+                                                      'As real (cm²)', 'Barras finales (corrido + bastones)']),
+                         hide_index=True, width='stretch',
+                         column_config={c: st.column_config.NumberColumn(format='%.2f') for c in
+                                        ['x (m)', 'Mu (t·m)', 'As req/usar (cm²)', 'As real (cm²)']})
+            if niv['bastones']:
+                st.markdown('**Bastones**')
+                st.dataframe(pd.DataFrame([[q['lecho'], f'1{q["varilla"]}', q['req_ini'], q['req_fin'], q['x_ini'], q['x_fin'], q['L']]
+                                           for q in niv['bastones']],
+                                          columns=['Lecho', 'Barra', 'Requerido desde (m)', 'Requerido hasta (m)', 'Colocado desde (m)',
+                                                   'Colocado hasta (m)', 'Longitud (m)']),
+                             hide_index=True, width='stretch',
+                             column_config={c: st.column_config.NumberColumn(format='%.2f') for c in
+                                            ['Requerido desde (m)', 'Requerido hasta (m)', 'Colocado desde (m)', 'Colocado hasta (m)', 'Longitud (m)']})
+            else:
+                st.info('El corrido cubre todo el diagrama: no hacen falta bastones.')
+            st.caption('La longitud de desarrollo del anclaje se toma como d (regla de clase). Verifica con tu profesor si además '
+                       'pide la Ld de la NTC. Los puntos a), b)… son caras de apoyo y centros de cada crujía.')
+    with tabs[8]:
         nombre2 = st.selectbox('Viga', nombres, key='p6_viga2')
         d2 = dis[claves[nombres.index(nombre2)]]
         _fig(pt.figura_secciones(d2))
         st.caption('Se revisa la separación libre entre barras (≥ máx(Ø, 2.5 cm)) con el ancho útil descontando recubrimiento y '
                    'estribo. Las barras en rojo no cumplen la separación; si no caben en 3 lechos aumenta b, h o la varilla.')
-    with tabs[8]:
+    with tabs[9]:
         filas = []
         for k, d in dis.items():
             g = lambda pn, lc: next(s for s in d['secciones'] if s['posicion'] == pn and s['lecho'] == lc)

@@ -7,6 +7,15 @@ import ame_ntc as ntc
 import ame_parcial3 as p3
 
 
+def _numeros(df, cols):
+    """Las tablas se capturan como texto (así se pueden escribir decimales como 3.5 o 3,5) y aquí se pasan a número.
+    Devuelve el DataFrame numérico o None si alguna celda no es un número."""
+    out = df.copy()
+    for c in cols:
+        out[c] = pd.to_numeric(out[c].astype(str).str.strip().str.replace(',', '.', regex=False), errors='coerce')
+    return out if not out[cols].isna().any().any() else None
+
+
 def _pasos(lista):
     for t in lista:
         st.markdown(f'- {t}')
@@ -77,11 +86,15 @@ def _mamposteria():
         with st.expander('Procedimiento', expanded=True):
             _pasos(r['pasos'])
         st.markdown('**Entrepiso completo (varios muros en una dirección)**')
-        conf_m = {c: st.column_config.NumberColumn(c, step=0.01, format='%g') for c in ['t', 'L', 'H', 'Pn', 'Vu']}
-        df = st.data_editor(pd.DataFrame({'muro': ['A', 'C', 'D', 'E'], 't': [14.0] * 4, 'L': [150.0, 500.0, 400.0, 200.0],
-                                          'H': [250.0] * 4, 'Pn': [12142.9, 20250.0, 16200.0, 8100.0],
-                                          'Vu': [6020.0, 9960.0, 8340.0, 3250.0]}), num_rows='dynamic', key='mv_tabla',
+        conf_m = {c: st.column_config.TextColumn(c) for c in ['t', 'L', 'H', 'Pn', 'Vu']}
+        df = st.data_editor(pd.DataFrame({'muro': ['A', 'C', 'D', 'E'], 't': ['14'] * 4, 'L': ['150', '500', '400', '200'],
+                                          'H': ['250'] * 4, 'Pn': ['12142.9', '20250', '16200', '8100'],
+                                          'Vu': ['6020', '9960', '8340', '3250']}), num_rows='dynamic', key='mv_tabla',
                             hide_index=True, width='stretch', column_config=conf_m)
+        df = _numeros(df.dropna(), ['t', 'L', 'H', 'Pn', 'Vu'])
+        if df is None:
+            st.error('Hay celdas vacías o que no son números. Los decimales se escriben con punto o coma (por ejemplo 3.5).')
+            df = pd.DataFrame(columns=['muro', 't', 'L', 'H', 'Pn', 'Vu'])
         muros = [dict(nombre=str(f['muro']), t=f['t'], L=f['L'], H=f['H'], Pn=f['Pn'], Vu=f['Vu'])
                  for _, f in df.dropna().iterrows() if f['L'] > 0 and f['t'] > 0]
         if muros:
@@ -104,10 +117,13 @@ def _mamposteria():
         k_ = c2.number_input('k', 0.05, 1.0, 0.505, format='%.3f', key='me_k')
         R0 = c3.number_input('R0', 1.0, 3.0, 2.0, key='me_R0')
         k1 = c4.number_input('k1', 0.5, 1.5, 1.0, key='me_k1')
-        niv = st.data_editor(pd.DataFrame({'Nivel': ['2 (azotea)', '1'], 'W (t)': [70.0, 80.0], 'h (m)': [5.0, 2.5]}),
+        niv = st.data_editor(pd.DataFrame({'Nivel': ['2 (azotea)', '1'], 'W (t)': ['70', '80'], 'h (m)': ['5', '2.5']}),
                              num_rows='dynamic', key='me_tabla', hide_index=True, width='stretch',
-                             column_config={c: st.column_config.NumberColumn(c, step=0.01, format='%g') for c in ['W (t)', 'h (m)']})
-        niv = niv.dropna()
+                             column_config={c: st.column_config.TextColumn(c) for c in ['W (t)', 'h (m)']})
+        niv = _numeros(niv.dropna(), ['W (t)', 'h (m)'])
+        if niv is None:
+            st.error('Hay celdas vacías o que no son números. Los decimales se escriben con punto o coma (por ejemplo 2.5).')
+            niv = pd.DataFrame({'Nivel': [], 'W (t)': [], 'h (m)': []})
         if len(niv) >= 1 and (niv['W (t)'] > 0).all() and (niv['h (m)'] > 0).all():
             e = p3.estatico(niv['W (t)'], niv['h (m)'], c_, k_, Q, R0, k1, 'OI' if estado.startswith('OI') else 'SV', FC)
             tabla = pd.DataFrame({'Nivel': niv['Nivel'].values, 'W': niv['W (t)'].values, 'h': niv['h (m)'].values,
