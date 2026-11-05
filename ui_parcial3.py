@@ -238,8 +238,111 @@ def _viento():
 
 
 # ------------------------------------------------------------------ concreto
+def _viga_completa():
+    """Procedimiento de clase completo: datos y revisiones, As de todos los puntos del diagrama, armado con la varilla elegida,
+    corrido (50 % de la mayor As), render de las secciones y estribos."""
+    import ame_porticos as pt
+    st.caption('Captura la sección y los Mu del diagrama de momentos (uno por punto: caras de apoyo y centros). La app hace todo el '
+               'procedimiento del pizarrón: revisiones, As con la cuadrática, barras, MR, separación, corrido y estribos.')
+    c1, c2, c3, c4 = st.columns(4)
+    b = c1.number_input('b (cm)', 10.0, 300.0, 35.0, key='vc_b')
+    h = c2.number_input('h (cm)', 20.0, 300.0, 70.0, key='vc_h')
+    fc = c3.number_input("f′c (kg/cm²)", 100.0, 1000.0, 250.0, key='vc_fc')
+    fy = c4.number_input('fy (kg/cm²)', 2000.0, 6000.0, 4200.0, key='vc_fy')
+    sug, txt_sug = pt.varilla_sugerida(h)
+    c1, c2, c3, c4 = st.columns(4)
+    var = c1.selectbox('Varilla longitudinal', list(pt.DIAMETROS), index=list(pt.DIAMETROS).index(sug), key=f'vc_var_{sug}',
+                       help=txt_sug)
+    est = c2.selectbox('Estribo', ['#3', '#4'], index=1, key='vc_est')
+    ramas = c3.selectbox('Ramas del estribo', [2, 4], index=1 if b >= 40 else 0, key=f'vc_ramas_{b >= 40}')
+    rec = c4.number_input('Recubrimiento libre (cm)', 1.5, 8.0, 3.0, 0.5, key='vc_rec')
+    c1, c2, c3 = st.columns(3)
+    r_fija = c1.checkbox('Usar r fija al centroide (como en clase)', True, key='vc_rfija',
+                         help='Activado: d = h − r con la r que escribas (clase: r = 5 cm, d = 65). Desactivado: la d se calcula con la '
+                              'posición real de las barras.')
+    r_val = c2.number_input('r (cm)', 2.0, 20.0, 5.0, 0.5, key='vc_r', disabled=not r_fija)
+    agrupar = c3.checkbox('Permitir barras agrupadas de 2 en 2', True, key='vc_agr')
+    st.caption(txt_sug)
+    base = pd.DataFrame({'Punto': list('abcdefghijk'),
+                         'Mu (t·m)': ['41.6', '15.26', '49.91', '18.8', '48.22', '13.55', '40.1', '13.4', '59.9', '26.7', '58.6'],
+                         'Tensión': ['superior', 'inferior', 'superior', 'inferior', 'superior', 'inferior', 'superior', 'inferior',
+                                     'superior', 'inferior', 'superior']})
+    ed = st.data_editor(base, num_rows='dynamic', hide_index=True, width='stretch', key='vc_tabla',
+                        column_config={'Mu (t·m)': st.column_config.TextColumn('Mu (t·m)'),
+                                       'Punto': st.column_config.TextColumn('Punto'),
+                                       'Tensión': st.column_config.SelectboxColumn('Lecho en tensión', options=['superior', 'inferior'],
+                                                                                  required=True)})
+    ed = ed.dropna()
+    ed = _numeros(ed, ['Mu (t·m)']) if len(ed) else None
+    if ed is None or not len(ed):
+        st.info('Captura al menos un punto con Mu numérico (decimales con punto o coma).')
+        return
+    c1, c2, c3 = st.columns(3)
+    Vu = c1.number_input('Vu máximo (t)', 0.0, 1000.0, 44.3, key='vc_Vu')
+    Lcl = c2.number_input('Claro del tramo para estribos (cm)', 50.0, 3000.0, 700.0, key='vc_L')
+    fyest = c3.selectbox('fy del estribo', [4200.0, 2530.0], key='vc_fyest')
+    est_db, a_est = pt.DIAMETROS[est], p3.VARILLAS[est]
+    rf = r_val if r_fija else None
+    fichas = [pt.ficha_punto(float(m), b, h, fc, fy, var, rec, est_db, rf, agrupar, lecho=lc) for m, lc in zip(ed['Mu (t·m)'], ed['Tensión'])]
+    viga = pt.ficha_viga(b, h, fc, fy, var, est, ramas, rec, rf, Mu_max=float(ed['Mu (t·m)'].max()), Vu_max=Vu)
+    (st.success if viga['ok_flexion'] and viga['ok_cortante'] else st.error)(
+        'La sección cumple: puede ser subreforzada en todos los puntos y el cortante no excede el límite.'
+        if viga['ok_flexion'] and viga['ok_cortante'] else 'La sección NO cumple una revisión global: cámbiala antes de armar.')
+    with st.expander('0 · Datos y revisiones de la viga', expanded=True):
+        for t in viga['lineas']:
+            st.markdown(f'- {t}')
+    st.markdown('#### 1 · Flexión en cada punto')
+    filas = [[p_, lc, f['Mu'], f['As_req'] if f['As_req'] is not None else np.nan, f['As_usar'] if f['As_usar'] is not None else np.nan,
+              f['armado'], f['As_real'] if f['As_real'] is not None else np.nan, f['MR'] if f['MR'] is not None else np.nan,
+              f['sep_libre'] if f['sep_libre'] is not None else np.nan, '✔' if f['ok'] else '✘']
+             for p_, lc, f in zip(ed['Punto'], ed['Tensión'], fichas)]
+    _tabla(pd.DataFrame(filas, columns=['Punto', 'Lecho', 'Mu (t·m)', 'As req (cm²)', 'As usar (cm²)', 'Armado', 'As real (cm²)',
+                                        'MR (t·m)', 'Sep. libre (cm)', 'OK']), 2)
+    with st.expander('Cálculo desarrollado de cada punto', expanded=True):
+        for p_, f in zip(ed['Punto'], fichas):
+            st.markdown(f'**{p_})**')
+            for t in f['lineas']:
+                st.markdown(f'- {t}')
+    st.markdown('#### 2 · Varillas corridas (a todo lo largo, arriba y abajo, con ganchos al inicio y al final)')
+    reales = [f['As_real'] for f in fichas if f['As_real']]
+    if reales:
+        As_max_real = max(reales)
+        ab = p3.VARILLAS[var]
+        lim = viga['lim']
+        As_corr = max(lim['As_min'], 0.5 * As_max_real)
+        n_corr = max(2, int(np.ceil(As_corr / ab - 1e-9)))
+        st.markdown(f'- Mayor As real = {As_max_real:.2f} cm²; 50 % = {0.5 * As_max_real:.2f} cm²; As,mín = {lim["As_min"]:.2f} cm²')
+        st.markdown(f'- Corrido: máx(As,mín; 50 % As mayor) = {As_corr:.2f} cm² → n = {As_corr:.2f}/{ab} = {As_corr / ab:.2f} → '
+                    f'**{n_corr}{var}** ({n_corr * ab:.2f} cm²) arriba y abajo')
+        st.markdown('- Bastones: en cada punto se agregan las barras que falten hasta el As real de la tabla; cada bastón se ancla una '
+                    'distancia d más allá de donde ya no se requiere en el diagrama de Mu. El alzado con las longitudes sale en la pestaña '
+                    '«6 · Diagramas» → «Viga continua del nivel».')
+        faltan = [f'{p_}) +{f["n"] - n_corr}{var}' for p_, f in zip(ed['Punto'], fichas) if f['n'] and f['n'] > n_corr]
+        if faltan:
+            st.markdown('- Bastones por punto: ' + ' · '.join(faltan))
+    st.markdown('#### 3 · Secciones')
+    import matplotlib.pyplot as plt
+    fig = pt.figura_puntos(fichas, b, h, rec, est_db, [f'{p_})' for p_ in ed['Punto']])
+    st.pyplot(fig, width='stretch')
+    plt.close(fig)
+    st.caption('Rojo = no cumple la separación libre o no caben las barras. La numeración de pares (agrupadas) sigue la práctica de clase.')
+    st.markdown('#### 4 · Estribos')
+    As_trac = max([f['As_real'] for f in fichas if f['As_real'] and f.get('lecho') == 'superior'] or [max(reales or [1.0])])
+    Av = a_est * ramas
+    cort = p3.cortante_viga(Vu * 1000, b, viga['d'], h, Lcl, fc, fyest, Av, As_trac)
+    if cort['ok']:
+        st.markdown(f'**Estribos {est} ({ramas} ramas) @ {cort["s_usar"]} cm**  (Vu = {Vu:g} t, VcR = {cort["VcR"] / 1000:.2f} t)')
+    else:
+        st.error('Vu excede el límite 2.65·FR·b·d·√f′c: agranda la sección.')
+    with st.expander('Cálculo desarrollado de los estribos', expanded=True):
+        _pasos(cort['pasos'])
+
+
 def _concreto():
-    s_flex, s_tant, s_cort, s_viga = st.tabs(['Flexión: As', 'Tanteos (eje neutro)', 'Cortante: estribos', 'Cargas y diagramas'])
+    s_viga_c, s_flex, s_tant, s_cort, s_viga = st.tabs(['Viga completa (clase)', 'Flexión: As', 'Tanteos (eje neutro)',
+                                                         'Cortante: estribos', 'Cargas y diagramas'])
+    with s_viga_c:
+        _viga_completa()
     with s_flex:
         c1, c2, c3, c4 = st.columns(4)
         b = c1.number_input('b (cm)', 5.0, 300.0, 40.0, key='cf_b')
@@ -264,6 +367,14 @@ def _concreto():
             st.caption('MR se verifica con el área REAL del armado. Si b ≥ 40 cm el estribo lleva 4 ramas.')
         with st.expander('Procedimiento', expanded=True):
             _pasos(res['pasos'])
+        import ame_porticos as pt
+        sug_f, txt_f = pt.varilla_sugerida(h)
+        var_f = st.selectbox('Varilla para el armado detallado', list(pt.DIAMETROS), index=list(pt.DIAMETROS).index(sug_f),
+                             key=f'cf_var_{sug_f}', help=txt_f)
+        f_ = pt.ficha_punto(Mu, b, h, fc, fy, var_f, rec=max(r - 0.95 - pt.DIAMETROS[var_f] / 2, 1.5), est_db=0.95, r_fija=r)
+        with st.expander('Cálculo detallado: cuadrática con sus dos raíces, barras, MR y separación', expanded=True):
+            for t in f_['lineas']:
+                st.markdown(f'- {t}')
     with s_tant:
         c1, c2, c3, c4 = st.columns(4)
         b = c1.number_input('b (cm)', 5.0, 300.0, 35.0, key='ct_b')

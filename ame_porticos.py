@@ -977,3 +977,170 @@ def figura_alzado(niv, res):
                 color='#B00020' if malo else '#13315C')
     fig.tight_layout()
     return fig
+
+
+# ================================================================ cálculo desarrollado paso a paso (procedimiento de clase)
+def ficha_viga(b, h, fc, fy, varilla, est_var, ramas, rec=4.0, r_fija=None, Mu_max=None, Vu_max=None):
+    """Datos y revisiones de la viga como en el pizarrón: Ec, f″c, β1, Asb, As,máx, As,mín, d, varilla y estribo, MR con
+    As,máx contra Mu máx (subreforzada) y V límite contra Vu máx. Devuelve dict(lineas, d, lim, ok_flexion, ok_cortante)."""
+    db, ab = DIAMETROS[varilla], p3.VARILLAS[varilla]
+    est_db, a_est = DIAMETROS[est_var], p3.VARILLAS[est_var]
+    r = r_fija if r_fija else rec + est_db + db / 2
+    d = h - r
+    lim = p3.limites_flexion(b, d, fc, fy)
+    fcc = lim['fcc']
+    lin = [f'**Materiales.** Ec = 14000·√f′c = 14000·√{fc:g} = {14000 * math.sqrt(fc):,.0f} kg/cm²; Es = 2,000,000 kg/cm²; '
+           f'fy = {fy:g} kg/cm²',
+           f"f″c = 0.85·f′c = 0.85·{fc:g} = {fcc:.2f} kg/cm²; β1 = {lim['beta1']:.2f} (f′c ≤ 280)",
+           f'**Sección.** b = {b:g} cm, h = {h:g} cm; ' + (f'r = {r:g} cm (fija)' if r_fija else
+                                                           f'r supuesta = rec + Øest + Ø/2 = {rec:g} + {est_db:.2f} + {db / 2:.2f} = {r:.2f} cm')
+           + f'; d = h − r = {d:.2f} cm',
+           f'**Varilla {varilla}:** Ø = {db:.2f} cm, Ab = {ab} cm².  **Estribo {est_var}:** Ø = {est_db:.2f} cm, {ramas} ramas → '
+           f'Av = {ramas}·{a_est} = {ramas * a_est:.2f} cm²',
+           f"**Límites de acero.** Asb = (f″c/fy)·(6000·β1/(fy+6000))·b·d = ({fcc:.1f}/{fy:g})·(6000·{lim['beta1']:.2f}/{fy + 6000:g})·{b:g}·{d:.2f} "
+           f"= {lim['Asb']:.2f} cm²",
+           f"As,máx = 0.75·Asb = {lim['As_max']:.2f} cm²",
+           f"As,mín = máx(0.8·√f′c/fy·b·d = {0.8 * math.sqrt(fc) / fy * b * d:.2f}; 14/fy·b·d = {14 / fy * b * d:.2f}) = {lim['As_min']:.2f} cm²"]
+    MR_max = p3.momento_resistente(lim['As_max'], b, d, fc, fy) / 1e5
+    lin.append(f"**Subreforzada.** MR(As,máx) = FR·As,máx·fy·(d − As,máx·fy/(2·b·f″c)) = 0.9·{lim['As_max']:.2f}·{fy:g}·"
+               f"({d:.2f} − {lim['As_max'] * fy / (2 * b * fcc):.2f}) = {MR_max:.2f} t·m")
+    ok_f = True
+    if Mu_max is not None:
+        ok_f = MR_max >= Mu_max
+        lin.append(f'MR(As,máx) = {MR_max:.2f} {"≥" if ok_f else "<"} Mu máx = {Mu_max:.2f} t·m → '
+                   f'{"OK: todas las secciones pueden ser subreforzadas" if ok_f else "NO: cambia la sección (o usa doble refuerzo)"}')
+    V_lim = 2.65 * p3.FR_CORTANTE * b * d * math.sqrt(fc) / 1000
+    lin.append(f'**Cortante máximo.** V límite = 2.65·FR·b·d·√f′c = 2.65·0.75·{b:g}·{d:.2f}·√{fc:g} = {V_lim:.1f} t')
+    ok_c = True
+    if Vu_max is not None:
+        ok_c = V_lim >= Vu_max
+        lin.append(f'V límite = {V_lim:.1f} {"≥" if ok_c else "<"} Vu máx = {Vu_max:.1f} t → '
+                   f'{"OK" if ok_c else "NO: agranda la sección"}')
+    return dict(lineas=lin, d=d, r=r, lim=lim, MR_max=MR_max, V_lim=V_lim, ok_flexion=ok_f, ok_cortante=ok_c)
+
+
+def ficha_punto(Mu_tm, b, h, fc, fy, varilla, rec=4.0, est_db=0.95, r_fija=None, agrupar=True, lecho='superior'):
+    """Diseño a flexión de UN punto con todo el desarrollo: cuadrática de As con sus dos raíces, As,mín, número de barras,
+    As real, MR con el área real y separación libre en el ancho. r_fija = r (cm) al centroide como en clase; si no, se itera
+    con la posición real de las barras. Devuelve dict(As_req, As_usar, n, As_real, MR, ok, cabe, lineas, lech, d, r)."""
+    db, ab = DIAMETROS[varilla], p3.VARILLAS[varilla]
+    if r_fija:
+        r = float(r_fija)
+        As0 = _as_req(Mu_tm, b, h - r, fc, fy)
+        n = max(2, math.ceil((As0[1] if As0 else 0) / ab - 1e-9))
+        lech = distribuir_lechos(n, db, b, rec, est_db, agrupar)
+    else:
+        r = rec + est_db + db / 2
+        for _ in range(10):
+            As0 = _as_req(Mu_tm, b, h - r, fc, fy)
+            if As0 is None:
+                break
+            n = max(2, math.ceil(As0[1] / ab - 1e-9))
+            lech = distribuir_lechos(n, db, b, rec, est_db, agrupar)
+            if abs(lech['r'] - r) < 0.02:
+                break
+            r = lech['r']
+    d = h - r
+    lim = p3.limites_flexion(b, d, fc, fy)
+    fcc = lim['fcc']
+    lin = [f'Mu = {Mu_tm:.2f} t·m = {Mu_tm * 1e5:,.0f} kg·cm  (tensión {lecho})',
+           f'd = h − r = {h:g} − {r:.2f} = {d:.2f} cm' + ('  (r fija)' if r_fija else '  (r al centroide de las barras colocadas)')]
+    if Mu_tm <= 1e-9:
+        lin.append(f"Sin momento de este signo → rige As,mín = {lim['As_min']:.2f} cm²")
+        n = max(2, math.ceil(lim['As_min'] / ab - 1e-9))
+        lech = distribuir_lechos(n, db, b, rec, est_db, agrupar)
+        As_req, As_usar = 0.0, lim['As_min']
+        mr = p3.momento_resistente(n * ab, b, h - lech['r'], fc, fy) / 1e5
+        _separacion(lin, n, db, b, rec, est_db, lech)
+        return dict(Mu=Mu_tm, As_req=As_req, As_usar=As_usar, n=n, As_real=n * ab, MR=mr, ok=lech['cabe'], cabe=lech['cabe'], lineas=lin,
+                    lech=lech, d=d, r=lech['r'], varilla=varilla, armado=f'{n}{varilla}', sep_libre=lech['sep_libre'], lim=lim, lecho=lecho)
+    A_ = fy ** 2 / (2 * b * fcc)
+    B_ = fy * d
+    C_ = Mu_tm * 1e5 / p3.FR_FLEXION
+    lin.append(f'Cuadrática (FR = 0.9):  (fy²/(2·b·f″c))·As² − (fy·d)·As + Mu/FR = 0')
+    lin.append(f'A = {fy:g}²/(2·{b:g}·{fcc:.1f}) = {A_:.3f};  B = {fy:g}·{d:.2f} = {B_:,.0f};  C = {Mu_tm * 1e5:,.0f}/0.9 = {C_:,.0f}')
+    disc = B_ ** 2 - 4 * A_ * C_
+    lin.append(f'Discriminante = B² − 4AC = {B_ ** 2:,.0f} − {4 * A_ * C_:,.0f} = {disc:,.0f}')
+    if disc < 0:
+        lin.append('El discriminante es negativo: la sección no alcanza → aumenta b, h o f′c.')
+        return dict(Mu=Mu_tm, As_req=None, As_usar=None, n=None, As_real=None, MR=None, ok=False, cabe=False, lineas=lin, lech=None, d=d,
+                    r=r, varilla=varilla, armado='—', sep_libre=None, lim=lim, lecho=lecho)
+    raiz = math.sqrt(disc)
+    As1, As2 = (B_ - raiz) / (2 * A_), (B_ + raiz) / (2 * A_)
+    lin.append(f'As = (B ∓ √disc)/(2A):  As₁ = {As1:.2f} cm² ✓ (raíz menor);  As₂ = {As2:.2f} cm² ✗ (descartada: excede As,máx = '
+               f"{lim['As_max']:.2f} y el bloque a = As·fy/(b·f″c) = {As2 * fy / (b * fcc):.1f} cm > d)")
+    As_usar = max(As1, lim['As_min'])
+    lin.append(f"As,mín = {lim['As_min']:.2f} cm² → As usar = máx({As1:.2f}; {lim['As_min']:.2f}) = {As_usar:.2f} cm²"
+               + ('  (rige As,mín)' if As_usar > As1 else ''))
+    ok_max = As_usar <= lim['As_max']
+    lin.append(f"As usar {'≤' if ok_max else '>'} As,máx = {lim['As_max']:.2f} cm² → {'subreforzada ✓' if ok_max else 'NO: cambia la sección'}")
+    n = max(2, math.ceil(As_usar / ab - 1e-9))
+    lin.append(f'Barras {varilla} (Ab = {ab} cm²): n = As usar / Ab = {As_usar:.2f}/{ab} = {As_usar / ab:.2f} → {n} barras')
+    for _ in range(30):
+        lech = distribuir_lechos(n, db, b, rec, est_db, agrupar) if not r_fija else lech
+        r_eff = r_fija if r_fija else lech['r']
+        As_real = n * ab
+        MR = p3.momento_resistente(As_real, b, h - r_eff, fc, fy) / 1e5
+        if MR + 1e-9 >= Mu_tm or not lech['cabe']:
+            break
+        n += 1
+        lin.append(f'Con la d real no alcanza el MR → se sube a {n} barras')
+        if r_fija:
+            lech = distribuir_lechos(n, db, b, rec, est_db, agrupar)
+    a_blq = As_real * fy / (b * fcc)
+    lin.append(f'As real = {n}{varilla} = {n}·{ab} = {As_real:.2f} cm² {"≥" if As_real >= As_usar - 1e-9 else "<"} As usar')
+    lin.append(f'MR = FR·As real·fy·(d − a/2) con a = As real·fy/(b·f″c) = {As_real:.2f}·{fy:g}/({b:g}·{fcc:.1f}) = {a_blq:.2f} cm → '
+               f'MR = 0.9·{As_real:.2f}·{fy:g}·({(h - r_eff):.2f} − {a_blq / 2:.2f}) = {MR:.2f} t·m {"≥" if MR + 1e-9 >= Mu_tm else "<"} Mu = {Mu_tm:.2f} t·m')
+    _separacion(lin, n, db, b, rec, est_db, lech)
+    ok = ok_max and MR + 1e-9 >= Mu_tm and lech['cabe'] and As_real <= lim['As_max']
+    return dict(Mu=Mu_tm, As_req=As1, As_usar=As_usar, n=n, As_real=As_real, MR=MR, ok=ok, cabe=lech['cabe'], lineas=lin, lech=lech,
+                d=h - r_eff, r=r_eff, varilla=varilla, armado=f'{n}{varilla}', sep_libre=lech['sep_libre'], lim=lim, lecho=lecho)
+
+
+def _as_req(Mu_tm, b, d, fc, fy):
+    """(As calculada, As de diseño) o None si no hay solución real."""
+    lim = p3.limites_flexion(b, d, fc, fy)
+    if Mu_tm <= 1e-9:
+        return 0.0, lim['As_min']
+    As = p3.area_requerida(Mu_tm * 1e5, b, d, fc, fy)
+    return None if As is None else (As, max(As, lim['As_min']))
+
+
+def _separacion(lin, n, db, b, rec, est_db, lech):
+    util = b - 2 * (rec + est_db)
+    forma = ' (agrupadas de 2 en 2, pegadas)' if lech['agrupado'] else ''
+    lin.append(f'**Separación.** Ancho útil = b − 2(rec + Øest) = {b:g} − 2({rec:g} + {est_db:.2f}) = {util:.2f} cm; '
+               f'{n} barras de Ø {db:.2f}: {" + ".join(map(str, lech["capas"]))} por lecho{forma}')
+    if len(lech['capas']) == 1 and not lech['agrupado'] and n > 1:
+        lin.append(f'Separación libre = (ancho útil − n·Ø)/(n − 1) = ({util:.2f} − {n}·{db:.2f})/{n - 1} = {lech["sep_libre"]:.2f} cm '
+                   f'{"≥" if lech["sep_libre"] >= lech["sep_min"] else "<"} máx(Ø; 2.5) = {lech["sep_min"]:.2f} cm → '
+                   f'{"cabe ✓" if lech["sep_libre"] >= lech["sep_min"] else "NO cabe ✗"}')
+    else:
+        lin.append(f'Separación libre entre barras/grupos = {lech["sep_libre"]:.2f} cm {"≥" if lech["sep_libre"] >= lech["sep_min"] else "<"} '
+                   f'máx(Ø; 2.5) = {lech["sep_min"]:.2f} cm → {"cabe ✓" if lech["cabe"] and lech["sep_libre"] >= lech["sep_min"] else "NO cabe ✗"}')
+
+
+def figura_puntos(fichas, b, h, rec, est_db, titulos):
+    """Cuadrícula con la sección de cada punto (solo el lecho en tensión) y sus datos."""
+    plt = _plt()
+    n = len(fichas)
+    ncol = min(n, 4)
+    nfil = math.ceil(n / ncol)
+    fig, axs = plt.subplots(nfil, ncol, figsize=(4.6 * ncol, (h / b * 3.2 + 2.2) * nfil), squeeze=False)
+    for ax in axs.ravel():
+        ax.axis('off')
+    for ax, f, t in zip(axs.ravel(), fichas, titulos):
+        if not f.get('lech'):
+            ax.set_title(f'{t}: sin solución', color='#B00020')
+            continue
+        par = dict(lech=f['lech'], varilla=f['varilla'])
+        sup = par if f.get('lecho', 'superior') == 'superior' else None
+        inf = par if f.get('lecho', 'superior') != 'superior' else None
+        malo = _dibuja_seccion(ax, b, h, rec, est_db, sup, inf)
+        ax.set_title(f'{t}  Mu = {f["Mu"]:.2f} t·m', fontsize=10, color='#B00020' if (malo or not f['ok']) else '#0B2545')
+        ax.text(b / 2, -6, f'{f["armado"]} = {f["As_real"]:.2f} cm² · MR = {f["MR"]:.2f}\n'
+                           f'sep. libre = {f["sep_libre"]:.2f} cm', ha='center', va='top', fontsize=8.5,
+                color='#B00020' if (malo or not f['ok']) else '#13315C')
+        ax.set_ylim(-14, h + 8)
+    fig.tight_layout()
+    return fig

@@ -298,3 +298,21 @@ def test_figura_diagrama_opciones_de_etiquetas():
     mn = {k: dict(x=v['x'], p=v['p'], M=v['Mmin'], V=v['Vmin']) for k, v in env.items()}
     for kw in (dict(etiquetas='todas'), dict(etiquetas='extremos', columnas=False, fuente=12), dict(etiquetas='ninguna'), dict(piso=2)):
         pt.figura_diagrama(res, mx, 'M', 'x', extra=mn, **kw)
+
+
+def test_ficha_punto_reproduce_el_pizarron_de_clase():
+    """b = 35, h = 70, r = 5 (d = 65), #8: As y armado de los puntos a)…j) del ejercicio de clase."""
+    import ame_porticos as pt
+    esperado = {41.6: (18.4, '4#8'), 49.91: (22.53, '5#8'), 48.22: (21.7, '5#8'), 40.1: (17.7, '4#8'), 59.9: (27.7, '6#8'),
+                26.7: (11.4, '3#8'), 58.6: (27.02, '6#8'), 13.55: (7.58, '2#8')}
+    for Mu, (As, armado) in esperado.items():
+        f = pt.ficha_punto(Mu, 35, 70, 250, 4200, '#8', rec=3.0, est_db=1.27, r_fija=5.0)
+        assert f['As_usar'] == pytest.approx(As, rel=0.01), Mu
+        assert f['armado'] == armado and f['ok'], Mu
+        assert any('As₂' in t for t in f['lineas']) or Mu < 14        # se muestran las dos raíces de la cuadrática
+    v = pt.ficha_viga(35, 70, 250, 4200, '#8', '#4', 2, rec=3.0, r_fija=5.0, Mu_max=59.9, Vu_max=44.3)
+    assert v['lim']['Asb'] == pytest.approx(57.55, abs=0.01) and v['MR_max'] == pytest.approx(86.16, abs=0.05)
+    assert v['V_lim'] == pytest.approx(71.4, abs=0.15) and v['ok_flexion'] and v['ok_cortante']
+    f6 = pt.ficha_punto(59.9, 35, 70, 250, 4200, '#8', rec=3.0, est_db=1.27, r_fija=5.0)
+    assert f6['lech']['capas'] == [6] and f6['sep_libre'] == pytest.approx(5.61, abs=0.01)     # 6#8 en una capa, 5.61 cm entre parejas
+    pt.figura_puntos([f6], 35, 70, 3.0, 1.27, ['i)'])
