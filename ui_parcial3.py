@@ -238,6 +238,15 @@ def _viento():
 
 
 # ------------------------------------------------------------------ concreto
+def _desarrollo(f, titulo=None):
+    """Muestra el cálculo de una ficha con las fórmulas y los números (LaTeX), paso a paso."""
+    if titulo:
+        st.markdown(f'##### {titulo}')
+    for tit, tx in f['tex']:
+        st.markdown(f'**{tit}**')
+        st.latex(tx)
+
+
 def _viga_completa():
     """Procedimiento de clase completo: datos y revisiones, As de todos los puntos del diagrama, armado con la varilla elegida,
     corrido (50 % de la mayor As), render de las secciones y estribos."""
@@ -263,16 +272,24 @@ def _viga_completa():
     r_val = c2.number_input('r (cm)', 2.0, 20.0, 5.0, 0.5, key='vc_r', disabled=not r_fija)
     agrupar = c3.checkbox('Permitir barras agrupadas de 2 en 2', True, key='vc_agr')
     st.caption(txt_sug)
+    modo = st.radio('Armado', ['Automático: la app propone el número de barras', 'Propongo yo el armado (número y varilla de cada punto)'],
+                    key='vc_modo', horizontal=True,
+                    help='En el modo manual escribe en la columna «Armado propuesto» algo como 4#8; la app calcula As real = n·Ab, el MR '
+                         'y la separación, y revisa contra el As requerido. Si dejas una celda vacía, ese punto se propone solo.')
+    manual = modo.startswith('Propongo')
     base = pd.DataFrame({'Punto': list('abcdefghijk'),
                          'Mu (t·m)': ['41.6', '15.26', '49.91', '18.8', '48.22', '13.55', '40.1', '13.4', '59.9', '26.7', '58.6'],
                          'Tensión': ['superior', 'inferior', 'superior', 'inferior', 'superior', 'inferior', 'superior', 'inferior',
-                                     'superior', 'inferior', 'superior']})
+                                     'superior', 'inferior', 'superior'],
+                         'Armado propuesto': [''] * 11})
     ed = st.data_editor(base, num_rows='dynamic', hide_index=True, width='stretch', key='vc_tabla',
                         column_config={'Mu (t·m)': st.column_config.TextColumn('Mu (t·m)'),
+                                       'Armado propuesto': st.column_config.TextColumn('Armado propuesto', help='Ejemplo: 4#8. Solo se usa en el modo manual.'),
                                        'Punto': st.column_config.TextColumn('Punto'),
                                        'Tensión': st.column_config.SelectboxColumn('Lecho en tensión', options=['superior', 'inferior'],
                                                                                   required=True)})
-    ed = ed.dropna()
+    ed = ed.dropna(subset=['Punto', 'Mu (t·m)', 'Tensión'])
+    ed['Armado propuesto'] = ed['Armado propuesto'].fillna('')
     ed = _numeros(ed, ['Mu (t·m)']) if len(ed) else None
     if ed is None or not len(ed):
         st.info('Captura al menos un punto con Mu numérico (decimales con punto o coma).')
@@ -283,14 +300,19 @@ def _viga_completa():
     fyest = c3.selectbox('fy del estribo', [4200.0, 2530.0], key='vc_fyest')
     est_db, a_est = pt.DIAMETROS[est], p3.VARILLAS[est]
     rf = r_val if r_fija else None
-    fichas = [pt.ficha_punto(float(m), b, h, fc, fy, var, rec, est_db, rf, agrupar, lecho=lc) for m, lc in zip(ed['Mu (t·m)'], ed['Tensión'])]
+    try:
+        props = [pt.parse_propuesta(t) if manual else None for t in ed['Armado propuesto']]
+    except ValueError as e:
+        st.error(str(e))
+        return
+    fichas = [pt.ficha_punto(float(m), b, h, fc, fy, var, rec, est_db, rf, agrupar, lecho=lc, propuesta=pr)
+              for m, lc, pr in zip(ed['Mu (t·m)'], ed['Tensión'], props)]
     viga = pt.ficha_viga(b, h, fc, fy, var, est, ramas, rec, rf, Mu_max=float(ed['Mu (t·m)'].max()), Vu_max=Vu)
     (st.success if viga['ok_flexion'] and viga['ok_cortante'] else st.error)(
         'La sección cumple: puede ser subreforzada en todos los puntos y el cortante no excede el límite.'
         if viga['ok_flexion'] and viga['ok_cortante'] else 'La sección NO cumple una revisión global: cámbiala antes de armar.')
-    with st.expander('0 · Datos y revisiones de la viga', expanded=True):
-        for t in viga['lineas']:
-            st.markdown(f'- {t}')
+    st.markdown('#### 0 · Datos y revisiones de la viga')
+    _desarrollo(viga)
     st.markdown('#### 1 · Flexión en cada punto')
     filas = [[p_, lc, f['Mu'], f['As_req'] if f['As_req'] is not None else np.nan, f['As_usar'] if f['As_usar'] is not None else np.nan,
               f['armado'], f['As_real'] if f['As_real'] is not None else np.nan, f['MR'] if f['MR'] is not None else np.nan,
@@ -298,11 +320,12 @@ def _viga_completa():
              for p_, lc, f in zip(ed['Punto'], ed['Tensión'], fichas)]
     _tabla(pd.DataFrame(filas, columns=['Punto', 'Lecho', 'Mu (t·m)', 'As req (cm²)', 'As usar (cm²)', 'Armado', 'As real (cm²)',
                                         'MR (t·m)', 'Sep. libre (cm)', 'OK']), 2)
-    with st.expander('Cálculo desarrollado de cada punto', expanded=True):
-        for p_, f in zip(ed['Punto'], fichas):
-            st.markdown(f'**{p_})**')
-            for t in f['lineas']:
-                st.markdown(f'- {t}')
+    st.markdown('##### Cálculo desarrollado de cada punto')
+    for p_, f in zip(ed['Punto'], fichas):
+        with st.container(border=True):
+            _desarrollo(f, f'{p_})  ' + ('✔' if f['ok'] else '✘ revisa'))
+            for t in f['lineas'][-3:]:
+                st.caption(t)
     st.markdown('#### 2 · Varillas corridas (a todo lo largo, arriba y abajo, con ganchos al inicio y al final)')
     reales = [f['As_real'] for f in fichas if f['As_real']]
     if reales:
@@ -371,10 +394,14 @@ def _concreto():
         sug_f, txt_f = pt.varilla_sugerida(h)
         var_f = st.selectbox('Varilla para el armado detallado', list(pt.DIAMETROS), index=list(pt.DIAMETROS).index(sug_f),
                              key=f'cf_var_{sug_f}', help=txt_f)
-        f_ = pt.ficha_punto(Mu, b, h, fc, fy, var_f, rec=max(r - 0.95 - pt.DIAMETROS[var_f] / 2, 1.5), est_db=0.95, r_fija=r)
-        with st.expander('Cálculo detallado: cuadrática con sus dos raíces, barras, MR y separación', expanded=True):
-            for t in f_['lineas']:
-                st.markdown(f'- {t}')
+        prop = st.checkbox('Yo propongo el número de varillas (la app calcula As real = n·Ab)', False, key='cf_prop')
+        n_prop = st.number_input('Número de varillas', 1, 30, 4, key='cf_nprop', disabled=not prop)
+        f_ = pt.ficha_punto(Mu, b, h, fc, fy, var_f, rec=max(r - 0.95 - pt.DIAMETROS[var_f] / 2, 1.5), est_db=0.95, r_fija=r,
+                            propuesta=(int(n_prop), var_f) if prop else None)
+        (st.success if f_['ok'] else st.error)(f'{f_["armado"]} = {f_["As_real"]:.2f} cm²; MR = {f_["MR"]:.2f} t·m '
+                                                f'{"≥" if f_["MR"] >= Mu else "<"} Mu = {Mu:.2f} t·m' if f_['As_real'] else 'Sin solución')
+        st.markdown('##### Cálculo detallado')
+        _desarrollo(f_)
     with s_tant:
         c1, c2, c3, c4 = st.columns(4)
         b = c1.number_input('b (cm)', 5.0, 300.0, 35.0, key='ct_b')

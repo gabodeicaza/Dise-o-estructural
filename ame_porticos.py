@@ -1016,21 +1016,61 @@ def ficha_viga(b, h, fc, fy, varilla, est_var, ramas, rec=4.0, r_fija=None, Mu_m
         ok_c = V_lim >= Vu_max
         lin.append(f'V límite = {V_lim:.1f} {"≥" if ok_c else "<"} Vu máx = {Vu_max:.1f} t → '
                    f'{"OK" if ok_c else "NO: agranda la sección"}')
-    return dict(lineas=lin, d=d, r=r, lim=lim, MR_max=MR_max, V_lim=V_lim, ok_flexion=ok_f, ok_cortante=ok_c)
+    tex = [('Módulo de elasticidad', rf"E_c = 14000\sqrt{{f'_c}} = 14000\sqrt{{{fc:g}}} = {_n(14000 * math.sqrt(fc))}\ \text{{kg/cm}}^2"),
+           ('Esfuerzo del bloque', rf"f''_c = 0.85\,f'_c = 0.85({fc:g}) = {fcc:.2f}\ \text{{kg/cm}}^2,\qquad \beta_1 = {lim['beta1']:.2f}"),
+           ('Peralte efectivo', rf"d = h - r = {h:g} - {r:.2f} = {d:.2f}\ \text{{cm}}"),
+           ('Acero balanceado', rf"A_{{sb}} = \frac{{f''_c}}{{f_y}}\,\frac{{6000\,\beta_1}}{{f_y+6000}}\,b\,d = \frac{{{fcc:.1f}}}{{{fy:g}}}\cdot\frac{{6000({lim['beta1']:.2f})}}{{{fy + 6000:g}}}({b:g})({d:.2f}) = {lim['Asb']:.2f}\ \text{{cm}}^2"),
+           ('Acero máximo', rf"A_{{s,max}} = 0.75\,A_{{sb}} = {lim['As_max']:.2f}\ \text{{cm}}^2"),
+           ('Acero mínimo', rf"A_{{s,min}} = \max\left(\frac{{0.8\sqrt{{f'_c}}}}{{f_y}}\,b\,d;\ \frac{{14}}{{f_y}}\,b\,d\right) = \max({0.8 * math.sqrt(fc) / fy * b * d:.2f};\ {14 / fy * b * d:.2f}) = {lim['As_min']:.2f}\ \text{{cm}}^2"),
+           ('Momento con As,máx (subreforzada)', rf"M_R = F_R\,A_{{s,max}}\,f_y\left(d - \frac{{A_{{s,max}}f_y}}{{2\,b\,f''_c}}\right) = 0.9({lim['As_max']:.2f})({fy:g})\left({d:.2f} - {lim['As_max'] * fy / (2 * b * fcc):.2f}\right) = {MR_max:.2f}\ \text{{t}}\cdot\text{{m}}"
+                                                          + (rf"\ {'\\ge' if ok_f else '<'}\ M_{{u,max}} = {Mu_max:.2f}" if Mu_max is not None else '')),
+           ('Cortante máximo de la sección', rf"V_{{lim}} = 2.65\,F_R\,b\,d\sqrt{{f'_c}} = 2.65(0.75)({b:g})({d:.2f})\sqrt{{{fc:g}}} = {V_lim:.1f}\ \text{{t}}"
+                                             + (rf"\ {'\\ge' if ok_c else '<'}\ V_{{u,max}} = {Vu_max:.1f}" if Vu_max is not None else ''))]
+    return dict(lineas=lin, tex=tex, d=d, r=r, lim=lim, MR_max=MR_max, V_lim=V_lim, ok_flexion=ok_f, ok_cortante=ok_c)
 
 
-def ficha_punto(Mu_tm, b, h, fc, fy, varilla, rec=4.0, est_db=0.95, r_fija=None, agrupar=True, lecho='superior'):
-    """Diseño a flexión de UN punto con todo el desarrollo: cuadrática de As con sus dos raíces, As,mín, número de barras,
-    As real, MR con el área real y separación libre en el ancho. r_fija = r (cm) al centroide como en clase; si no, se itera
-    con la posición real de las barras. Devuelve dict(As_req, As_usar, n, As_real, MR, ok, cabe, lineas, lech, d, r)."""
+def _n(x, dec=0):
+    """Número con separador de miles para LaTeX: 273{,}000."""
+    return f'{x:,.{dec}f}'.replace(',', '{,}')
+
+
+def parse_propuesta(txt):
+    """'4#8', '4 #8', '4x8' o '4 8' → (4, '#8'); vacío → None; texto inválido → ValueError."""
+    import re
+    t = str(txt or '').strip().lower().replace('ø', '#').replace('×', 'x')
+    if not t or t in ('nan', 'none', '-', '—'):
+        return None
+    m = re.fullmatch(r'(\d+)\s*(?:#|x|\s)\s*#?\s*(\d+)', t)
+    if not m:
+        raise ValueError(f'No entiendo el armado «{txt}». Escríbelo como 4#8 (número de varillas y número de varilla).')
+    n, v = int(m.group(1)), f'#{m.group(2)}'
+    if v not in DIAMETROS:
+        raise ValueError(f'La varilla {v} no existe aquí: usa {", ".join(DIAMETROS)}.')
+    if n < 1:
+        raise ValueError('El número de varillas debe ser al menos 1.')
+    return n, v
+
+
+def ficha_punto(Mu_tm, b, h, fc, fy, varilla, rec=4.0, est_db=0.95, r_fija=None, agrupar=True, lecho='superior', propuesta=None):
+    """Diseño a flexión de UN punto con todo el desarrollo (texto y fórmulas LaTeX).
+    · propuesta=None: la app calcula As y propone el número de barras de `varilla`.
+    · propuesta=(n, '#v'): tú propones n barras de esa varilla; la app calcula As real = n·Ab, MR, separación y revisa contra As calculada.
+    r_fija = r (cm) al centroide como en clase; si no, se usa la posición real de las barras (iterando).
+    Devuelve dict(As_req, As_usar, n, As_real, MR, ok, cabe, lineas, tex, lech, d, r, ...)."""
+    if propuesta:
+        n, varilla = propuesta
     db, ab = DIAMETROS[varilla], p3.VARILLAS[varilla]
-    if r_fija:
+    if propuesta:
+        lech = distribuir_lechos(n, db, b, rec, est_db, agrupar)
+        r = float(r_fija) if r_fija else lech['r']
+    elif r_fija:
         r = float(r_fija)
         As0 = _as_req(Mu_tm, b, h - r, fc, fy)
         n = max(2, math.ceil((As0[1] if As0 else 0) / ab - 1e-9))
         lech = distribuir_lechos(n, db, b, rec, est_db, agrupar)
     else:
         r = rec + est_db + db / 2
+        n, lech = 2, distribuir_lechos(2, db, b, rec, est_db, agrupar)
         for _ in range(10):
             As0 = _as_req(Mu_tm, b, h - r, fc, fy)
             if As0 is None:
@@ -1043,58 +1083,92 @@ def ficha_punto(Mu_tm, b, h, fc, fy, varilla, rec=4.0, est_db=0.95, r_fija=None,
     d = h - r
     lim = p3.limites_flexion(b, d, fc, fy)
     fcc = lim['fcc']
+    base = dict(Mu=Mu_tm, varilla=varilla, lecho=lecho, lim=lim, d=d, r=r)
     lin = [f'Mu = {Mu_tm:.2f} t·m = {Mu_tm * 1e5:,.0f} kg·cm  (tensión {lecho})',
            f'd = h − r = {h:g} − {r:.2f} = {d:.2f} cm' + ('  (r fija)' if r_fija else '  (r al centroide de las barras colocadas)')]
+    tex = [('Peralte efectivo', rf'd = h - r = {h:g} - {r:.2f} = {d:.2f}\ \text{{cm}}'),
+           ('Momento último', rf'M_u = {Mu_tm:.2f}\ \text{{t}}\cdot\text{{m}} = {_n(Mu_tm * 1e5)}\ \text{{kg}}\cdot\text{{cm}}')]
     if Mu_tm <= 1e-9:
         lin.append(f"Sin momento de este signo → rige As,mín = {lim['As_min']:.2f} cm²")
-        n = max(2, math.ceil(lim['As_min'] / ab - 1e-9))
-        lech = distribuir_lechos(n, db, b, rec, est_db, agrupar)
+        tex.append(('Acero mínimo', rf"A_{{s,min}} = {lim['As_min']:.2f}\ \text{{cm}}^2"))
         As_req, As_usar = 0.0, lim['As_min']
-        mr = p3.momento_resistente(n * ab, b, h - lech['r'], fc, fy) / 1e5
-        _separacion(lin, n, db, b, rec, est_db, lech)
-        return dict(Mu=Mu_tm, As_req=As_req, As_usar=As_usar, n=n, As_real=n * ab, MR=mr, ok=lech['cabe'], cabe=lech['cabe'], lineas=lin,
-                    lech=lech, d=d, r=lech['r'], varilla=varilla, armado=f'{n}{varilla}', sep_libre=lech['sep_libre'], lim=lim, lecho=lecho)
-    A_ = fy ** 2 / (2 * b * fcc)
-    B_ = fy * d
-    C_ = Mu_tm * 1e5 / p3.FR_FLEXION
-    lin.append(f'Cuadrática (FR = 0.9):  (fy²/(2·b·f″c))·As² − (fy·d)·As + Mu/FR = 0')
-    lin.append(f'A = {fy:g}²/(2·{b:g}·{fcc:.1f}) = {A_:.3f};  B = {fy:g}·{d:.2f} = {B_:,.0f};  C = {Mu_tm * 1e5:,.0f}/0.9 = {C_:,.0f}')
-    disc = B_ ** 2 - 4 * A_ * C_
-    lin.append(f'Discriminante = B² − 4AC = {B_ ** 2:,.0f} − {4 * A_ * C_:,.0f} = {disc:,.0f}')
-    if disc < 0:
-        lin.append('El discriminante es negativo: la sección no alcanza → aumenta b, h o f′c.')
-        return dict(Mu=Mu_tm, As_req=None, As_usar=None, n=None, As_real=None, MR=None, ok=False, cabe=False, lineas=lin, lech=None, d=d,
-                    r=r, varilla=varilla, armado='—', sep_libre=None, lim=lim, lecho=lecho)
-    raiz = math.sqrt(disc)
-    As1, As2 = (B_ - raiz) / (2 * A_), (B_ + raiz) / (2 * A_)
-    lin.append(f'As = (B ∓ √disc)/(2A):  As₁ = {As1:.2f} cm² ✓ (raíz menor);  As₂ = {As2:.2f} cm² ✗ (descartada: excede As,máx = '
-               f"{lim['As_max']:.2f} y el bloque a = As·fy/(b·f″c) = {As2 * fy / (b * fcc):.1f} cm > d)")
-    As_usar = max(As1, lim['As_min'])
-    lin.append(f"As,mín = {lim['As_min']:.2f} cm² → As usar = máx({As1:.2f}; {lim['As_min']:.2f}) = {As_usar:.2f} cm²"
-               + ('  (rige As,mín)' if As_usar > As1 else ''))
+        if not propuesta:
+            n = max(2, math.ceil(As_usar / ab - 1e-9))
+            lech = distribuir_lechos(n, db, b, rec, est_db, agrupar)
+    else:
+        A_ = fy ** 2 / (2 * b * fcc)
+        B_ = fy * d
+        C_ = Mu_tm * 1e5 / p3.FR_FLEXION
+        disc = B_ ** 2 - 4 * A_ * C_
+        lin += ['Cuadrática (FR = 0.9):  (fy²/(2·b·f″c))·As² − (fy·d)·As + Mu/FR = 0',
+                f'A = {fy:g}²/(2·{b:g}·{fcc:.1f}) = {A_:.3f};  B = {fy:g}·{d:.2f} = {B_:,.0f};  C = {Mu_tm * 1e5:,.0f}/0.9 = {C_:,.0f}',
+                f'Discriminante = B² − 4AC = {B_ ** 2:,.0f} − {4 * A_ * C_:,.0f} = {disc:,.0f}']
+        tex += [("Ecuación de equilibrio de momentos", r"\frac{f_y^2}{2\,b\,f''_c}\,A_s^2 - (f_y\,d)\,A_s + \frac{M_u}{F_R} = 0"),
+                ('Coeficientes', rf"A = \frac{{f_y^2}}{{2\,b\,f''_c}} = \frac{{{fy:g}^2}}{{2({b:g})({fcc:.1f})}} = {A_:.3f}"
+                                 rf",\quad B = f_y\,d = {fy:g}({d:.2f}) = {_n(B_)}"
+                                 rf",\quad C = \frac{{M_u}}{{F_R}} = \frac{{{_n(Mu_tm * 1e5)}}}{{0.9}} = {_n(C_)}"),
+                ('Discriminante', rf"B^2 - 4AC = {_n(B_ ** 2)} - {_n(4 * A_ * C_)} = {_n(disc)}")]
+        if disc < 0:
+            lin.append('El discriminante es negativo: la sección no alcanza → aumenta b, h o f′c.')
+            return dict(base, As_req=None, As_usar=None, n=n, As_real=None, MR=None, ok=False, cabe=False, lineas=lin, tex=tex, lech=lech,
+                        armado='—', sep_libre=None)
+        raiz = math.sqrt(disc)
+        As1, As2 = (B_ - raiz) / (2 * A_), (B_ + raiz) / (2 * A_)
+        lin.append(f'As = (B ∓ √disc)/(2A):  As₁ = {As1:.2f} cm² ✓ (raíz menor);  As₂ = {As2:.2f} cm² ✗ (descartada: excede As,máx = '
+                   f"{lim['As_max']:.2f} y el bloque a = As·fy/(b·f″c) = {As2 * fy / (b * fcc):.1f} cm > d)")
+        tex.append(('Raíces de As', rf"A_s = \frac{{B \mp \sqrt{{B^2-4AC}}}}{{2A}} \;\Rightarrow\; A_{{s1}} = \frac{{{_n(B_)} - {_n(raiz)}}}{{2({A_:.3f})}}"
+                                    rf" = \mathbf{{{As1:.2f}}}\ \text{{cm}}^2\ \checkmark,\quad A_{{s2}} = {As2:.2f}\ \text{{cm}}^2\ \times"))
+        As_req = As1
+        As_usar = max(As1, lim['As_min'])
+        lin.append(f"As,mín = {lim['As_min']:.2f} cm² → As usar = máx({As1:.2f}; {lim['As_min']:.2f}) = {As_usar:.2f} cm²"
+                   + ('  (rige As,mín)' if As_usar > As1 else ''))
+        tex.append(('Acero a usar', rf"A_{{s,usar}} = \max(A_{{s1}};\,A_{{s,min}}) = \max({As1:.2f};\,{lim['As_min']:.2f}) = {As_usar:.2f}\ \text{{cm}}^2"))
     ok_max = As_usar <= lim['As_max']
     lin.append(f"As usar {'≤' if ok_max else '>'} As,máx = {lim['As_max']:.2f} cm² → {'subreforzada ✓' if ok_max else 'NO: cambia la sección'}")
-    n = max(2, math.ceil(As_usar / ab - 1e-9))
-    lin.append(f'Barras {varilla} (Ab = {ab} cm²): n = As usar / Ab = {As_usar:.2f}/{ab} = {As_usar / ab:.2f} → {n} barras')
-    for _ in range(30):
-        lech = distribuir_lechos(n, db, b, rec, est_db, agrupar) if not r_fija else lech
-        r_eff = r_fija if r_fija else lech['r']
-        As_real = n * ab
-        MR = p3.momento_resistente(As_real, b, h - r_eff, fc, fy) / 1e5
-        if MR + 1e-9 >= Mu_tm or not lech['cabe']:
-            break
-        n += 1
-        lin.append(f'Con la d real no alcanza el MR → se sube a {n} barras')
-        if r_fija:
-            lech = distribuir_lechos(n, db, b, rec, est_db, agrupar)
+    tex.append(('Revisión As,máx', rf"A_{{s,usar}} = {As_usar:.2f} {'\\le' if ok_max else '>'} A_{{s,max}} = {lim['As_max']:.2f}\ \text{{cm}}^2"))
+    if propuesta:
+        lin.append(f'**Armado propuesto por ti:** {n}{varilla} (Ab = {ab} cm² cada una)')
+        tex.append(('Armado propuesto', rf"A_{{s,real}} = n\,A_b = {n}({ab}) = {n * ab:.2f}\ \text{{cm}}^2"))
+    else:
+        lin.append(f'Barras {varilla} (Ab = {ab} cm²): n = As usar / Ab = {As_usar:.2f}/{ab} = {As_usar / ab:.2f} → {n} barras')
+        tex.append(('Número de barras', rf"n = \frac{{A_{{s,usar}}}}{{A_b}} = \frac{{{As_usar:.2f}}}{{{ab}}} = {As_usar / ab:.2f}\;\rightarrow\;{n}\ \text{{varillas {varilla}}}"))
+        for _ in range(30):                       # sube barras mientras el MR con la posición real de las barras no alcance
+            lech = distribuir_lechos(n, db, b, rec, est_db, agrupar) if not r_fija else lech
+            r_eff = r_fija if r_fija else lech['r']
+            if p3.momento_resistente(n * ab, b, h - r_eff, fc, fy) / 1e5 + 1e-9 >= Mu_tm or not lech['cabe']:
+                break
+            n += 1
+            lin.append(f'Con la d real no alcanza el MR → se sube a {n} barras')
+            if r_fija:
+                lech = distribuir_lechos(n, db, b, rec, est_db, agrupar)
+    r_eff = r_fija if r_fija else lech['r']
+    d_eff = h - r_eff
+    As_real = n * ab
+    MR = p3.momento_resistente(As_real, b, d_eff, fc, fy) / 1e5
     a_blq = As_real * fy / (b * fcc)
-    lin.append(f'As real = {n}{varilla} = {n}·{ab} = {As_real:.2f} cm² {"≥" if As_real >= As_usar - 1e-9 else "<"} As usar')
+    if propuesta and not r_fija and abs(d_eff - d) > 0.01:
+        lin.append(f'(La d con tus {n} barras colocadas es {d_eff:.2f} cm; el MR se calcula con esa d.)')
+    ok_as = As_real >= As_usar - 1e-9
+    lin.append(f'As real = {n}{varilla} = {n}·{ab} = {As_real:.2f} cm² {"≥" if ok_as else "<"} As usar = {As_usar:.2f} cm²'
+               + ('' if ok_as else '  ✗ no alcanza el área requerida'))
     lin.append(f'MR = FR·As real·fy·(d − a/2) con a = As real·fy/(b·f″c) = {As_real:.2f}·{fy:g}/({b:g}·{fcc:.1f}) = {a_blq:.2f} cm → '
-               f'MR = 0.9·{As_real:.2f}·{fy:g}·({(h - r_eff):.2f} − {a_blq / 2:.2f}) = {MR:.2f} t·m {"≥" if MR + 1e-9 >= Mu_tm else "<"} Mu = {Mu_tm:.2f} t·m')
+               f'MR = 0.9·{As_real:.2f}·{fy:g}·({d_eff:.2f} − {a_blq / 2:.2f}) = {MR:.2f} t·m {"≥" if MR + 1e-9 >= Mu_tm else "<"} Mu = {Mu_tm:.2f} t·m')
+    tex += [('Revisión de área', rf"A_{{s,real}} = {As_real:.2f} {'\\ge' if ok_as else '<'} A_{{s,usar}} = {As_usar:.2f}\ \text{{cm}}^2"),
+            ('Profundidad del bloque', rf"a = \frac{{A_{{s,real}}\,f_y}}{{b\,f''_c}} = \frac{{{As_real:.2f}({fy:g})}}{{{b:g}({fcc:.1f})}} = {a_blq:.2f}\ \text{{cm}}"),
+            ('Momento resistente', rf"M_R = F_R\,A_{{s,real}}\,f_y\left(d - \frac{{a}}{{2}}\right) = 0.9({As_real:.2f})({fy:g})\left({d_eff:.2f} - {a_blq / 2:.2f}\right)"
+                                   rf" = {MR:.2f}\ \text{{t}}\cdot\text{{m}}\ {'\\ge' if MR + 1e-9 >= Mu_tm else '<'}\ M_u = {Mu_tm:.2f}")]
     _separacion(lin, n, db, b, rec, est_db, lech)
-    ok = ok_max and MR + 1e-9 >= Mu_tm and lech['cabe'] and As_real <= lim['As_max']
-    return dict(Mu=Mu_tm, As_req=As1, As_usar=As_usar, n=n, As_real=As_real, MR=MR, ok=ok, cabe=lech['cabe'], lineas=lin, lech=lech,
-                d=h - r_eff, r=r_eff, varilla=varilla, armado=f'{n}{varilla}', sep_libre=lech['sep_libre'], lim=lim, lecho=lecho)
+    util = b - 2 * (rec + est_db)
+    if len(lech['capas']) == 1 and not lech['agrupado'] and n > 1:
+        tex.append(('Separación libre', rf"s = \frac{{b - 2(r_{{ec}} + \phi_{{est}}) - n\,\phi}}{{n-1}} = \frac{{{b:g} - 2({rec:g} + {est_db:.2f}) - {n}({db:.2f})}}{{{n - 1}}} = {lech['sep_libre']:.2f}"
+                                        rf"\ \text{{cm}}\ {'\\ge' if lech['sep_libre'] >= lech['sep_min'] else '<'}\ {lech['sep_min']:.2f}"))
+    else:
+        tex.append(('Separación libre', rf"\text{{ancho útil}} = {util:.2f}\ \text{{cm}};\quad s_{{libre}} = {lech['sep_libre']:.2f}\ \text{{cm}}"
+                                        rf"\ {'\\ge' if lech['sep_libre'] >= lech['sep_min'] else '<'}\ {lech['sep_min']:.2f}\ \text{{cm}}"
+                                        + (r"\quad(\text{barras agrupadas de 2 en 2})" if lech['agrupado'] else '')))
+    ok = ok_max and ok_as and MR + 1e-9 >= Mu_tm and lech['cabe'] and lech['sep_libre'] + 1e-6 >= lech['sep_min'] and As_real <= lim['As_max']
+    return dict(base, As_req=As_req, As_usar=As_usar, n=n, As_real=As_real, MR=MR, ok=ok, cabe=lech['cabe'], lineas=lin, tex=tex, lech=lech,
+                d=d_eff, r=r_eff, armado=f'{n}{varilla}', sep_libre=lech['sep_libre'], propuesto=bool(propuesta))
 
 
 def _as_req(Mu_tm, b, d, fc, fy):

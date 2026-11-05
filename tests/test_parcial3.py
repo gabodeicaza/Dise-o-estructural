@@ -316,3 +316,21 @@ def test_ficha_punto_reproduce_el_pizarron_de_clase():
     f6 = pt.ficha_punto(59.9, 35, 70, 250, 4200, '#8', rec=3.0, est_db=1.27, r_fija=5.0)
     assert f6['lech']['capas'] == [6] and f6['sep_libre'] == pytest.approx(5.61, abs=0.01)     # 6#8 en una capa, 5.61 cm entre parejas
     pt.figura_puntos([f6], 35, 70, 3.0, 1.27, ['i)'])
+
+
+def test_armado_propuesto_por_el_usuario_calcula_as_real_y_revisa():
+    import ame_porticos as pt
+    assert pt.parse_propuesta('4#8') == (4, '#8') and pt.parse_propuesta(' 3 x 6 ') == (3, '#6') and pt.parse_propuesta('') is None
+    for malo in ('hola', '4#7', '0#8'):
+        with pytest.raises(ValueError):
+            pt.parse_propuesta(malo)
+    # 5#8 no alcanza para Mu = 59.9 (As real 25.35 < 27.72; MR 55.4 < 59.9)
+    f5 = pt.ficha_punto(59.9, 35, 70, 250, 4200, '#8', rec=3.0, est_db=1.27, r_fija=5.0, propuesta=(5, '#8'))
+    assert f5['As_real'] == pytest.approx(25.35) and f5['MR'] == pytest.approx(55.43, abs=0.05) and not f5['ok']
+    assert any('no alcanza' in t for t in f5['lineas'])
+    # 6#8 sí; también con otra varilla (7#6 = 19.95 cm²) y se calcula con esa varilla
+    f6 = pt.ficha_punto(59.9, 35, 70, 250, 4200, '#8', rec=3.0, est_db=1.27, r_fija=5.0, propuesta=(6, '#8'))
+    assert f6['ok'] and f6['As_real'] == pytest.approx(30.42)
+    f7 = pt.ficha_punto(18.0, 35, 70, 250, 4200, '#8', rec=3.0, est_db=1.27, r_fija=5.0, propuesta=(5, '#6'))
+    assert f7['varilla'] == '#6' and f7['As_real'] == pytest.approx(5 * 2.85)
+    assert all(isinstance(t, tuple) and len(t) == 2 for t in f7['tex'])
