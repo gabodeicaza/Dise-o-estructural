@@ -505,9 +505,10 @@ def _tam(res, ancho=None, alto=None):
 
 
 def figura_diagrama(res, diag, tipo='M', titulo='', unidad=None, extra=None, escala=0.4, etiquetas='extremos', piso=None,
-                    ancho=None, alto=None):
+                    ancho=None, alto=None, columnas=True, fuente=9, umbral=0.12):
     """Marco con el diagrama de M o V de todos los elementos (o de un piso). extra: diagrama mínimo para superponer.
-    etiquetas: 'todas', 'extremos' (extremos y valor máximo) o 'ninguna'."""
+    etiquetas: 'todas', 'extremos' (extremos y valor máximo; se omiten los valores menores que umbral·máximo para no amontonar)
+    o 'ninguna'. columnas=False oculta los valores de las columnas; fuente = tamaño de las etiquetas."""
     plt = _plt()
     xs, zs, n, ne = res['xs'], res['zs'], res['n'], res['ne']
     unidad = unidad or ('t·m' if tipo == 'M' else 't')
@@ -532,7 +533,8 @@ def figura_diagrama(res, diag, tipo='M', titulo='', unidad=None, extra=None, esc
         if z_lo <= zs[k] <= z_hi:
             ax.plot([xs[0], xs[-1]], [zs[k]] * 2, color='#777', lw=0.8, zorder=1)
     box = dict(boxstyle='round,pad=0.12', fc='white', ec='none', alpha=0.78)
-    for d in todos:
+    for idx_d, d in enumerate(todos):
+        signo = (1 if idx_d == 0 else -1) if extra else 0         # envolvente: el máximo rotula (+) y el mínimo (−)
         for clave, v in d.items():
             val = v[tipo]
             if clave[0] == 'b':
@@ -545,14 +547,17 @@ def figura_diagrama(res, diag, tipo='M', titulo='', unidad=None, extra=None, esc
                 ax.plot(px, py, color='#333', lw=0.7, zorder=3)
                 if etiquetas != 'ninguna':
                     ids = {0: 'left', len(val) - 1: 'right'}
-                    im = int(np.argmax(np.abs(val[3:-3]))) + 3
+                    lo, hi = int(0.2 * len(val)), int(0.8 * len(val))          # el pico se busca en el tramo central
+                    im = lo + int(np.argmax(np.abs(val[lo:hi])))
                     if etiquetas == 'todas':
                         ids.update({i: 'center' for i in range(5, len(val) - 5, 5)})
                     ids[im] = 'center'
                     for i, ha in ids.items():
+                        if (etiquetas == 'extremos' and abs(val[i]) < umbral * vmax) or (signo and val[i] * signo < 0):
+                            continue
                         ax.annotate(f'{val[i]:.2f}', (px[i], py[i]),
                                     xytext=(5 if ha == 'left' else (-5 if ha == 'right' else 0), -10 if val[i] >= 0 else 10),
-                                    textcoords='offset points', fontsize=8, ha=ha, va='center', bbox=box, zorder=6)
+                                    textcoords='offset points', fontsize=fuente, ha=ha, va='center', bbox=box, zorder=6)
             else:
                 e = clave[2]
                 pz = v['p']
@@ -561,11 +566,13 @@ def figura_diagrama(res, diag, tipo='M', titulo='', unidad=None, extra=None, esc
                 ax.fill_betweenx(pz, px0, px, where=val >= 0, color=cl[0], alpha=0.85, lw=0, interpolate=True, zorder=2)
                 ax.fill_betweenx(pz, px0, px, where=val <= 0, color=cl[1], alpha=0.85, lw=0, interpolate=True, zorder=2)
                 ax.plot(px, pz, color='#333', lw=0.7, zorder=3)
-                if etiquetas != 'ninguna':
+                if etiquetas != 'ninguna' and columnas:
                     for i, dy in ((0, 10), (len(val) - 1, -10)):
+                        if (etiquetas == 'extremos' and abs(val[i]) < umbral * vmax) or (signo and val[i] * signo < 0):
+                            continue
                         lado = 1 if val[i] >= 0 else -1
                         ax.annotate(f'{val[i]:.2f}', (px[i], pz[i]), xytext=(10 * lado, dy), textcoords='offset points',
-                                    fontsize=8, ha='left' if lado > 0 else 'right', va='center', bbox=box, zorder=6)
+                                    fontsize=fuente, ha='left' if lado > 0 else 'right', va='center', bbox=box, zorder=6)
     for j in range(ne):
         ax.plot(xs[j], 0, marker='s', color='#222', ms=7, zorder=7)
     ax.set_aspect('equal')
@@ -784,22 +791,35 @@ def figura_secciones(dis):
 
 
 # ================================================================ viga continua del nivel: corrido, bastones y anclaje
-def armado_nivel(env, res, k, fc, fy, var_sup, var_inf, est_var='#3', rec=4.0, agrupar=True, paño=True):
+def armado_nivel(env, res, k, fc, fy, var_sup, var_inf, est_var='#3', rec=4.0, agrupar=True, paño=True, apoyo_unico=False):
     """Armado de la viga del nivel k como viga continua (procedimiento de clase):
     1) puntos de diseño a), b), c)… (caras de apoyo y centros de cada crujía);
     2) varillas corridas arriba y abajo con área ≥ As,mín y ≥ 50 % de la mayor As real;
     3) bastones donde la As requerida (envolvente) supera lo corrido;
     4) cada bastón se ancla una distancia d más allá del punto donde ya no se requiere en el diagrama Mu.
+    apoyo_unico=True: en cada apoyo interior se usa un solo momento negativo, el mayor de los dos lados (como en clase).
     Devuelve None si el nivel no tiene vigas con carga."""
     claves = sorted([c for c in env if c[0] == 'b' and c[1] == k], key=lambda c: env[c]['p'][0])
     if not claves:
         return None
     geo = res['geo']
     b, h = env[claves[0]]['b'], env[claves[0]]['h']
+    env = {c: dict(env[c], Mmax=env[c]['Mmax'].copy(), Mmin=env[c]['Mmin'].copy()) for c in claves}      # copia local
+    caras = {c: (caras_columna(geo, c) if paño else (0.0, 0.0)) for c in claves}
+    if apoyo_unico:
+        pos = {}
+        for c in claves:
+            x_, L_ = env[c]['x'] * 100, env[c]['x'][-1] * 100
+            pos[c] = (int(np.argmin(np.abs(x_ - caras[c][0]))), int(np.argmin(np.abs(x_ - (L_ - caras[c][1])))))
+        for a_, b_ in zip(claves, claves[1:]):
+            if env[b_]['p'][0] - env[a_]['p'][-1] > 1e-6:          # tramos no contiguos (sin losa)
+                continue
+            ia, ib = pos[a_][1], pos[b_][0]
+            env[a_]['Mmin'][ia] = env[b_]['Mmin'][ib] = min(env[a_]['Mmin'][ia], env[b_]['Mmin'][ib])
     dis, P, Mx, Mn, max_paso = {}, [], [], [], 0.0
     for c in claves:
         e = env[c]
-        ci, cd = caras_columna(geo, c) if paño else (0.0, 0.0)
+        ci, cd = caras[c]
         dis[c] = disenar_viga(env, c, e['b'], e['h'], fc, fy, ci, cd, var_sup, var_inf, est_var, rec, agrupar=agrupar)
         x, L = e['x'] * 100, e['x'][-1] * 100
         mx, mn = e['Mmax'].copy(), e['Mmin'].copy()

@@ -77,10 +77,16 @@ def _traer(res_sismo, crujias, fuente):
         st.session_state['p6_spans'] = crujias
 
 
-def _fig(f):
-    st.pyplot(f, width='stretch')
+def _fig(f, dpi=170, nombre='diagrama'):
+    """Muestra la figura como imagen de alta resolución: con el icono de pantalla completa (arriba a la derecha de la imagen)
+    se amplía a todo el ancho de la pantalla y los valores se leen sin amontonarse."""
     import matplotlib.pyplot as plt
+    buf = io.BytesIO()
+    f.savefig(buf, format='png', dpi=dpi, bbox_inches='tight')
     plt.close(f)
+    st.image(buf.getvalue(), width='stretch')
+    st.download_button('Descargar imagen (PNG)', buf.getvalue(), f'{nombre}.png', 'image/png', key=f'dl_{nombre}_{st.session_state.get("_n_img", 0)}')
+    st.session_state['_n_img'] = st.session_state.get('_n_img', 0) + 1
 
 
 def _etq(clave, ne):
@@ -221,7 +227,13 @@ def mostrar(res_sismo=None, crujias_txt='', modelo=None, datos=None):
     piso = None if piso_sel.startswith('Todo') else int(piso_sel.split()[-1])
     ancho = c3.slider('Ancho de la figura (pulgadas)', 10, 36, int(pt._tam(res)[0]), key='p6_ancho')
     alto = c4.slider('Alto de la figura (pulgadas)', 6, 30, int(pt._tam(res)[1]), key='p6_alto')
-    kw = dict(etiquetas=etiquetas, piso=piso, ancho=ancho, alto=alto)
+    c1, c2 = st.columns(2)
+    cols_etq = c1.checkbox('Mostrar valores en las columnas', False, key='p6_etq_col',
+                           help='Apagado: solo se rotulan las vigas, que es lo que se diseña. Enciéndelo para ver también las columnas.')
+    fuente = c2.slider('Tamaño de las etiquetas', 7, 16, 10, key='p6_fuente_etq')
+    st.caption('Tip: pasa el cursor sobre la imagen y usa el icono de pantalla completa (arriba a la derecha) para ver todo el pórtico '
+               'a todo el ancho; con «Solo el piso N» el diagrama sale aún más grande.')
+    kw = dict(etiquetas=etiquetas, piso=piso, ancho=ancho, alto=alto, columnas=cols_etq, fuente=fuente)
 
     tabs = st.tabs(['Modelo', 'Gravedad', 'Sismo de ida', 'Sismo de regreso', 'Envolvente', 'Deformadas', 'Diseño por viga',
                     'Viga continua del nivel', 'Secciones (render)', 'Resumen de acero'])
@@ -322,7 +334,10 @@ def mostrar(res_sismo=None, crujias_txt='', modelo=None, datos=None):
         vs = c2.selectbox('Varilla superior', VARS, index=VARS.index(sug), key=f'p6_nvs_{nivel}_{sug}')
         vi = c3.selectbox('Varilla inferior', VARS, index=VARS.index(sug), key=f'p6_nvi_{nivel}_{sug}')
         st.caption(txt_sug + ' Los renders y tablas de esta pestaña usan estas varillas para toda la viga del nivel.')
-        niv = pt.armado_nivel(env, res, nivel, fc, fy, vs, vi, est_var, rec, agrupar, paño)
+        apoyo_unico = st.checkbox('Un solo momento por apoyo: el mayor de ambos lados (como en clase)', True, key='p6_apoyo',
+                                  help='En un apoyo interior el diagrama tiene un valor a cada lado de la columna; en clase se dibujó y se '
+                                       'diseñó con el mayor, con el mismo acero a ambos lados.')
+        niv = pt.armado_nivel(env, res, nivel, fc, fy, vs, vi, est_var, rec, agrupar, paño, apoyo_unico)
         if niv is None:
             st.info('Ese nivel no tiene vigas con carga.')
         else:

@@ -270,3 +270,31 @@ def test_cargar_ejemplo_17_llena_la_pestana_de_diagramas():
     assert list(at.session_state['p6_dft']['F sismo (t)']) == ['5', '5', '10', '15', '20']
     assert at.session_state['p6_grupo'] == 'A' and at.session_state['p6_pp'] is True and at.session_state['p6_paño'] is False
     assert all('muro' in e.value for e in at.error), [e.value for e in at.error]   # el único aviso es el de muros (pestaña 5)
+
+
+def test_apoyo_unico_usa_el_mayor_de_ambos_lados_como_el_profesor():
+    """Pizarrón: un solo Mu negativo por apoyo (49.91, 48.22, 40.1, 59.9) = el mayor de los dos lados (±2 %)."""
+    import ame_porticos as pt
+    import ame_sismico as ame
+    ej = next(v for k, v in ame.EJEMPLOS_MODELO.items() if k.startswith('Ejemplo 17'))
+    p = ej['porticos']
+    geo = pt.geo_modelo(ame.preparar(ej), ej, [dict(CM=c, CV='0', CVacc='0') for c in p['CM']], pp=2.4)
+    res = pt.resolver_geo(geo, [float(x) for x in p['F']])
+    env, _ = pt.envolvente(res, pt.combinaciones('A', False, gravedad=False))
+    niv = pt.armado_nivel(env, res, 1, 250, 4200, '#8', '#8', est_var='#4', rec=3.0, paño=False, apoyo_unico=True)
+    mu = {}
+    for q in niv['puntos']:
+        s = next(s for s in niv['dis'][q['clave']]['secciones'] if s['posicion'] == q['posicion'] and s['lecho'] == 'superior')
+        mu[round(q['x'], 1)] = mu.get(round(q['x'], 1), []) + [s['Mu']]
+    for x, esperado in ((5.0, 49.91), (11.0, 48.22), (16.0, 40.1), (21.0, 59.9)):
+        assert mu[x][0] == pytest.approx(mu[x][1])                      # mismo valor a ambos lados
+        assert mu[x][0] == pytest.approx(esperado, rel=0.025)
+
+
+def test_figura_diagrama_opciones_de_etiquetas():
+    pt, res = _portico()
+    env, mats = pt.envolvente(res, pt.combinaciones('B'))
+    mx = {k: dict(x=v['x'], p=v['p'], M=v['Mmax'], V=v['Vmax']) for k, v in env.items()}
+    mn = {k: dict(x=v['x'], p=v['p'], M=v['Mmin'], V=v['Vmin']) for k, v in env.items()}
+    for kw in (dict(etiquetas='todas'), dict(etiquetas='extremos', columnas=False, fuente=12), dict(etiquetas='ninguna'), dict(piso=2)):
+        pt.figura_diagrama(res, mx, 'M', 'x', extra=mn, **kw)
