@@ -296,7 +296,8 @@ def _viga_completa():
         return
     c1, c2, c3 = st.columns(3)
     Vu = c1.number_input('Vu máximo (t)', 0.0, 1000.0, 44.3, key='vc_Vu')
-    Lcl = c2.number_input('Claro del tramo para estribos (cm)', 50.0, 3000.0, 700.0, key='vc_L')
+    s_tope = c2.number_input('Tope de la separación (cm)', 10.0, 40.0, 25.0, 1.0, key='vc_stope',
+                             help='En clase el tope fue 25 cm. Si tus apuntes piden otro valor (por ejemplo 30), cámbialo.')
     fyest = c3.selectbox('fy del estribo', [4200.0, 2530.0], key='vc_fyest')
     est_db, a_est = pt.DIAMETROS[est], p3.VARILLAS[est]
     rf = r_val if r_fija else None
@@ -349,16 +350,43 @@ def _viga_completa():
     st.pyplot(fig, width='stretch')
     plt.close(fig)
     st.caption('Rojo = no cumple la separación libre o no caben las barras. La numeración de pares (agrupadas) sigue la práctica de clase.')
-    st.markdown('#### 4 · Estribos')
-    As_trac = max([f['As_real'] for f in fichas if f['As_real'] and f.get('lecho') == 'superior'] or [max(reales or [1.0])])
+    st.markdown('#### 4 · Estribos (cortante)')
+    As_auto = max([f['As_real'] for f in fichas if f['As_real'] and f.get('lecho') == 'superior'] or [max(reales or [1.0])])
     Av = a_est * ramas
-    cort = p3.cortante_viga(Vu * 1000, b, viga['d'], h, Lcl, fc, fyest, Av, As_trac)
-    if cort['ok']:
-        st.markdown(f'**Estribos {est} ({ramas} ramas) @ {cort["s_usar"]} cm**  (Vu = {Vu:g} t, VcR = {cort["VcR"] / 1000:.2f} t)')
-    else:
-        st.error('Vu excede el límite 2.65·FR·b·d·√f′c: agranda la sección.')
-    with st.expander('Cálculo desarrollado de los estribos', expanded=True):
-        _pasos(cort['pasos'])
+    d_c = viga['d']
+    st.markdown('**Límites**')
+    for tit, tx in p3.limites_cortante_tex(b, d_c, fc, Av, ramas, a_est):
+        st.markdown(f'*{tit}*')
+        st.latex(tx)
+    st.caption('Captura el Vu de cada tramo y el acero en tensión (As) de la sección donde actúa; si dejas el As vacío se usa el mayor '
+               f'As real superior calculado arriba ({As_auto:.2f} cm²).')
+    vt = pd.DataFrame({'Tramo': ['1', '2', '3', '4', '5'], 'Vu (t)': ['36.2', '39.6', '35.36', '36.5', '44.3'],
+                       'As en tensión (cm²)': ['20.28', '25.35', '25.35', '20.28', '30.42']})
+    ev = st.data_editor(vt, num_rows='dynamic', hide_index=True, width='stretch', key='vc_tabla_v',
+                        column_config={c: st.column_config.TextColumn(c) for c in vt.columns})
+    ev = ev.dropna(subset=['Tramo', 'Vu (t)']).copy()
+    ev['As en tensión (cm²)'] = ev['As en tensión (cm²)'].fillna('').astype(str).replace('', str(As_auto))
+    ev = _numeros(ev, ['Vu (t)', 'As en tensión (cm²)']) if len(ev) else None
+    if ev is None or not len(ev):
+        st.info('Captura al menos un tramo con Vu numérico.')
+        return
+    resumen = []
+    for i, (tr, vu, as_t) in enumerate(zip(ev['Tramo'], ev['Vu (t)'], ev['As en tensión (cm²)']), 1):
+        c_ = p3.cortante_ficha(float(vu) * 1000, b, d_c, fc, fyest, Av, float(as_t), s_tope)
+        with st.container(border=True):
+            st.markdown(f'##### {i}. Tramo {tr}:  Vu = {vu:g} t')
+            for tit, tx in c_['tex']:
+                st.markdown(f'*{tit}*')
+                st.latex(tx)
+            if c_['ok']:
+                st.success(f'E {est}, {ramas} ramas @ {c_["s_usar"]} cm  (rige {c_["rige"]} en smáx)')
+            else:
+                st.error('Vu excede el límite de la sección: agranda b o h.')
+        resumen.append([tr, vu, as_t, c_['rho'], c_['VcR'], c_['Vs'], c_['s_calc'] if c_['s_calc'] is not None else np.nan, c_['s_max'],
+                        f'E {est}, {ramas}r @ {c_["s_usar"]} cm' if c_['ok'] else 'NO'])
+    st.markdown('**Resumen**')
+    _tabla(pd.DataFrame(resumen, columns=['Tramo', 'Vu (t)', 'As tens. (cm²)', 'ρ', 'VcR (kg)', 'Vu−VcR (kg)', 's calc (cm)', 'smáx (cm)',
+                                          'Estribos']), 4)
 
 
 def _concreto():

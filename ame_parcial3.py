@@ -374,6 +374,73 @@ def cortante_viga(Vu_kg, b, d, h, L, fc, fy_est, Av, ρ_As, lambda_=1.0):
     return dict(rho=rho, VcR=Vc, Vmax=Vmax, s_calc=s_calc, s_max=s_max, s_usar=s_usar, ok=True, pasos=pasos)
 
 
+def _tn(x, dec=0):
+    return f'{x:,.{dec}f}'.replace(',', '{,}')
+
+
+def limites_cortante(b, d, fc):
+    """Límites del pizarrón (kg): 1.1, 1.25, 2.2 y 0.25 por FR·b·d·√f′c, y el máximo 2.65·FR·b·d·√f′c."""
+    k = FR_CORTANTE * b * d * math.sqrt(fc)
+    return dict(k=k, L11=1.1 * k, L125=1.25 * k, L22=2.2 * k, Vmin=0.25 * k, Vmax=2.65 * k)
+
+
+def limites_cortante_tex(b, d, fc, Av, ramas, a_est):
+    """Bloque «Límites» del pizarrón: [(título, LaTeX)]."""
+    l = limites_cortante(b, d, fc)
+    return [('Límite para smáx (0.5d o 0.25d)', rf"1.1\,F_R\,b\,d\sqrt{{f'_c}} = {_tn(l['L11'], 2)}\ \text{{kg}}"),
+            ('Tope de VcR', rf"1.25\,F_R\,b\,d\sqrt{{f'_c}} = {_tn(l['L125'], 2)}\ \text{{kg}}"),
+            ('Máximo de Vu − VcR', rf"2.2\,F_R\,b\,d\sqrt{{f'_c}} = {_tn(l['L22'], 2)}\ \text{{kg}}"),
+            ('VcR mínimo', rf"V_{{CR,min}} = 0.25\,F_R\,b\,d\sqrt{{f'_c}} = {_tn(l['Vmin'], 2)}\ \text{{kg}}"),
+            ('Cuantía y área de estribos', rf"\rho = \frac{{A_{{s,tens}}}}{{b\,d}},\qquad A_v = n_{{ramas}}\,A_e = {ramas}({a_est}) = {ramas * a_est:.2f}\ \text{{cm}}^2")]
+
+
+def cortante_ficha(Vu_kg, b, d, fc, fy_est, Av, As_tens, s_tope=25.0, lambda_=1.0):
+    """Estribos de UNA sección como en el pizarrón: ρ, VcR (las dos fórmulas y su mínimo, ≤ 1.25·FR·b·d·√f′c), Vu − VcR,
+    s ≤ FR·Av·fy·d/(Vu − VcR), tabla de smáx {0.5d (0.25d si Vu − VcR > 1.1·FR·b·d·√f′c); Av·fy/(0.2·b·√f′c); Av·fy/(3.5·b);
+    tope} y separación a usar (múltiplo de 5 cm hacia abajo). Devuelve dict(..., tex=[(título, LaTeX)], ok)."""
+    FR = FR_CORTANTE
+    raiz = math.sqrt(fc)
+    lim = limites_cortante(b, d, fc)
+    rho = As_tens / (b * d)
+    Vc1 = 2 * FR * lambda_ * rho ** (1 / 3) * raiz * b * d
+    Vc2 = 0.5 * FR * lambda_ * raiz * b * d
+    VcR = max(min(Vc1, Vc2, lim['L125']), lim['Vmin'])
+    Vs = Vu_kg - VcR
+    tex = [('Cuantía', rf"\rho = \frac{{A_{{s,tens}}}}{{b\,d}} = \frac{{{As_tens:.2f}}}{{{b:g}({d:.2f})}} = {rho:.6f}"),
+           ('Resistencia del concreto',
+            rf"V_{{CR}} \le \begin{{cases}} 2\,F_R\,\rho^{{1/3}}\,b\,d\sqrt{{f'_c}} = {_tn(Vc1)}\ \text{{kg}} \le 1.25\,F_R\,b\,d\sqrt{{f'_c}} = {_tn(lim['L125'])}\\"
+            rf" 0.5\,F_R\,b\,d\sqrt{{f'_c}} = {_tn(Vc2)}\ \text{{kg}} \le {_tn(lim['L125'])} \end{{cases}} \;\Rightarrow\; V_{{CR}} = {_tn(VcR)}\ \text{{kg}}"
+            + (r"\ \ (\text{rige } V_{CR,min})" if VcR == lim['Vmin'] and min(Vc1, Vc2) < lim['Vmin'] else ''))]
+    ok = Vu_kg <= lim['Vmax'] and Vs <= lim['L22']
+    s_calc = None
+    if Vs > 0:
+        s_calc = FR * Av * fy_est * d / Vs
+        tex.append(('Vu − VcR', rf"V_u - V_{{CR}} = {_tn(Vu_kg)} - {_tn(VcR)} = {_tn(Vs)}\ \text{{kg}}"
+                                rf"\ \ {'\\le' if Vs <= lim['L22'] else '>'}\ \ 2.2\,F_R\,b\,d\sqrt{{f'_c}} = {_tn(lim['L22'])}\ \ {'\\checkmark' if Vs <= lim['L22'] else r'\times'}"))
+        tex.append(('Separación por resistencia', rf"s \le \frac{{F_R\,A_v\,f_y\,d}}{{V_u - V_{{CR}}}} = \frac{{0.75({Av:.2f})({fy_est:g})({d:.2f})}}{{{_tn(Vs)}}} = {s_calc:.2f}\ \text{{cm}}"))
+    else:
+        tex.append(('Vu − VcR', rf"V_u = {_tn(Vu_kg)} \le V_{{CR}} = {_tn(VcR)}\ \text{{kg}} \;\Rightarrow\; \text{{estribos mínimos (rige smáx)}}"))
+    regimen = Vs <= lim['L11']
+    t1 = 0.5 * d if regimen else 0.25 * d
+    t2 = Av * fy_est / (0.2 * raiz * b)
+    t3 = Av * fy_est / (3.5 * b)
+    t4 = float(s_tope)
+    s_max = min(t1, t2, t3, t4)
+    quien = {t1: ('0.5d' if regimen else '0.25d'), t2: 'Av·fy/(0.2·b·√f′c)', t3: 'Av·fy/(3.5·b)', t4: 'tope'}[s_max]
+    tex.append(('Separación máxima',
+                rf"V_u - V_{{CR}} = {_tn(max(Vs, 0))}\ {'\\le' if regimen else '>'}\ 1.1\,F_R\,b\,d\sqrt{{f'_c}} = {_tn(lim['L11'], 0)}\ \Rightarrow\ "
+                rf"{'0.5\\,d' if regimen else '0.25\\,d'}"
+                rf";\quad s_{{max}} \le \begin{{cases}} {'0.5d' if regimen else '0.25d'} = {t1:.2f}\\ \frac{{A_v f_y}}{{0.2\,b\sqrt{{f'_c}}}} = {t2:.2f}\\"
+                rf" \frac{{A_v f_y}}{{3.5\,b}} = {t3:.2f}\\ {t4:g}\ \text{{(tope)}} \end{{cases}} \Rightarrow\ s_{{max}} = \mathbf{{{s_max:.2f}}}\ \text{{cm}}"))
+    s = min(x for x in (s_calc, s_max) if x is not None)
+    s_usar = max(5, int(s // 5 * 5))
+    tex.append(('Separación a usar', rf"s = \min({'' if s_calc is None else f'{s_calc:.2f};\\ '}{s_max:.2f}) = {s:.2f}\ \Rightarrow\ \mathbf{{s = {s_usar}\ \text{{cm}}}}\ \text{{(múltiplo de 5 hacia abajo)}}"))
+    lineas = [f'ρ = {As_tens:.2f}/({b:g}·{d:.2f}) = {rho:.6f}', f'VcR = {VcR:,.0f} kg (2·FR·ρ^(1/3)·b·d·√f′c = {Vc1:,.0f}; 0.5·FR·b·d·√f′c = {Vc2:,.0f}; tope {lim["L125"]:,.0f})',
+              f'Vu − VcR = {Vs:,.0f} kg', f'smáx = {s_max:.2f} cm (rige {quien})', f'Estribos @ {s_usar} cm']
+    return dict(Vu=Vu_kg, rho=rho, Vc1=Vc1, Vc2=Vc2, VcR=VcR, Vs=Vs, s_calc=s_calc, s_max=s_max, rige=quien, s_usar=s_usar, ok=ok,
+                regimen_05d=regimen, tex=tex, lineas=lineas, limites=lim)
+
+
 def viga_simple(w, L, P=None):
     """Viga simplemente apoyada con carga uniforme w (t/m) sobre L (m): Vu máx y Mu máx."""
     return dict(Vu=w * L / 2, Mu=w * L ** 2 / 8)

@@ -334,3 +334,22 @@ def test_armado_propuesto_por_el_usuario_calcula_as_real_y_revisa():
     f7 = pt.ficha_punto(18.0, 35, 70, 250, 4200, '#8', rec=3.0, est_db=1.27, r_fija=5.0, propuesta=(5, '#6'))
     assert f7['varilla'] == '#6' and f7['As_real'] == pytest.approx(5 * 2.85)
     assert all(isinstance(t, tuple) and len(t) == 2 for t in f7['tex'])
+
+
+def test_cortante_ficha_reproduce_el_pizarron():
+    """b = 35, d = 65, E#4 de 2 ramas (Av = 2.54): límites y estribos de los 5 tramos de la clase."""
+    import ame_parcial3 as p
+    lim = p.limites_cortante(35, 65, 250)
+    assert lim['L11'] == pytest.approx(29675.99, abs=1) and lim['L125'] == pytest.approx(33722, abs=1)
+    assert lim['L22'] == pytest.approx(59351.99, abs=1) and lim['Vmin'] == pytest.approx(6744.56, abs=1)
+    caso = {36.2: (20.28, 11190, 25010, 20.79, 20), 39.6: (25.35, 12051, 27549, 18.83, 15), 35.36: (25.35, 12051, 23308, 22.25, 20),
+            36.5: (20.28, 11190, 25312, 20.49, 20), 44.3: (30.42, 12806, 31493, 16.5, 15)}
+    for Vu, (As, vcr, vs, s, usar) in caso.items():
+        r = p.cortante_ficha(Vu * 1000, 35, 65, 250, 4200, 2.54, As)
+        assert r['VcR'] == pytest.approx(vcr, rel=0.003) and r['Vs'] == pytest.approx(vs, rel=0.003)
+        assert r['s_calc'] == pytest.approx(s, rel=0.01) and r['s_usar'] == usar and r['ok']
+    r5 = p.cortante_ficha(44300, 35, 65, 250, 4200, 2.54, 30.42)
+    assert not r5['regimen_05d'] and r5['rige'] == '0.25d' and r5['s_max'] == pytest.approx(16.25)    # Vu − VcR > 1.1·FR·b·d·√f′c
+    assert p.cortante_ficha(36200, 35, 65, 250, 4200, 2.54, 20.28)['rige'] == 'tope'                  # rige el tope de 25 cm
+    assert p.cortante_ficha(36200, 35, 65, 250, 4200, 2.54, 20.28, s_tope=30)['s_max'] == pytest.approx(30)
+    assert not p.cortante_ficha(75000, 35, 65, 250, 4200, 2.54, 20.28)['ok']                           # excede el límite de la sección
