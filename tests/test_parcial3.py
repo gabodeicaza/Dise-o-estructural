@@ -350,8 +350,9 @@ def test_cortante_ficha_reproduce_el_pizarron():
         assert r['s_calc'] == pytest.approx(s, rel=0.01) and r['s_usar'] == usar and r['ok']
     r5 = p.cortante_ficha(44300, 35, 65, 250, 4200, 2.54, 30.42)
     assert not r5['regimen_05d'] and r5['rige'] == '0.25d' and r5['s_max'] == pytest.approx(16.25)    # Vu − VcR > 1.1·FR·b·d·√f′c
-    assert p.cortante_ficha(36200, 35, 65, 250, 4200, 2.54, 20.28)['rige'] == 'tope'                  # tope por omisión: 30 cm (viga de 13 m: estribos @30)
-    assert p.cortante_ficha(36200, 35, 65, 250, 4200, 2.54, 20.28, s_tope=25)['s_max'] == pytest.approx(25)
+    assert p.cortante_ficha(36200, 35, 65, 250, 4200, 2.54, 20.28)['rige'] == 'tope'                  # tope por omisión: 25 cm (preferencia del profesor)
+    assert p.cortante_ficha(36200, 35, 65, 250, 4200, 2.54, 20.28)['s_max'] == pytest.approx(25)
+    assert p.cortante_ficha(36200, 35, 65, 250, 4200, 2.54, 20.28, s_tope=30)['s_max'] == pytest.approx(30)
     assert not p.cortante_ficha(75000, 35, 65, 250, 4200, 2.54, 20.28)['ok']                           # excede el límite de la sección
 
 
@@ -412,7 +413,8 @@ def test_viga_de_13_m_del_pizarron():
     zs = av.zonas_cortante(env)
     assert [z['ref'] for z in zs] == [('apoyo', 0), ('apoyo', 0), ('apoyo', 1), ('apoyo', 1)]
     for z, f in zip(zs, [fs[0], fs[0], fs[1], fs[1]]):
-        assert p3.cortante_ficha(z['Vu'] * 1000, 40, 75, 250, 4200, 5.08, f['As_real'])['s_usar'] == 30     # estribos @30
+        assert p3.cortante_ficha(z['Vu'] * 1000, 40, 75, 250, 4200, 5.08, f['As_real'], 30.0)['s_usar'] == 30   # la hoja: tope 30 → @30
+        assert p3.cortante_ficha(z['Vu'] * 1000, 40, 75, 250, 4200, 5.08, f['As_real'])['s_usar'] == 25          # tope del profesor: @25
 
 
 def _app_viga(ruta):

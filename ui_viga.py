@@ -47,7 +47,7 @@ def mostrar():
     st.caption('Una viga sola, sin columnas, como el ejemplo de clase: das los segmentos, dónde están los apoyos, las cargas uniformes '
                'y las puntuales. La app factoriza las cargas, resuelve momentos y cortantes, calcula el acero en cada apoyo y claro '
                'con el procedimiento del pizarrón, arma la viga (corridas y bastones) y propone los estribos. '
-               'Viene cargado el ejemplo de clase (Grupo B, b = 40, h = 80).')
+               'Viene cargado el ejemplo de clase (Grupo B, b = 40, h = 80); con tope de 30 cm sus estribos salen @30, como en la hoja.')
     c1, c2, c3, c4 = st.columns(4)
     b = c1.number_input('b (cm)', 10.0, 300.0, 40.0, key='v1_b')
     h = c2.number_input('h (cm)', 20.0, 300.0, 80.0, key='v1_h')
@@ -151,8 +151,9 @@ def mostrar():
                               'Desactivado: la d sale de la posición real de las barras.')
     r_val = c2.number_input('r (cm)', 2.0, 20.0, 5.0, 0.5, key='v1_r', disabled=not r_fija)
     agrupar = c3.checkbox('Barras agrupadas de 2 en 2', True, key='v1_agr')
-    s_tope = c4.number_input('Tope de la separación (cm)', 10.0, 40.0, 30.0, 1.0, key='v1_stope',
-                             help='En el ejemplo de clase los estribos salieron @30 cm.')
+    s_tope = c4.number_input('Tope de la separación (cm)', 10.0, 40.0, 25.0, 1.0, key='v1_stope',
+                             help='El profesor prefiere 25 cm cuando rige el tope (mayor seguridad en obra). Los apuntes y la hoja de la viga '
+                                  'de 13 m usan 30 cm: pon 30 para reproducirla.')
     st.caption(txt_sug)
     rf = r_val if r_fija else None
     est_db, a_est = pt.DIAMETROS[est], p3.VARILLAS[est]

@@ -296,8 +296,8 @@ def _viga_completa():
         return
     c1, c2, c3 = st.columns(3)
     Vu = c1.number_input('Vu máximo (t)', 0.0, 1000.0, 44.3, key='vc_Vu')
-    s_tope = c2.number_input('Tope de la separación (cm)', 10.0, 40.0, 30.0, 1.0, key='vc_stope',
-                             help='Apuntes y ejemplo de la viga de 13 m: 30 cm (los estribos salieron @30). Cámbialo si tu profesor pidió otro tope.')
+    s_tope = c2.number_input('Tope de la separación (cm)', 10.0, 40.0, 25.0, 1.0, key='vc_stope',
+                             help='El profesor prefiere 25 cm cuando rige el tope (mayor seguridad en obra). Los apuntes marcan 30 cm: cámbialo si lo necesitas.')
     fyest = c3.selectbox('fy del estribo', [4200.0, 2530.0], key='vc_fyest')
     est_db, a_est = pt.DIAMETROS[est], p3.VARILLAS[est]
     rf = r_val if r_fija else None
