@@ -37,10 +37,10 @@ def _imagen(fig, nombre):
 
 
 def _defecto(n):
-    """Ejemplo de clase (viga de 13 m con volados de 2 y 3 m, apoyos en x = 2 y 10, P1, P2 y P3) si hay 4 segmentos."""
+    """Cargas puntuales por omisión (CM, CVmáx): las de la viga de 13 m de clase (P1, P2 y P3) si hay 4 segmentos; si no, ceros."""
     if n == 4:
-        return (['—', 'Articulado', '—', 'Articulado', '—'], ['1', '0', '3', '0', '2'], ['1', '0', '4', '0', '3'])
-    return (['Articulado'] * (n + 1), ['0'] * (n + 1), ['0'] * (n + 1))
+        return ['1', '0', '3', '0', '2'], ['1', '0', '4', '0', '3']
+    return ['0'] * (n + 1), ['0'] * (n + 1)
 
 
 def mostrar():
@@ -66,14 +66,44 @@ def mostrar():
         return
     n = len(largos)
     xn = np.concatenate([[0.0], np.cumsum(largos)])
-    tip0, pcm0, pcv0 = _defecto(n)
+    pcm0, pcv0 = _defecto(n)
 
-    st.markdown('**Nodos: apoyos y cargas puntuales (t, sin factorizar)**')
-    nod = pd.DataFrame({'Nodo': [f'{k + 1}  (x = {x:g} m)' for k, x in enumerate(xn)], 'Apoyo': tip0, 'P CM (t)': pcm0, 'P CVmáx (t)': pcv0})
-    nod = st.data_editor(nod, hide_index=True, width='stretch', key=f'v1_nodos_{n}', disabled=['Nodo'],
+    ap_def = '2 10' if n == 4 else f'0 {xn[-1]:g}'
+    ap_txt = st.text_input('Posición de los apoyos (x, m)', ap_def, key=f'v1_apoyos_{n}',
+                           help='Escribe las x de los apoyos separadas por espacios; deben coincidir con algún nodo (la suma acumulada de los '
+                                'segmentos). Los demás nodos quedan sin apoyo y solo sirven para colocar cargas puntuales. '
+                                'Ejemplo de clase: 2 10. Viga de 3 claros de 5 m con P a la mitad de cada uno: segmentos «2.5 2.5 2.5 2.5 2.5 2.5» '
+                                'y apoyos «0 5 10 15».')
+    nodos_txt = ', '.join(f'{x:g}' for x in xn)
+    try:
+        xs_ap = [float(t) for t in ap_txt.replace(',', ' ').split()]
+    except ValueError:
+        st.error('Escribe las posiciones de los apoyos como números separados por espacios, por ejemplo «0 5 10 15».')
+        return
+    tipos = ['—'] * (n + 1)
+    for xa in xs_ap:
+        k = np.flatnonzero(np.abs(xn - xa) < 1e-6)
+        if not len(k):
+            st.error(f'Hay un apoyo en x = {xa:g} m, pero ahí no hay un nodo. Los nodos están en x = {nodos_txt} m: ajusta los segmentos o '
+                     'la posición del apoyo.')
+            return
+        tipos[int(k[0])] = 'Articulado'
+    c1, c2 = st.columns(2)
+    emp_i = c1.checkbox('Empotrar el extremo izquierdo', False, key='v1_emp_i', disabled=tipos[0] == '—',
+                        help='Solo si hay un apoyo en x = 0.')
+    emp_d = c2.checkbox('Empotrar el extremo derecho', False, key='v1_emp_d', disabled=tipos[-1] == '—',
+                        help='Solo si hay un apoyo en el último nodo.')
+    if emp_i and tipos[0] != '—':
+        tipos[0] = 'Empotrado'
+    if emp_d and tipos[-1] != '—':
+        tipos[-1] = 'Empotrado'
+
+    st.markdown('**Nodos y cargas puntuales (t, sin factorizar)**')
+    nod = pd.DataFrame({'Nodo': [f'{k + 1}  (x = {x:g} m)' for k, x in enumerate(xn)], 'Apoyo': [t if t != '—' else 'sin apoyo' for t in tipos],
+                        'P CM (t)': pcm0, 'P CVmáx (t)': pcv0})
+    nod = st.data_editor(nod, hide_index=True, width='stretch', key=f'v1_nodos_{n}', disabled=['Nodo', 'Apoyo'],
                          column_config={'Nodo': st.column_config.TextColumn('Nodo'),
-                                        'Apoyo': st.column_config.SelectboxColumn('Apoyo', options=av.TIPOS, required=True,
-                                                                                  help='«—» = nodo sin apoyo (punto de carga o extremo libre).'),
+                                        'Apoyo': st.column_config.TextColumn('Apoyo'),
                                         'P CM (t)': st.column_config.TextColumn('P CM (t)'),
                                         'P CVmáx (t)': st.column_config.TextColumn('P CVmáx (t)')})
     st.markdown('**Cargas uniformes por segmento (t/m, sin factorizar)**')
@@ -99,7 +129,6 @@ def mostrar():
     ancho_ap = st.number_input('Ancho del apoyo (cm): 0 = diseñar con el momento y el cortante en el eje del apoyo', 0.0, 300.0, 0.0, 5.0,
                                key='v1_ap', help='Mayor que 0: se diseña en la cara del apoyo (a la mitad del ancho a cada lado).')
 
-    tipos = list(nod['Apoyo'])
     cm, cv = list(seg['CM (t/m)']), list(seg['CV máx (t/m)'])
     try:
         env = av.envolvente_viga(xn, tipos, cm, cv, list(nod['P CM (t)']), list(nod['P CVmáx (t)']), grupo, pp, alternar)

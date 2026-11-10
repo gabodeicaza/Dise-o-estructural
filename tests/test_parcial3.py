@@ -453,3 +453,23 @@ def test_ninguna_formula_latex_lleva_numeral_sin_escapar():
     assert tex and all('#' not in t.replace(r'\#', '') for t in tex), [t for t in tex if '#' in t.replace(r'\#', '')]
     f = pt.ficha_punto(11.7, 40, 80, 250, 4200, '#8', 3.0, 0.95, 5.0)
     assert any(r'varillas \#8' in t for _, t in f['tex'])
+
+
+def test_una_sola_viga_con_claros_cargados_sin_apoyo_se_captura_con_la_posicion_de_los_apoyos():
+    """Viga de 3 claros de 5 m con P a la mitad de cada uno: nodos cada 2.5 m, apoyos en 0 5 10 15 (los nodos de P quedan sin apoyo)."""
+    pytest.importorskip('streamlit')
+    from pathlib import Path
+    from streamlit.testing.v1 import AppTest
+    at = AppTest.from_function(_app_viga, args=(str(Path(__file__).resolve().parent.parent),), default_timeout=120).run()
+    at.text_input(key='v1_seg').set_value('2.5 2.5 2.5 2.5 2.5 2.5').run()
+    assert not at.exception and not at.error, [e.value for e in at.error]     # por omisión: solo los extremos con apoyo
+    at.text_input(key='v1_apoyos_6').set_value('0 5 10 15').run()
+    assert not at.exception and not at.error, [e.value for e in at.error]
+    texto = ' '.join(d.value.to_string() for d in at.dataframe)
+    assert 'Apoyo 3' in texto and 'Claro 3' in texto                          # 2 apoyos interiores con M(−) y 3 claros con M(+)
+    at.text_input(key='v1_apoyos_6').set_value('0 5 11 15').run()              # x sin nodo: avisa en vez de fallar
+    assert not at.exception and any('no hay un nodo' in e.value for e in at.error)
+    at.text_input(key='v1_apoyos_6').set_value('0 15').run()
+    at.checkbox(key='v1_emp_i').check()
+    at.checkbox(key='v1_emp_d').check().run()
+    assert not at.exception and not at.error
