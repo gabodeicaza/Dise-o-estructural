@@ -394,7 +394,7 @@ def limites_cortante_tex(b, d, fc, Av, ramas, a_est):
             ('Cuantía y área de estribos', rf"\rho = \frac{{A_{{s,tens}}}}{{b\,d}},\qquad A_v = n_{{ramas}}\,A_e = {ramas}({a_est}) = {ramas * a_est:.2f}\ \text{{cm}}^2")]
 
 
-def cortante_ficha(Vu_kg, b, d, fc, fy_est, Av, As_tens, s_tope=25.0, lambda_=1.0):
+def cortante_ficha(Vu_kg, b, d, fc, fy_est, Av, As_tens, s_tope=30.0, lambda_=1.0):
     """Estribos de UNA sección como en el pizarrón: ρ, VcR (las dos fórmulas y su mínimo, ≤ 1.25·FR·b·d·√f′c), Vu − VcR,
     s ≤ FR·Av·fy·d/(Vu − VcR), tabla de smáx {0.5d (0.25d si Vu − VcR > 1.1·FR·b·d·√f′c); Av·fy/(0.2·b·√f′c); Av·fy/(3.5·b);
     tope} y separación a usar (múltiplo de 5 cm hacia abajo). Devuelve dict(..., tex=[(título, LaTeX)], ok)."""

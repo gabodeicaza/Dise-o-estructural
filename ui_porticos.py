@@ -15,7 +15,8 @@ COLS_TXT = ['Nivel', 'CM (t/m)', 'CV máx (t/m)', 'CV acc (t/m)', 'F sismo (t)']
 FUENTES_F = {'Dinámico (SRSS)': 'tabla_din', 'Dinámico escalado al estático': 'tabla_din_esc', 'Estático': 'tabla_est'}
 VARS = list(pt.DIAMETROS)
 OPC_MODELO = ['Modelo de la pestaña 1 (tramos sin losa, columnas continuas, secciones por nivel, volados)',
-              'Pórtico regular (captura rápida)']
+              'Pórtico regular (captura rápida)',
+              'Una sola viga (continua, sin pórtico)']
 
 
 def precargar(p):
@@ -101,6 +102,10 @@ def mostrar(res_sismo=None, crujias_txt='', modelo=None, datos=None):
     usa_modelo = False
     hay_modelo = modelo is not None and datos is not None and modelo.get('vigas') == 'flexibles'
     fuente_modelo = st.radio('Geometría del pórtico', OPC_MODELO, key='p6_fm', index=0 if hay_modelo else 1)
+    if fuente_modelo.startswith('Una sola viga'):
+        import ui_viga
+        ui_viga.mostrar()
+        return
     usa_modelo = fuente_modelo.startswith('Modelo')
     if usa_modelo and not hay_modelo:
         st.warning('Para usar el modelo de la pestaña 1 elige **Flexibles (marco plano)** en el tipo de vigas y captura la viga '

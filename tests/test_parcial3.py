@@ -350,6 +350,87 @@ def test_cortante_ficha_reproduce_el_pizarron():
         assert r['s_calc'] == pytest.approx(s, rel=0.01) and r['s_usar'] == usar and r['ok']
     r5 = p.cortante_ficha(44300, 35, 65, 250, 4200, 2.54, 30.42)
     assert not r5['regimen_05d'] and r5['rige'] == '0.25d' and r5['s_max'] == pytest.approx(16.25)    # Vu − VcR > 1.1·FR·b·d·√f′c
-    assert p.cortante_ficha(36200, 35, 65, 250, 4200, 2.54, 20.28)['rige'] == 'tope'                  # rige el tope de 25 cm
-    assert p.cortante_ficha(36200, 35, 65, 250, 4200, 2.54, 20.28, s_tope=30)['s_max'] == pytest.approx(30)
+    assert p.cortante_ficha(36200, 35, 65, 250, 4200, 2.54, 20.28)['rige'] == 'tope'                  # tope por omisión: 30 cm (viga de 13 m: estribos @30)
+    assert p.cortante_ficha(36200, 35, 65, 250, 4200, 2.54, 20.28, s_tope=25)['s_max'] == pytest.approx(25)
     assert not p.cortante_ficha(75000, 35, 65, 250, 4200, 2.54, 20.28)['ok']                           # excede el límite de la sección
+
+
+# ----------------------------------------------------------------- una sola viga
+def test_viga_continua_sola_contra_formulas_cerradas():
+    import ame_viga as av
+    w, L = 2.0, 5.0
+    r = av.resolver_viga([L, L], [w, w])
+    assert r['M'][0][-1] == pytest.approx(-w * L ** 2 / 8) and r['M'][0].max() == pytest.approx(9 * w * L ** 2 / 128)
+    assert r['V'][0][0] == pytest.approx(3 * w * L / 8) and list(r['R']) == pytest.approx([3 * w * L / 8, 10 * w * L / 8, 3 * w * L / 8])
+    s = av.resolver_viga([L], [w])
+    assert s['M'][0].max() == pytest.approx(w * L ** 2 / 8) and s['V'][0][0] == pytest.approx(w * L / 2)
+    e = av.resolver_viga([L], [w], 'Empotrado', 'Empotrado')
+    assert e['M'][0][0] == pytest.approx(-w * L ** 2 / 12) and e['M'][0].max() == pytest.approx(w * L ** 2 / 24)
+    v = av.resolver_viga([L], [w], 'Empotrado', 'Libre (volado)')
+    assert v['M'][0][0] == pytest.approx(-w * L ** 2 / 2) and v['V'][0][0] == pytest.approx(w * L)
+    with pytest.raises(ValueError):
+        av.resolver_viga([L], [w], 'Libre (volado)', 'Libre (volado)')
+    # carga puntual a la mitad de un claro simple: PL/4 y R = P/2
+    c = av.resolver_nodos([0, 2.5, 5], ['Articulado', '—', 'Articulado'], [0, 0], [0, 4, 0])
+    assert c['M'].max() == pytest.approx(4 * 5 / 4) and c['R'][0] == pytest.approx(2.0)
+    # muchos claros: no debe confundir un sistema bien condicionado con un mecanismo
+    assert av.resolver_viga([4] * 12, [1] * 12)['M'].size
+
+
+def test_envolvente_viga_alterna_carga_viva_y_puntos_de_diseno():
+    import ame_viga as av
+    xn, tp = [0, 5, 10], ['Articulado'] * 3
+    env = av.envolvente_viga(xn, tp, [1.0, 1.0], [0.5, 0.5], grupo='B', alternar=True)
+    sin = av.envolvente_viga(xn, tp, [1.0, 1.0], [0.5, 0.5], grupo='B', alternar=False)
+    assert env['Mmax'].max() > sin['Mmax'].max()                       # la viva alternada aumenta el momento positivo del claro
+    assert env['Mmin'].min() == pytest.approx(sin['Mmin'].min())       # y en el apoyo central coincide con la viva en ambos claros
+    pts = av.puntos_diseno(env)
+    assert [p['tipo'] for p in pts] == ['apoyo', 'claro', 'claro'] and av.puntos_diseno(env, 50)[0]['Mu'] < pts[0]['Mu']
+    assert max(c['Vu'] for c in av.cortantes_diseno(env)) >= 0.625 * (1.3 * 1.0 + 1.5 * 0.5) * 5 - 1e-6   # 5wL/8
+
+
+def test_viga_de_13_m_del_pizarron():
+    """Hoja de clase: b = 40, h = 80, Grupo B, volados de 2 y 3 m, apoyos en x = 2 y 10, P1, P2 y P3, peso propio 0.768 t/m."""
+    import ame_viga as av
+    import ame_porticos as pt
+    import ame_parcial3 as p3
+    pp = 2.4 * 0.40 * 0.80
+    assert pp == pytest.approx(0.768)
+    env = av.envolvente_viga([0, 2, 6, 10, 13], ['—', 'Articulado', '—', 'Articulado', '—'], [1.0] * 4, [0.5] * 4,
+                             [1, 0, 3, 0, 2], [1, 0, 4, 0, 3], 'B', pp)
+    assert env['wu'][0] == pytest.approx(3.05, abs=0.005) and list(env['Pu']) == pytest.approx([2.8, 0, 9.9, 0, 7.1])
+    pts = av.puntos_diseno(env)
+    assert [round(p['Mu'], 1) for p in pts] == [11.7, 35.0, 20.8]                         # 11.7, 35.03 y 20.84 del pizarrón
+    assert pts[1]['Mu'] == pytest.approx(35.03, abs=0.03) and pts[2]['Mu'] == pytest.approx(20.84, abs=0.03)
+    assert [round(c['Vu'], 2) for c in av.cortantes_diseno(env)] == pytest.approx([8.9, 14.23, 20.07, 16.25], abs=0.02)
+    v = pt.ficha_viga(40, 80, 250, 4200, '#8', '#4', 4, 3.0, 5.0, Mu_max=35.03, Vu_max=20.07)
+    assert (v['lim']['Asb'], v['lim']['As_max'], v['lim']['As_min'], v['MR_max']) == pytest.approx((75.89, 56.92, 10.0, 131.11), abs=0.02)
+    fs = [pt.ficha_punto(p['Mu'], 40, 80, 250, 4200, '#8', 3.0, 0.95, 5.0, True, lecho=p['lecho']) for p in pts]
+    assert [f['armado'] for f in fs] == ['2#8', '3#8', '2#8'] and fs[1]['As_req'] == pytest.approx(12.91, abs=0.03)
+    arm = av.armado_longitudinal(env, pts, fs, 40, 250, 4200, '#8', 75.0, 10.0, p3.VARILLAS['#8'])
+    assert arm['n_corr'] == 2 and len(arm['bastones']) == 1 and arm['bastones'][0]['n'] == 1       # +1#8 en el apoyo de x = 10
+    zs = av.zonas_cortante(env)
+    assert [z['ref'] for z in zs] == [('apoyo', 0), ('apoyo', 0), ('apoyo', 1), ('apoyo', 1)]
+    for z, f in zip(zs, [fs[0], fs[0], fs[1], fs[1]]):
+        assert p3.cortante_ficha(z['Vu'] * 1000, 40, 75, 250, 4200, 5.08, f['As_real'])['s_usar'] == 30     # estribos @30
+
+
+def _app_viga(ruta):
+    import sys
+    sys.path.insert(0, ruta)
+    import ui_viga
+    ui_viga.mostrar()
+
+
+def test_interfaz_una_sola_viga_corre():
+    pytest.importorskip('streamlit')
+    from pathlib import Path
+    from streamlit.testing.v1 import AppTest
+    at = AppTest.from_function(_app_viga, args=(str(Path(__file__).resolve().parent.parent),), default_timeout=120).run()
+    assert not at.exception, [e.value for e in at.exception]
+    assert not at.error, [e.value for e in at.error]
+    assert len(at.dataframe) >= 4                                            # flexión, bastones, resumen de estribos…
+    at.text_input(key='v1_seg').set_value('4 5 3').run()                    # 3 segmentos: las tablas se ajustan
+    assert not at.exception, [e.value for e in at.exception]
+    at.text_input(key='v1_seg').set_value('5').run()
+    assert not at.exception, [e.value for e in at.exception]
