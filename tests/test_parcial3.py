@@ -434,3 +434,20 @@ def test_interfaz_una_sola_viga_corre():
     assert not at.exception, [e.value for e in at.exception]
     at.text_input(key='v1_seg').set_value('5').run()
     assert not at.exception, [e.value for e in at.exception]
+
+
+def test_ninguna_formula_latex_lleva_numeral_sin_escapar():
+    """KaTeX no acepta «#» suelto (p. ej. «varillas #8» dentro de \text{}): la fórmula sale en rojo como texto crudo."""
+    import ame_porticos as pt
+    import ame_parcial3 as p3
+    tex = []
+    for var in ('#6', '#8', '#10'):
+        for prop in (None, (3, var)):
+            f = pt.ficha_punto(35.03, 40, 80, 250, 4200, var, 3.0, 0.95, 5.0, True, 'superior', prop)
+            tex += [t for _, t in f['tex']]
+        tex += [t for _, t in pt.ficha_viga(40, 80, 250, 4200, var, '#4', 4, 3.0, 5.0, 35.03, 20.0)['tex']]
+    tex += [t for _, t in p3.limites_cortante_tex(40, 75, 250, 5.08, 4, 1.27)]
+    tex += [t for _, t in p3.cortante_ficha(20070, 40, 75, 250, 4200, 5.08, 15.2)['tex']]
+    assert tex and all('#' not in t.replace(r'\#', '') for t in tex), [t for t in tex if '#' in t.replace(r'\#', '')]
+    f = pt.ficha_punto(11.7, 40, 80, 250, 4200, '#8', 3.0, 0.95, 5.0)
+    assert any(r'varillas \#8' in t for _, t in f['tex'])

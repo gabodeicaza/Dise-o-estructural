@@ -1131,7 +1131,7 @@ def ficha_punto(Mu_tm, b, h, fc, fy, varilla, rec=4.0, est_db=0.95, r_fija=None,
         tex.append(('Armado propuesto', rf"A_{{s,real}} = n\,A_b = {n}({ab}) = {n * ab:.2f}\ \text{{cm}}^2"))
     else:
         lin.append(f'Barras {varilla} (Ab = {ab} cm²): n = As usar / Ab = {As_usar:.2f}/{ab} = {As_usar / ab:.2f} → {n} barras')
-        tex.append(('Número de barras', rf"n = \frac{{A_{{s,usar}}}}{{A_b}} = \frac{{{As_usar:.2f}}}{{{ab}}} = {As_usar / ab:.2f}\;\rightarrow\;{n}\ \text{{varillas {varilla}}}"))
+        tex.append(('Número de barras', rf"n = \frac{{A_{{s,usar}}}}{{A_b}} = \frac{{{As_usar:.2f}}}{{{ab}}} = {As_usar / ab:.2f}\;\rightarrow\;{n}\ \text{{varillas {varilla.replace('#', chr(92) + '#')}}}"))
         for _ in range(30):                       # sube barras mientras el MR con la posición real de las barras no alcance
             lech = distribuir_lechos(n, db, b, rec, est_db, agrupar) if not r_fija else lech
             r_eff = r_fija if r_fija else lech['r']
