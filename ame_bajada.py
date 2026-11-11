@@ -116,3 +116,14 @@ def figura_columna(items, titulo='', cierre=''):
     ax.set_ylim(ys[-1] - 1.8, ys[0] + 1)
     ax.axis('off')
     return fig
+
+
+def tipo_desde_componentes(comp, cv):
+    """Tipo de piso en el formato de los apuntes: comp = lista de (concepto, CG, CA, CS) de la carga muerta (kg/m²; CA o CS vacíos =
+    igual que CG) y cv = (CVmáx, CVacc, CVmed). Devuelve {'CG': (CM, CV), 'CA': (CM, CV), 'CS': (CM, CV)}."""
+    cm = [0.0, 0.0, 0.0]
+    for _, cg, ca, cs in comp:
+        vals = [cg, cg if ca in (None, '') else ca, cg if cs in (None, '') else cs]
+        for k in range(3):
+            cm[k] += float(vals[k])
+    return dict(CG=(cm[0], float(cv[0])), CA=(cm[1], float(cv[1])), CS=(cm[2], float(cv[2])))

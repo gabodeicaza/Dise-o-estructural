@@ -39,15 +39,51 @@ def _es(mask, j, i, cod=LOSA):
     return 0 <= j < ny and 0 <= i < nx and mask[j, i] == cod
 
 
-def nodos_existentes(mask):
-    """Una columna existe si el nodo toca algún tablero de losa apoyada (los voladizos no generan columnas)."""
+def nodos_existentes(mask, extra=None):
+    """Una columna existe si el nodo toca algún tablero de losa apoyada (los voladizos no generan columnas). `extra` (matriz de
+    (ny+1)×(nx+1) con 0 = automático, 1 = forzar columna, −1 = quitar columna) permite columnas sin losa alrededor o quitar alguna."""
     ny, nx = mask.shape
     ex = np.zeros((ny + 1, nx + 1), bool)
     for j in range(ny):
         for i in range(nx):
             if mask[j, i] == LOSA:
                 ex[j:j + 2, i:i + 2] = True
+    if extra is not None:
+        extra = np.asarray(extra)
+        ex = (ex | (extra == 1)) & (extra != -1)
     return ex
+
+
+def a_extra(valores):
+    """Tabla de textos ('Auto', 'Sí', 'No') → matriz 0 / 1 / −1 de `nodos_existentes`."""
+    arr = np.asarray(valores, dtype=object)
+    cod = {'Sí': 1, 'No': -1}
+    out = np.zeros(arr.shape, int)
+    for idx, v in np.ndenumerate(arr):
+        out[idx] = cod.get(v, 0)
+    return out
+
+
+def rects_tributarios(mask, dx, dy, i, j):
+    """Rectángulos (x0, y0, ancho, alto) en coordenadas de planta (y hacia abajo) del área tributaria de la columna (i, j)."""
+    xs = np.concatenate([[0], np.cumsum(dx)])
+    ys = np.concatenate([[0], np.cumsum(dy)])
+    out = []
+    for jj in (j - 1, j):
+        for ii in (i - 1, i):
+            if _es(mask, jj, ii):
+                out.append((xs[ii] + (dx[ii] / 2 if ii == i - 1 else 0), ys[jj] + (dy[jj] / 2 if jj == j - 1 else 0), dx[ii] / 2, dy[jj] / 2))
+    for (vj, vi, lado, _, nodos) in _aristas_voladizo(mask, dx, dy):
+        if (j, i) in nodos:
+            x0, y0, w_, h_ = xs[vi], ys[vj], dx[vi], dy[vj]
+            if lado in ('abajo', 'arriba'):
+                w_ /= 2
+                x0 += w_ if i == vi + 1 else 0
+            else:
+                h_ /= 2
+                y0 += h_ if j == vj + 1 else 0
+            out.append((x0, y0, w_, h_))
+    return out
 
 
 def apoyo_voladizo(mask, j, i):
@@ -148,12 +184,12 @@ def nombre_tramo(t, ny_letras):
     return f"{t['i'] + 1}  {ny_letras[t['j']]}–{ny_letras[t['j'] + 1]}"
 
 
-def resumen_nivel(mask, dx, dy):
+def resumen_nivel(mask, dx, dy, extra=None):
     """Área de losa (con voladizos), metros totales de viga y número de columnas del nivel."""
     ny, nx = mask.shape
     area = sum(dx[i] * dy[j] for j in range(ny) for i in range(nx) if mask[j, i] in (LOSA, VOL))
     vigas = sum(t['L'] for t in tramos_viga(mask, dx, dy))
-    return dict(area=area, vigas=vigas, columnas=int(nodos_existentes(mask).sum()))
+    return dict(area=area, vigas=vigas, columnas=int(nodos_existentes(mask, extra).sum()))
 
 
 def regiones_tablero(w, h):
@@ -178,7 +214,7 @@ def regiones_tablero(w, h):
     return [(p, v, area(p)) for p, v in r]
 
 
-def figura_planta(mask, dx, dy, sel=None, tramo=None, modo='sel', titulo=''):
+def figura_planta(mask, dx, dy, sel=None, tramo=None, modo='sel', titulo='', extra=None):
     """Dibuja la planta. modo 'sel': sombrea el área tributaria de la columna sel=(i,j); 'todas': todas las columnas con su área;
     'vigas': reparto a 45° con el área de cada región. tramo=dict resalta un tramo de viga."""
     import matplotlib
@@ -270,7 +306,7 @@ def figura_planta(mask, dx, dy, sel=None, tramo=None, modo='sel', titulo=''):
             ax.plot([xs[tr['i']], xs[tr['i'] + 1]], [ys[tr['j']]] * 2, color='#1d3557', lw=1.6, zorder=3)
         else:
             ax.plot([xs[tr['i']]] * 2, [ys[tr['j']], ys[tr['j'] + 1]], color='#1d3557', lw=1.6, zorder=3)
-    ex = nodos_existentes(mask)
+    ex = nodos_existentes(mask, extra)
     for j in range(ny + 1):
         for i in range(nx + 1):
             if ex[j, i]:

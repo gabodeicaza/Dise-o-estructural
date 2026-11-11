@@ -5,13 +5,14 @@ import ame_bajada as bj
 import ame_planta as pl
 
 
-def columnas_edificio(niveles, masks, dx, dy, tipos, pp_viga, pp_col):
+def columnas_edificio(niveles, masks, dx, dy, tipos, pp_viga, pp_col, extras=None):
     """niveles: de arriba hacia abajo, lista de dict(nombre, tipo, h) con h = altura del entrepiso que queda debajo de ese nivel (m).
     masks: matriz de códigos de cada nivel (mismo orden). Para cada columna que existe en algún nivel devuelve la bajada
     (lista de filas de ame_bajada.bajada, con una fila final «Base» que suma la columna hasta el desplante).
     El peso de un tramo de columna se suma en el nivel de abajo y solo si la columna existe arriba y abajo."""
     ny, nx = len(dy) + 1, len(dx) + 1
-    ex = [pl.nodos_existentes(m) for m in masks]
+    extras = extras or [None] * len(masks)
+    ex = [pl.nodos_existentes(m, x) for m, x in zip(masks, extras)]
     out = {}
     for j in range(ny):
         for i in range(nx):
@@ -31,11 +32,12 @@ def columnas_edificio(niveles, masks, dx, dy, tipos, pp_viga, pp_col):
     return out
 
 
-def pesos_por_nivel(niveles, masks, dx, dy, tipos, pp_viga, pp_col):
+def pesos_por_nivel(niveles, masks, dx, dy, tipos, pp_viga, pp_col, extras=None):
     """Peso sísmico de cada nivel con CM + CVacc (kg): losa, vigas y la mitad de las columnas de arriba y de abajo."""
     pesos = []
+    extras = extras or [None] * len(masks)
     for r, (n, m) in enumerate(zip(niveles, masks)):
-        res = pl.resumen_nivel(m, dx, dy)
+        res = pl.resumen_nivel(m, dx, dy, extras[r])
         cm, cv = tipos[n['tipo']]['CA']
         h_dev = n['h'] / 2
         h_arr = niveles[r - 1]['h'] / 2 if r > 0 else 0.0
@@ -107,7 +109,7 @@ def fuerzas_triangulares(pesos_kg, alturas_acum, coef):
     return [V * w * h / den for w, h in zip(W, alturas_acum)]
 
 
-def figura_elevacion(niveles, masks, dx, dy, eje, resaltar=None, titulo=''):
+def figura_elevacion(niveles, masks, dx, dy, eje, resaltar=None, titulo='', extras=None):
     """Vista en elevación (corte por un eje) como en los apuntes: niveles con su nombre a la izquierda, altura de cada entrepiso, columnas
     y vigas del eje, apoyos en la base y E1, E2… a la derecha. eje = ('X', j) corta por el eje de letra j; ('Y', i) por el eje de número i.
     resaltar = (j, i) de una columna para marcarla."""
@@ -115,7 +117,8 @@ def figura_elevacion(niveles, masks, dx, dy, eje, resaltar=None, titulo=''):
     matplotlib.use('Agg')
     import matplotlib.pyplot as plt
     n = len(niveles)
-    ex = [pl.nodos_existentes(m) for m in masks]                # de arriba hacia abajo
+    extras = extras or [None] * len(masks)
+    ex = [pl.nodos_existentes(m, x) for m, x in zip(masks, extras)]                # de arriba hacia abajo
     sentido, idx = eje
     if sentido == 'X':
         pos = np.concatenate([[0], np.cumsum(dx)])
@@ -170,4 +173,75 @@ def figura_elevacion(niveles, masks, dx, dy, eje, resaltar=None, titulo=''):
     ax.set_ylim(-2, zs[-1] + 2.6)
     ax.set_aspect('equal')
     ax.axis('off')
+    return fig
+
+
+def figura_3d(niveles, masks, dx, dy, extras=None, resaltar=None, elev=24, azim=-62, titulo='', mostrar=None):
+    """Vista 3D del edificio: columnas, vigas y losas por nivel (cada nivel con su propia planta). Losa en azul, voladizo en naranja claro;
+    la columna `resaltar` = (j, i) en naranja con su área tributaria sombreada en cada nivel. El nivel de más arriba es el primero."""
+    import matplotlib
+    matplotlib.use('Agg')
+    import matplotlib.pyplot as plt
+    from mpl_toolkits.mplot3d.art3d import Poly3DCollection
+    n = len(niveles)
+    extras = extras or [None] * n
+    ex = [pl.nodos_existentes(m, x) for m, x in zip(masks, extras)]          # de arriba hacia abajo
+    xs = np.concatenate([[0], np.cumsum(dx)])
+    ys = np.concatenate([[0], np.cumsum(dy)])
+    Y = lambda y: ys[-1] - y                                                  # la fila A queda al fondo
+    hs = [niveles[r]['h'] for r in range(n - 1, -1, -1)]
+    zs = np.concatenate([[0], np.cumsum(hs)])
+    fig = plt.figure(figsize=(10, 8))
+    ax = fig.add_subplot(111, projection='3d')
+    vis = lambda r: mostrar is None or niveles[r]['nombre'] in mostrar
+    for k in range(1, n + 1):
+        r = n - k
+        if not vis(r):
+            continue
+        m = masks[r]
+        polis, colores = [], []
+        for j in range(len(dy)):
+            for i in range(len(dx)):
+                if m[j, i] in (pl.LOSA, pl.VOL):
+                    z = zs[k]
+                    polis.append([(xs[i], Y(ys[j]), z), (xs[i + 1], Y(ys[j]), z), (xs[i + 1], Y(ys[j + 1]), z), (xs[i], Y(ys[j + 1]), z)])
+                    colores.append('#f4c28d' if m[j, i] == pl.VOL else '#9ec5e8')
+        if polis:
+            ax.add_collection3d(Poly3DCollection(polis, facecolors=colores, edgecolors='#7a8794', linewidths=.5, alpha=.32))
+        for t in pl.tramos_viga(m, dx, dy):
+            if t['tipo'] == 'x':
+                ax.plot([xs[t['i']], xs[t['i'] + 1]], [Y(ys[t['j']])] * 2, [zs[k]] * 2, color='#1d3557', lw=2.2)
+            else:
+                ax.plot([xs[t['i']]] * 2, [Y(ys[t['j']]), Y(ys[t['j'] + 1])], [zs[k]] * 2, color='#1d3557', lw=2.2)
+        if resaltar is not None and ex[r][resaltar[0], resaltar[1]]:
+            rects = pl.rects_tributarios(m, dx, dy, resaltar[1], resaltar[0])
+            ax.add_collection3d(Poly3DCollection(
+                [[(x0, Y(y0), zs[k]), (x0 + w, Y(y0), zs[k]), (x0 + w, Y(y0 + h), zs[k]), (x0, Y(y0 + h), zs[k])] for x0, y0, w, h in rects],
+                facecolors='#e76f51', edgecolors='#e76f51', alpha=.55))
+        for j in range(len(dy) + 1):
+            for i in range(len(dx) + 1):
+                if ex[r][j, i] and (k == 1 or ex[r + 1][j, i]):
+                    sel = resaltar == (j, i)
+                    ax.plot([xs[i]] * 2, [Y(ys[j])] * 2, [zs[k - 1], zs[k]], color='#e76f51' if sel else '#33415c', lw=4 if sel else 2.6)
+    for j in range(len(dy) + 1):
+        for i in range(len(dx) + 1):
+            if ex[n - 1][j, i] and vis(n - 1):
+                ax.scatter([xs[i]], [Y(ys[j])], [0], marker='^', color='#222', s=40)
+    for k in range(0, n + 1):
+        if k > 0 and not vis(n - k):
+            continue
+        nombre = 'PB' if k == 0 else niveles[n - k]['nombre']
+        ax.text(-0.5, ys[-1] + 0.5, zs[k], nombre, ha='right', va='center', fontsize=9, color='#1d3557')
+    for i in range(len(xs)):
+        ax.text(xs[i], -0.8, 0, str(i + 1), ha='center', fontsize=10, fontweight='bold')
+    for j, L in enumerate(pl.letras(len(ys))):
+        ax.text(-0.9, Y(ys[j]), 0, L, ha='center', fontsize=10, fontweight='bold')
+    ax.set_xlim(0, xs[-1])
+    ax.set_ylim(0, ys[-1])
+    ax.set_zlim(0, max(zs[-1], 1))
+    ax.set_box_aspect((xs[-1], ys[-1], zs[-1] * 1.0))
+    ax.view_init(elev=elev, azim=azim)
+    ax.set_axis_off()
+    if titulo:
+        ax.set_title(titulo, fontsize=13, fontweight='bold')
     return fig

@@ -143,3 +143,33 @@ def test_elevacion_se_dibuja_por_eje_y_respeta_columnas_ausentes():
     niv = [dict(nombre='N2', tipo='O', h=3), dict(nombre='N1', tipo='O', h=3)]
     for eje in (('X', 1), ('Y', 0), ('Y', 2)):
         assert ed.figura_elevacion(niv, [m_arriba, m], dx, dy, eje, (1, 1), 't') is not None
+
+
+def test_formato_de_apuntes_totales_y_columnas_sin_losa():
+    import numpy as np
+
+    import ame_edificio as ed
+    import ame_planta as pl
+    import ui_edificio as ue
+    # los totales del formato de los apuntes (p. 5 y 7): Azotea 530/630, Intermedio 610/960, Oficinas 670/920, Terraza 700/950
+    esperado = {'Azotea': (530, 100), 'Intermedio': (610, 350), 'Oficinas': (670, 250), 'Terraza': (700, 250)}
+    vistos = {}
+    for e in ue.EJEMPLOS.values():
+        for nom, comp, cv in e['tipos']:
+            if nom in esperado:
+                t = bj.tipo_desde_componentes([(c, v, '', '') for c, v in comp], cv)
+                vistos[nom] = (t['CG'][0], t['CG'][1])
+                assert t['CA'][0] == t['CG'][0] and t['CA'][1] == cv[1] and t['CS'][1] == cv[2]
+    assert vistos == esperado
+    # un piso con solo parte de la losa y columnas que siguen hasta arriba (croquis de los apuntes)
+    dx, dy = [4, 4], [4]
+    arriba = np.full((1, 2), pl.LOSA)
+    abajo = np.array([[pl.LOSA, pl.VACIO]])
+    extra_abajo = np.zeros((2, 3), int); extra_abajo[:, 2] = 1          # columna forzada en el eje 3 sin losa alrededor
+    tipos = {'O': dict(CG=(600, 250), CA=(600, 180), CS=(600, 100))}
+    niv = [dict(nombre='N2', tipo='O', h=3), dict(nombre='N1', tipo='O', h=3)]
+    sin = ed.columnas_edificio(niv, [arriba, abajo], dx, dy, tipos, 0, 1000)
+    con = ed.columnas_edificio(niv, [arriba, abajo], dx, dy, tipos, 0, 1000, [None, extra_abajo])
+    assert (0, 2) in sin and sin[(0, 2)][1]['hc'] == 0                  # sin forzar, la columna del eje 3 no baja del nivel 2
+    assert con[(0, 2)][1]['hc'] == 3 and con[(0, 2)][1]['At'] == 0 and con[(0, 2)][-1]['nombre'] == 'Base'
+    assert ed.figura_3d(niv, [arriba, abajo], dx, dy, [None, extra_abajo], (0, 2), 24, -62, 't', {'N1'}) is not None

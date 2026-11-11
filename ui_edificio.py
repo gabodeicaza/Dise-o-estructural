@@ -8,9 +8,10 @@ import ame_edificio as ed
 import ame_planta as pl
 import ame_porticos as pt
 
-COL_T = ['Tipo de piso', 'CM CG', 'CV máx CG', 'CM CA', 'CV acc CA', 'CM CS', 'CV med CS']
-COL_N = ['Nivel', 'Tipo de piso', 'h entrepiso debajo (m)']
+COL_C = ['Concepto', 'CG', 'CA', 'CS']
+COL_N = ['Incluir', 'Nivel', 'Tipo de piso', 'h entrepiso debajo (m)']
 OPC = ['Losa', 'Voladizo', 'Vacío']
+OPC_COL = ['Auto', 'Sí', 'No']
 MODOS = ['Área de la columna elegida', 'Áreas de todas las columnas', 'Áreas de las vigas (reparto a 45°)']
 
 
@@ -29,20 +30,25 @@ def _df_mask(codigos, dx, dy):
                         columns=[f'{k + 1}–{k + 2}' for k in range(len(dx))])
 
 
+_AZOTEA = ('Azotea', [('Losa 10 cm', 240), ('Rellenos', 150), ('Instalaciones', 100), ('RCDF', 40)], (100, 70, 15))
 EJEMPLOS = {
     'Ejercicio del pizarrón (8 niveles, oficinas, voladizo en A–B)': dict(
         cx='8 6 8 8 8 6', cy='4 6 6', grupo='B', vig=(40, 80), col=(70, 70), sel=('N2', 'C-4'),
-        tipos=[('Oficinas', 300, 250, 300, 180, 300, 100), ('Azotea', 300, 100, 300, 70, 300, 15)],
+        tipos=[('Oficinas', [('CM dada', 300)], (250, 180, 100)), ('Azotea', [('CM dada', 300)], (100, 70, 15))],
         niveles=[(f'N{k}', 'Azotea' if k == 8 else 'Oficinas', 3.8) for k in range(8, 0, -1)],
         mask=lambda: _mask_pizarron()),
     'Apuntes · Ejemplo 1: columna B-2, biblioteca, Grupo A (p. 5)': dict(
         cx='5 4', cy='3 2', grupo='A', vig=(25, 50), col=(40, 45), sel=('N1', 'B-2'),
-        tipos=[('Azotea', 530, 100, 530, 70, 530, 15), ('Intermedio', 610, 350, 610, 250, 610, 40)],
+        tipos=[_AZOTEA, ('Intermedio', [('Losa 10 cm', 240), ('Recubrimientos', 170), ('Instalaciones', 60), ('M. divisorios', 100),
+                                        ('RCDF', 40)], (350, 250, 40))],
         niveles=[('N3 (azotea)', 'Azotea', 3), ('N2', 'Intermedio', 3), ('N1', 'Intermedio', 4.5)],
         mask=lambda: np.full((2, 2), pl.LOSA)),
     'Apuntes · Ejemplo 2: columna A-1, oficinas, Grupo B (p. 8)': dict(
         cx='4 2.5 5.4', cy='4 2', grupo='B', vig=(20, 50), col=(50, 50), sel=('N1', 'A-1'),
-        tipos=[('Azotea', 530, 100, 530, 70, 530, 15), ('Oficinas', 670, 250, 670, 180, 670, 100)],
+        tipos=[_AZOTEA, ('Oficinas', [('Losa 10 cm', 240), ('Recubrimientos', 170), ('Instalaciones', 120), ('M. divisorios', 100),
+                                      ('RCDF', 40)], (250, 180, 100)),
+               ('Terraza', [('Losa 10 cm', 240), ('Recubrimientos', 170), ('Rellenos', 150), ('Instalaciones', 100), ('RCDF', 40)],
+                (250, 180, 100))],
         niveles=[('Azotea', 'Azotea', 3), ('N2', 'Oficinas', 3), ('N1', 'Oficinas', 4)],
         mask=lambda: np.full((2, 3), pl.LOSA)),
 }
@@ -55,16 +61,22 @@ def _mask_pizarron():
     return m
 
 
+def _df_pisos(comp):
+    return pd.DataFrame([[c, str(v), '', ''] for c, v in comp], columns=COL_C)
+
+
 def _cargar_ejemplo(clave=None):
     """Llena claros, niveles, cargas, secciones y la cuadrícula de cada nivel con uno de los ejemplos."""
     ss = st.session_state
     e = EJEMPLOS[clave or ss.get('ed_ej') or list(EJEMPLOS)[0]]
     ss['ed_ver'] = ss.get('ed_ver', 0) + 1
     ss['ed_cx'], ss['ed_cy'] = e['cx'], e['cy']
-    ss['ed_tipos'] = pd.DataFrame([[t[0]] + [str(v) for v in t[1:]] for t in e['tipos']], columns=COL_T)
-    ss['ed_niv'] = pd.DataFrame([[n[0], n[1], str(n[2])] for n in e['niveles']], columns=COL_N)
+    ss['ed_pisos'] = {t[0]: dict(comp=_df_pisos(t[1]), cv=[str(x) for x in t[2]]) for t in e['tipos']}
+    ss['ed_piso_sel'] = e['tipos'][0][0]
+    ss['ed_niv'] = pd.DataFrame([[True, n[0], n[1], str(n[2])] for n in e['niveles']], columns=COL_N)
     dx, dy = pl.parse_claros(e['cx']), pl.parse_claros(e['cy'])
     ss['ed_masks'] = {n[0]: _df_mask(e['mask'](), dx, dy) for n in e['niveles']}
+    ss['ed_cols'] = {}
     ss['ed_key_dims'] = (len(dx), len(dy))
     ss.update({'ed_grupo': e['grupo'], 'ed_vb': float(e['vig'][0]), 'ed_vh': float(e['vig'][1]), 'ed_cb': float(e['col'][0]),
                'ed_ch': float(e['col'][1]), 'ed_sel_niv': e['sel'][0], 'ed_col': e['sel'][1], 'ed_hlosa': 0.0})
@@ -73,10 +85,71 @@ def _cargar_ejemplo(clave=None):
 def _copiar(origen, destinos):
     ss = st.session_state
     base = ss['ed_masks'][origen].copy()
+    cols = ss['ed_cols'].get(origen)
     for d in destinos:
         if d != origen:
             ss['ed_masks'][d] = base.copy()
+            if cols is not None:
+                ss['ed_cols'][d] = cols.copy()
     ss['ed_ver'] = ss.get('ed_ver', 0) + 1
+
+
+def _agregar_tipo():
+    ss = st.session_state
+    nom = str(ss.get('ed_piso_nuevo', '')).strip()
+    if nom and nom not in ss['ed_pisos']:
+        ss['ed_pisos'][nom] = dict(comp=pd.DataFrame([['Carga muerta', '0', '', '']], columns=COL_C), cv=['0', '0', '0'])
+        ss['ed_piso_sel'] = nom
+        ss['ed_ver'] = ss.get('ed_ver', 0) + 1
+    ss['ed_piso_nuevo'] = ''
+
+
+def _quitar_tipo():
+    ss = st.session_state
+    if len(ss['ed_pisos']) > 1:
+        ss['ed_pisos'].pop(ss.get('ed_piso_sel'), None)
+        ss['ed_piso_sel'] = next(iter(ss['ed_pisos']))
+        ss['ed_ver'] = ss.get('ed_ver', 0) + 1
+
+
+def _editor_pisos(v):
+    """Cargas de cada tipo de piso con el formato de los apuntes: componentes de la carga muerta (kg/m²) en columnas CG, CA y CS,
+    renglón de CM (suma), renglón de CV y TOTAL."""
+    ss = st.session_state
+    pisos = ss['ed_pisos']
+    st.markdown('##### Cargas de cada tipo de piso (kg/m²), como en los apuntes')
+    st.caption('CG = gravedad, CA = accidental, CS = servicio. Escribe cada componente de la carga muerta una vez en CG; deja CA y CS '
+               'vacíos si valen lo mismo (en los apuntes casi siempre). La CV sí cambia de columna a columna.')
+    c1, c2, c3, c4 = st.columns([2, 2, 1, 1])
+    nom = c1.selectbox('Tipo de piso a editar', list(pisos), key='ed_piso_sel')
+    c2.text_input('Nombre de un tipo nuevo', key='ed_piso_nuevo')
+    c3.write('')
+    c3.button('Agregar', key='ed_piso_add', on_click=_agregar_tipo)
+    c4.write('')
+    c4.button('Quitar este', key='ed_piso_del', on_click=_quitar_tipo, disabled=len(pisos) < 2)
+    p = pisos[nom]
+    conf = {c: st.column_config.TextColumn(c) for c in COL_C}
+    ed_comp = st.data_editor(p['comp'], num_rows='dynamic', hide_index=True, width='stretch', key=f'ed_comp_{nom}_{v}', column_config=conf)
+    p['comp'] = ed_comp = ed_comp.fillna('')
+    c1, c2, c3 = st.columns(3)
+    cvs = [c1.text_input('CV máx (CG)', p['cv'][0], key=f'ed_cv0_{nom}_{v}'),
+           c2.text_input('CV acc (CA)', p['cv'][1], key=f'ed_cv1_{nom}_{v}'),
+           c3.text_input('CV med (CS)', p['cv'][2], key=f'ed_cv2_{nom}_{v}')]
+    p['cv'] = cvs
+    try:
+        t = _tipo(p)
+        tab = pd.DataFrame([['CM'] + [t[c][0] for c in bj.CASOS], ['CV'] + [t[c][1] for c in bj.CASOS],
+                            ['TOTAL'] + [t[c][0] + t[c][1] for c in bj.CASOS]], columns=['', 'CG', 'CA', 'CS'])
+        st.dataframe(tab.style.format({c: '{:,.0f}' for c in ['CG', 'CA', 'CS']}), hide_index=True, width='stretch')
+    except ValueError:
+        st.warning('Escribe números en las cargas de este tipo de piso.')
+
+
+def _tipo(p, extra=0.0):
+    comp = [(str(r['Concepto']), _num(r['CG']), r['CA'], r['CS']) for _, r in p['comp'].iterrows() if str(r['CG']).strip() != '']
+    comp = [(c, cg, None if str(ca).strip() == '' else _num(ca), None if str(cs).strip() == '' else _num(cs)) for c, cg, ca, cs in comp]
+    t = bj.tipo_desde_componentes(comp, [_num(x) for x in p['cv']])
+    return {c: (cm + extra, cv) for c, (cm, cv) in t.items()}
 
 
 def vista_columna(filas, tipos, caso, pp_v, pp_c, grupo, fc, clave):
@@ -148,14 +221,15 @@ def mostrar(res_sismo=None):
     st.caption(f'Peso propio: viga {pp_v:g} kg/m · columna {pp_c:g} kg/m. Predimensionado de los apuntes: h = L/10, b = h/2.')
 
     v = ss.get('ed_ver', 0)
-    st.markdown('##### Cargas por m² de cada tipo de piso (kg/m²)')
-    conf = {c: st.column_config.TextColumn(c) for c in COL_T}
-    tdf = st.data_editor(ss['ed_tipos'], num_rows='dynamic', hide_index=True, width='stretch', key=f'ed_t_{v}', column_config=conf).dropna()
+    _editor_pisos(v)
     st.markdown('##### Niveles, de arriba hacia abajo')
-    st.caption('«h entrepiso debajo» es la altura entre ese nivel y el de abajo (para el primer nivel, hasta el desplante). '
+    st.caption('«Incluir» activa o desactiva un nivel sin borrarlo (así puedes analizar un piso sin los demás y volver a encenderlos). '
+               '«h entrepiso debajo» es la altura entre ese nivel y el de abajo (para el primer nivel, hasta el desplante). '
                'Agrega o quita filas para cambiar el número de niveles.')
-    conf = {c: st.column_config.TextColumn(c) for c in COL_N}
-    ndf = st.data_editor(ss['ed_niv'], num_rows='dynamic', hide_index=True, width='stretch', key=f'ed_n_{v}', column_config=conf).dropna()
+    conf = {c: st.column_config.TextColumn(c) for c in COL_N[1:]}
+    conf['Incluir'] = st.column_config.CheckboxColumn('Incluir', default=True)
+    ndf = st.data_editor(ss['ed_niv'], num_rows='dynamic', hide_index=True, width='stretch', key=f'ed_n_{v}', column_config=conf)
+    ndf = ndf.dropna(subset=COL_N[1:])
 
     c1, c2 = st.columns(2)
     cx = c1.text_input('Claros en X (m), de izquierda a derecha — ejes 1, 2, 3…', key='ed_cx')
@@ -163,43 +237,51 @@ def mostrar(res_sismo=None):
     try:
         dx, dy = pl.parse_claros(cx), pl.parse_claros(cy)
         extra = hl / 100 * gam * 1000
-        tipos = {}
-        for _, r in tdf.iterrows():
-            tipos[str(r['Tipo de piso']).strip()] = dict(CG=(_num(r['CM CG']) + extra, _num(r['CV máx CG'])),
-                                                         CA=(_num(r['CM CA']) + extra, _num(r['CV acc CA'])),
-                                                         CS=(_num(r['CM CS']) + extra, _num(r['CV med CS'])))
-        niveles = [dict(nombre=str(r['Nivel']).strip(), tipo=str(r['Tipo de piso']).strip(), h=_num(r['h entrepiso debajo (m)']))
-                   for _, r in ndf.iterrows()]
+        tipos = {nom: _tipo(p, extra) for nom, p in ss['ed_pisos'].items()}
+        todos_niv = [dict(nombre=str(r['Nivel']).strip(), tipo=str(r['Tipo de piso']).strip(), h=_num(r['h entrepiso debajo (m)']),
+                          incluir=bool(r['Incluir'])) for _, r in ndf.iterrows()]
+        if len({n['nombre'] for n in todos_niv}) != len(todos_niv):
+            raise ValueError('Los nombres de los niveles deben ser distintos.')
+        niveles = [n for n in todos_niv if n['incluir']]
         if not niveles:
-            st.info('Captura al menos un nivel.')
+            st.info('Activa «Incluir» en al menos un nivel.')
             return
         for n in niveles:
             if n['tipo'] not in tipos:
-                raise ValueError(f"El tipo de piso «{n['tipo']}» del nivel {n['nombre']} no está en la tabla de cargas.")
-        if len({n['nombre'] for n in niveles}) != len(niveles):
-            raise ValueError('Los nombres de los niveles deben ser distintos.')
+                raise ValueError(f"El tipo de piso «{n['tipo']}» del nivel {n['nombre']} no está definido arriba.")
     except (ValueError, KeyError) as e:
         st.error(str(e) if 'convert' not in str(e) else 'Escribe números en las tablas (decimales con punto o coma).')
         return
 
     nx, ny = len(dx), len(dy)
+    L = pl.letras(ny + 1)
     if ss.get('ed_key_dims') != (nx, ny):                      # cambiaron los ejes: cuadrículas nuevas, todo con losa
         ss['ed_masks'] = {}
+        ss['ed_cols'] = {}
         ss['ed_key_dims'] = (nx, ny)
         ss['ed_ver'] = v = ss.get('ed_ver', 0) + 1
     vacia = _df_mask(np.full((ny, nx), pl.LOSA), dx, dy)
+    auto = pd.DataFrame('Auto', index=L, columns=[str(k + 1) for k in range(nx + 1)])
+    ss.setdefault('ed_cols', {})
+    for n in todos_niv:
+        ss['ed_masks'].setdefault(n['nombre'], vacia.copy())
+        ss['ed_cols'].setdefault(n['nombre'], auto.copy())
     nombres = [n['nombre'] for n in niveles]
-    for n in nombres:
-        ss['ed_masks'].setdefault(n, vacia.copy())
 
     st.markdown('##### Planta de cada nivel')
     c1, c2 = st.columns([1, 2])
     sel_niv = c1.selectbox('Nivel a editar y ver', nombres, key='ed_sel_niv')
-    ss['ed_masks'][sel_niv] = ed_df = st.data_editor(
+    ss['ed_masks'][sel_niv] = st.data_editor(
         ss['ed_masks'][sel_niv], width='stretch', key=f'ed_m_{sel_niv}_{v}',
         column_config={c: st.column_config.SelectboxColumn(c, options=OPC, required=True) for c in vacia.columns})
     st.caption('Cada casilla es un tablero entre ejes: «Losa» (apoyada en vigas), «Voladizo» (su carga baja a la viga del lado donde '
-               'se apoya; no genera columnas) o «Vacío».')
+               'se apoya; no genera columnas) o «Vacío». Un nivel puede quedar sin losa en partes o por completo.')
+    with st.expander('Columnas de este nivel (por defecto salen de las losas)'):
+        ss['ed_cols'][sel_niv] = st.data_editor(
+            ss['ed_cols'][sel_niv], width='stretch', key=f'ed_c_{sel_niv}_{v}',
+            column_config={c: st.column_config.SelectboxColumn(c, options=OPC_COL, required=True) for c in auto.columns})
+        st.caption('Filas = ejes de letra, columnas = ejes de número. «Auto»: hay columna si el nodo toca una losa. «Sí»: fuerza una columna aunque '
+                   'no haya losa (como en un piso que solo tiene una parte de losa). «No»: quita la columna de ese nodo en este nivel.')
     with c2:
         k1, k2 = st.columns(2)
         origen = k1.selectbox('Copiar la cuadrícula de', nombres, index=nombres.index(sel_niv), key='ed_cp_o')
@@ -208,17 +290,19 @@ def mostrar(res_sismo=None):
         b1.button('Copiar a los niveles elegidos', key='ed_cp_b', disabled=not dest, on_click=lambda: _copiar(origen, dest))
         b2.button('Copiar a todos los niveles', key='ed_cp_t', on_click=lambda: _copiar(origen, nombres))
     masks = [pl.a_mask(ss['ed_masks'][n].to_numpy()) for n in nombres]
-    mk = masks[nombres.index(sel_niv)]
-    if not (mk == pl.LOSA).any():
-        st.info(f'El nivel {sel_niv} no tiene losa apoyada: marca al menos un tablero como «Losa».')
-        return
+    extras = [pl.a_extra(ss['ed_cols'][n].to_numpy()) for n in nombres]
+    mk, ek = masks[nombres.index(sel_niv)], extras[nombres.index(sel_niv)]
     if any(((m == pl.VOL).any() and not (m == pl.LOSA).any()) for m in masks):
         st.warning('Algún nivel solo tiene voladizos; un voladizo necesita una losa apoyada a su lado.')
+    if not (mk == pl.LOSA).any() and not (ek == 1).any():
+        st.info(f'El nivel {sel_niv} no tiene losa apoyada ni columnas forzadas: no hay nada que bajar en este nivel.')
 
-    todos = ed.columnas_edificio(niveles, masks, dx, dy, tipos, pp_v, pp_c)
-    L = pl.letras(ny + 1)
-    ex = pl.nodos_existentes(mk)
+    todos = ed.columnas_edificio(niveles, masks, dx, dy, tipos, pp_v, pp_c, extras)
+    ex = np.any([pl.nodos_existentes(m, x) for m, x in zip(masks, extras)], axis=0)
     cols_nivel = [f'{L[j]}-{i + 1}' for j in range(ny + 1) for i in range(nx + 1) if ex[j, i]]
+    if not cols_nivel:
+        st.info('Ningún nivel tiene columnas todavía.')
+        return
     c1, c2, c3 = st.columns([1, 1, 2])
     col_sel = c1.selectbox('Columna a bajar', cols_nivel, key='ed_col')
     cj, ci = L.index(col_sel.split('-')[0]), int(col_sel.split('-')[1]) - 1
@@ -231,29 +315,38 @@ def mostrar(res_sismo=None):
     ca, cb_ = st.columns([3, 2])
     with ca:
         import matplotlib.pyplot as plt
-        st.pyplot(pl.figura_planta(mk, dx, dy, (ci, cj), tr[nom_tr.index(ver_tr)] if ver_tr != '—' else None, modo, f'Planta {sel_niv}'),
+        st.pyplot(pl.figura_planta(mk, dx, dy, (ci, cj), tr[nom_tr.index(ver_tr)] if ver_tr != '—' else None, modo, f'Planta {sel_niv}', ek),
                   width='stretch')
         plt.close('all')
     with cb_:
         st.metric(f'Área tributaria de {col_sel} en {sel_niv}', f'{At:g} m²')
         st.metric('Metros de viga que bajan a la columna', f'{Lv:g} m')
-        res = pl.resumen_nivel(mk, dx, dy)
+        res = pl.resumen_nivel(mk, dx, dy, ek)
         st.metric('Losa del nivel', f"{res['area']:g} m²")
         st.caption(f"{res['columnas']} columnas y {res['vigas']:g} m de viga en {sel_niv}.")
 
-    st.markdown('##### Vista en elevación (corte por un eje)')
-    cortes = [f'Eje {x}' for x in L] + [f'Eje {k + 1}' for k in range(nx + 1)]
-    corte = st.selectbox('Corte por el', cortes, index=min(2, len(L) - 1), key='ed_corte')
-    if corte.split()[1].isalpha():
-        eje_c = ('X', L.index(corte.split()[1]))
-    else:
-        eje_c = ('Y', int(corte.split()[1]) - 1)
+    st.markdown('##### Vista del edificio')
     import matplotlib.pyplot as plt
-    st.pyplot(ed.figura_elevacion(niveles, masks, dx, dy, eje_c, (cj, ci), f'{corte} · {len(niveles)} niveles'), width='stretch')
-    plt.close('all')
-    st.caption('Niveles a la izquierda con la altura de cada entrepiso, E1, E2… a la derecha (E1 = el de abajo), columnas y vigas del eje, y '
-               'apoyos empotrados. En naranja, la columna elegida para la bajada cuando está en este eje. Si una columna o viga no '
-               'aparece en un nivel es porque esa casilla de la planta está «Vacío».')
+    vista = st.radio('Vista', ['3D', 'Elevación (corte por un eje)'], horizontal=True, key='ed_vista')
+    if vista == '3D':
+        c1, c2, c3 = st.columns([2, 1, 1])
+        mostrar = c1.multiselect('Niveles a mostrar', nombres, default=nombres, key=f'ed_3d_niv_{abs(hash(tuple(nombres)))}',
+                                 help='Quita niveles para ver un piso solo o varios sin los demás.')
+        elev = c2.slider('Inclinación', 0, 90, 24, key='ed_3d_el')
+        azim = c3.slider('Giro', -180, 180, -62, key='ed_3d_az')
+        st.pyplot(ed.figura_3d(niveles, masks, dx, dy, extras, (cj, ci), elev, azim, f'{len(mostrar)} de {len(niveles)} niveles', set(mostrar)),
+                  width='stretch')
+        plt.close('all')
+        st.caption('Azul: losa; naranja claro: voladizo. En naranja fuerte, la columna elegida para la bajada con su área tributaria en cada '
+                   'nivel. Cada nivel se dibuja con su propia planta y sus columnas. Mueve «Giro» e «Inclinación» para rotar la vista.')
+    else:
+        cortes = [f'Eje {x}' for x in L] + [f'Eje {k + 1}' for k in range(nx + 1)]
+        corte = st.selectbox('Corte por el', cortes, index=min(2, len(L) - 1), key='ed_corte')
+        eje_c = ('X', L.index(corte.split()[1])) if corte.split()[1].isalpha() else ('Y', int(corte.split()[1]) - 1)
+        st.pyplot(ed.figura_elevacion(niveles, masks, dx, dy, eje_c, (cj, ci), f'{corte} · {len(niveles)} niveles', extras), width='stretch')
+        plt.close('all')
+        st.caption('Niveles a la izquierda con la altura de cada entrepiso, E1, E2… a la derecha (E1 = el de abajo), columnas y vigas del eje, y '
+                   'apoyos empotrados. En naranja, la columna elegida cuando está en este eje.')
 
     tab_a, tab_b, tab_c, tab_d, tab_e = st.tabs(['Bajada de la columna', 'Todas las columnas', 'Pesos por nivel',
                                                  'Cargas de las vigas', 'Análisis de un eje (vigas)'])
@@ -298,7 +391,7 @@ def mostrar(res_sismo=None):
                      hide_index=True, width='stretch')
         st.caption('Carga axial en la base de cada columna (sin sismo), con el factor de tu grupo. «A req» = Pu / (0.25 f′c): predimensionado de los apuntes.')
     with tab_c:
-        pesos = ed.pesos_por_nivel(niveles, masks, dx, dy, tipos, pp_v, pp_c)
+        pesos = ed.pesos_por_nivel(niveles, masks, dx, dy, tipos, pp_v, pp_c, extras)
         dfp = pd.DataFrame([[p['nombre'], p['area'], p['vigas_m'], p['columnas'], p['losa'] / 1000, p['vigas'] / 1000, p['cols'] / 1000, p['W'] / 1000]
                             for p in pesos], columns=['Nivel', 'Losa (m²)', 'Viga (m)', 'Columnas', 'Losa (t)', 'Vigas (t)', 'Columnas (t)', 'W = CM+CVacc (t)'])
         st.dataframe(dfp.style.format({c: '{:,.1f}' for c in dfp.columns[4:]}), hide_index=True, width='stretch')
@@ -321,10 +414,10 @@ def mostrar(res_sismo=None):
 
 
     with tab_e:
-        analisis_eje(niveles, masks, dx, dy, tipos, pp_v, pp_c, vb, vh, cb, ch, fc, grupo, res_sismo, L)
+        analisis_eje(niveles, masks, dx, dy, tipos, pp_v, pp_c, vb, vh, cb, ch, fc, grupo, res_sismo, L, extras)
 
 
-def analisis_eje(niveles, masks, dx, dy, tipos, pp_v, pp_c, vb, vh, cb, ch, fc, grupo, res_sismo, L):
+def analisis_eje(niveles, masks, dx, dy, tipos, pp_v, pp_c, vb, vh, cb, ch, fc, grupo, res_sismo, L, extras=None):
     """Pórtico plano de un eje del edificio (p. ej. el eje C): análisis con las cargas de la bajada y el sismo, y diseño de sus vigas."""
     import ui_porticos as up
     st.caption('Arma el pórtico plano del eje con las cargas por tramo que salen de la planta, le aplica el sismo y diseña las vigas '
@@ -345,7 +438,7 @@ def analisis_eje(niveles, masks, dx, dy, tipos, pp_v, pp_c, vb, vh, cb, ch, fc, 
     origen = c1.radio('Origen', ['Capturar (t)', 'Traer del análisis del Examen 2'], key='ed_eje_orig',
                       help='Las fuerzas del examen salen del modal espectral. Si modelaste todo el edificio en el Examen 2, multiplica por la '
                            'fracción que toma este eje.')
-    pesos = ed.pesos_por_nivel(niveles, masks, dx, dy, tipos, pp_v, pp_c)[::-1]             # de abajo hacia arriba
+    pesos = ed.pesos_por_nivel(niveles, masks, dx, dy, tipos, pp_v, pp_c, extras)[::-1]             # de abajo hacia arriba
     zs = np.cumsum(d['alturas'])
     if origen.startswith('Traer'):
         fuente = c2.selectbox('Fuerzas tomadas de', list(up.FUENTES_F), key='ed_eje_fuente')
