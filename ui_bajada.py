@@ -6,6 +6,7 @@ import numpy as np
 
 import ame_bajada as bj
 import ame_planta as pl
+import ui_edificio
 
 COL_T = ['Tipo de piso', 'CM CG', 'CV máx CG', 'CM CA', 'CV acc CA', 'CM CS', 'CV med CS']
 COL_N = ['Nivel', 'Tipo de piso', 'At (m²)', 'L viga (m)', 'h col (m)']
@@ -117,6 +118,10 @@ def mostrar():
     st.caption('Bajada de cargas de una columna, de arriba hacia abajo, como en los apuntes: en cada nivel se suma la losa del '
                'área tributaria, el peso propio de las vigas y el de la columna. Se lleva CM y CV por separado para aplicar '
                'después el factor de carga que corresponde (Grupo A: 1.5 / 1.7, Grupo B: 1.3 / 1.5, accidental 1.1, servicio 1.0).')
+    if st.radio('¿Qué vas a bajar?', ['Edificio de varios niveles (planta por nivel)', 'Una columna (captura manual o planta única)'],
+                horizontal=True, key='bj_que').startswith('Edificio'):
+        ui_edificio.mostrar()
+        return
     if 'bj_tipos' not in st.session_state:
         _cargar(list(EJEMPLOS)[0])
     c1, c2 = st.columns([3, 1])
@@ -182,6 +187,7 @@ def mostrar():
         antv = f" {_kg(d['cv_ant'])} +" if d['cv_ant'] else ''
         st.latex(rf"CV = {antv}{_kg(f['At'])}({_kg(cv_l)}) = {_kg(d['cv'])}\ \text{{kg}}")
 
+    ui_edificio.vista_columna(filas, tipos, caso, pp_v, pp_c, grupo, fc, 'bj_vc')
     tab = pd.DataFrame([[f['nombre'], f['At'], round(f[caso]['d_cm'], 1), round(f[caso]['d_cv'], 1), round(f[caso]['cm'], 1),
                          round(f[caso]['cv'], 1), round(f[caso]['cm'] + f[caso]['cv'], 1)] for f in filas],
                        columns=['Nivel', 'At (m²)', 'ΔCM', 'ΔCV', 'CM acum.', 'CV acum.', 'CM + CV'])

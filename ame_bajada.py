@@ -5,6 +5,8 @@ bajan a la columna (L·pp viga) y peso propio de la columna del entrepiso (h·pp
 gravedad (CG: CM y CVmáx), la accidental (CA: CM y CVacc) y la de servicio (CS: CM y CVmed). Unidades: kg, m, kg/m²."""
 import math
 
+import numpy as np
+
 CASOS = ['CG', 'CA', 'CS']
 NOMBRE_CASO = {'CG': 'Gravedad (CM + CVmáx)', 'CA': 'Accidental (CM + CVacc)', 'CS': 'Servicio (CM + CVmed)'}
 FC_GRUPO = {'A': (1.5, 1.7), 'B': (1.3, 1.5)}          # (CM, CVmáx); accidental 1.1 y servicio 1.0 en cualquier grupo
@@ -65,3 +67,52 @@ def carga_viga_desde_losa(w_cm, w_cv, At, L, pp_viga, fc_cm, fc_cv):
     cm = w_cm * At / L + pp_viga
     cv = w_cv * At / L
     return dict(cm=cm, cv=cv, wu=fc_cm * cm + fc_cv * cv)
+
+
+def bajada_rapida(filas, w_tm2=1.3, incluye_pp=True, pp_viga=0.0, pp_col=0.0):
+    """Predimensionado de los apuntes (p. 4): w = 1.3 t/m² incluyendo el peso propio; P_k = P_{k+1} + A_T·w (+ p.p. vigas + p.p.
+    columna si w no los incluye). filas: dict(nombre, At, Lv, hc) de arriba hacia abajo (la última puede ser la base, At = 0).
+    Devuelve dict(nombre, At, losa, pv, pc, P) con las cargas en kg."""
+    P, out = 0.0, []
+    for f in filas:
+        losa = f['At'] * w_tm2 * 1000
+        pv = 0.0 if incluye_pp else f['Lv'] * pp_viga
+        pc = 0.0 if incluye_pp else f['hc'] * pp_col
+        P += losa + pv + pc
+        out.append(dict(nombre=f['nombre'], At=f['At'], losa=losa, pv=pv, pc=pc, P=P))
+    return out
+
+
+def figura_columna(items, titulo='', cierre=''):
+    """Vista de la columna como en los apuntes: losas y vigas por nivel, flecha de carga y P_k = P_{k+1} + … en cada nivel.
+    items: lista de (nombre, texto de la fórmula, P en t) de arriba hacia abajo; el último es P0 (base). cierre: texto de Pu y A."""
+    import matplotlib
+    matplotlib.use('Agg')
+    import matplotlib.pyplot as plt
+    n = len(items)
+    fig, ax = plt.subplots(figsize=(11, max(4.5, 1.25 * n + 1.5)))
+    ys = [-(k * 1.2) for k in range(n)]
+    ax.plot([0, 0], [ys[0] + .5, ys[-1] - .2], color='#1d3557', lw=7, solid_capstyle='butt', zorder=2)
+    for k, (nom, txt, P) in enumerate(items):
+        y = ys[k]
+        es_base = k == n - 1
+        if not es_base:
+            ax.plot([-1.6, 1.6], [y, y], color='#444', lw=2)
+            ax.add_patch(plt.Rectangle((-.3, y - .25), .6, .25, fc='#cfd8e3', ec='#1d3557', zorder=3))
+        else:
+            ax.plot([-1.6, 1.6], [y - .2, y - .2], color='#444', lw=2)
+            for x in np.arange(-1.6, 1.6, .25):
+                ax.plot([x, x - .2], [y - .2, y - .45], color='#444', lw=1)
+        ax.annotate('', xy=(0, y - .2 if es_base else y + .05), xytext=(0, y + .5),
+                    arrowprops=dict(arrowstyle='-|>', color='#e76f51', lw=2), zorder=4)
+        ax.text(-1.8, y + .25, nom, ha='right', va='center', fontsize=12, fontweight='bold', color='#e76f51')
+        ax.text(1.8, y + .25, f'{txt}  =  {P:,.2f} t', ha='left', va='center', fontsize=10.5)
+    if cierre:
+        ax.text(0, ys[-1] - .9, cierre, ha='center', va='top', fontsize=12, fontweight='bold',
+                bbox=dict(boxstyle='round,pad=.4', fc='#fff3e0', ec='#e76f51'))
+    if titulo:
+        ax.set_title(titulo, fontsize=13, fontweight='bold')
+    ax.set_xlim(-3.2, 12)
+    ax.set_ylim(ys[-1] - 1.8, ys[0] + 1)
+    ax.axis('off')
+    return fig

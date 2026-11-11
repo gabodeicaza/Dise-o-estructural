@@ -70,3 +70,40 @@ def test_regiones_45_coinciden_con_areas_de_viga():
         lado_largo = {'arriba': 'x', 'abajo': 'x'} if w >= h else {'izq': 'y', 'der': 'y'}
         suma_largos = sum(a for _, v, a in reg if v in lado_largo)
         assert suma_largos == pytest.approx(2 * pl.area_a_viga(min(w, h), max(w, h), True))
+
+
+def test_voladizo_y_edificio_del_pizarron():
+    import numpy as np
+
+    import ame_edificio as ed
+    import ame_planta as pl
+    dx, dy = [8, 6, 8, 8, 8, 6], [4, 6, 6]
+    m = np.full((3, 6), pl.LOSA)
+    m[0, :] = pl.VACIO
+    m[0, :3] = pl.VOL
+    # el voladizo no genera columnas en el eje A; su área (4×22) baja a la viga B 1–4
+    ex = pl.nodos_existentes(m)
+    assert not ex[0].any() and ex[1:].all()
+    area_total = sum(dx) * 12 + 22 * 4
+    ats = [pl.columna(m, dx, dy, i, j)[0] for j in range(4) for i in range(7) if ex[j, i]]
+    assert sum(ats) == pytest.approx(area_total)
+    tr = pl.tramos_viga(m, dx, dy)
+    vB = next(t for t in tr if t['tipo'] == 'x' and t['j'] == 1 and t['i'] == 0)
+    assert vB['A'] == pytest.approx(8 * 4 + (2 * 8 - 6) * 6 / 4)       # voladizo completo + trapecio de la losa de abajo
+    tipos = {'O': dict(CG=(300, 250), CA=(300, 180), CS=(300, 100))}
+    niv = [dict(nombre=f'N{k}', tipo='O', h=3.8) for k in range(8, 0, -1)]
+    todos = ed.columnas_edificio(niv, [m] * 8, dx, dy, tipos, 768, 1000)
+    f = todos[(2, 3)]                                   # columna interior C-4
+    assert len(f) == 9 and f[-1]['nombre'] == 'Base'
+    assert f[0]['hc'] == 0 and f[1]['hc'] == 3.8 and f[-1]['hc'] == 3.8
+    # un nivel sin esa columna no suma su peso ni deja huérfanos de columna
+    m2 = m.copy(); m2[1:, 3:] = pl.VACIO
+    t2 = ed.columnas_edificio([niv[0], niv[1]], [m2, m], dx, dy, tipos, 768, 1000)
+    assert t2[(2, 5)][0]['At'] == 0 and t2[(2, 5)][0]['hc'] == 0
+
+
+def test_vista_columna_y_rapido():
+    f = _ej1()
+    rap = bj.bajada_rapida([dict(nombre=x['nombre'], At=x['At'], Lv=x['Lv'], hc=x['hc']) for x in f], 1.3, True)
+    assert rap[-1]['P'] == pytest.approx(3 * 11.25 * 1300)
+    assert bj.figura_columna([('P3', 'P3 = a', 1.0), ('P2', 'P2 = b', 2.0), ('P0', 'P0 = c', 3.0)], 't', 'Pu = 1') is not None
