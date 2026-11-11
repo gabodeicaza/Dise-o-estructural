@@ -1,6 +1,7 @@
-"""Opción «Una sola viga» de la pestaña 6: viga continua sin pórtico, como el ejemplo de clase (volados, cargas puntuales y uniformes,
-peso propio). Cargas factorizadas, diagramas de M y V, revisión de la sección, acero a flexión, armado (corridas y bastones) y
-estribos por zona, con el procedimiento del pizarrón."""
+"""Examen 3 · Viga continua (sin pórtico), como el ejemplo de clase y el examen: volados, cargas puntuales y uniformes, peso propio,
+segmentos inclinados y combinación accidental. Cargas factorizadas, diagramas de M y V, revisión de la sección, acero a flexión (con el
+FR de NTC-2023 por deformación), armado (corridas y bastones), estribos por zona con la zona de confinamiento 2h, acero de piel, flechas
+(ELS) y alzado, con el procedimiento del pizarrón."""
 import io
 
 import numpy as np
@@ -106,32 +107,41 @@ def mostrar():
                                         'Apoyo': st.column_config.TextColumn('Apoyo'),
                                         'P CM (t)': st.column_config.TextColumn('P CM (t)'),
                                         'P CVmáx (t)': st.column_config.TextColumn('P CVmáx (t)')})
-    st.markdown('**Cargas uniformes por segmento (t/m, sin factorizar)**')
-    seg = pd.DataFrame({'Segmento': [f'{i + 1}  ({xn[i]:g} → {xn[i + 1]:g} m)' for i in range(n)], 'CM (t/m)': ['1'] * n, 'CV máx (t/m)': ['0.5'] * n})
+    _calculadora_losas()
+    st.markdown('**Cargas uniformes por segmento (t/m de proyección horizontal, sin factorizar)**')
+    seg = pd.DataFrame({'Segmento': [f'{i + 1}  ({xn[i]:g} → {xn[i + 1]:g} m)' for i in range(n)], 'CM (t/m)': ['1'] * n, 'CV máx (t/m)': ['0.5'] * n,
+                        'Desnivel (m)': ['0'] * n})
     seg = st.data_editor(seg, hide_index=True, width='stretch', key=f'v1_segs_{n}', disabled=['Segmento'],
                          column_config={'Segmento': st.column_config.TextColumn('Segmento'),
                                         'CM (t/m)': st.column_config.TextColumn('CM (t/m)'),
-                                        'CV máx (t/m)': st.column_config.TextColumn('CV máx (t/m)')})
+                                        'CV máx (t/m)': st.column_config.TextColumn('CV máx (t/m)', help='En la combinación accidental escribe aquí la CV instantánea (CVa).'),
+                                        'Desnivel (m)': st.column_config.TextColumn('Desnivel (m)', help='Diferencia de altura entre los extremos del segmento '
+                                                                                    '(viga inclinada, como la diagonal del examen 3). 0 = horizontal.')})
     nod = _numeros(nod.assign(**{'P CM (t)': nod['P CM (t)'].fillna('0'), 'P CVmáx (t)': nod['P CVmáx (t)'].fillna('0')}), ['P CM (t)', 'P CVmáx (t)'])
-    seg = _numeros(seg, ['CM (t/m)', 'CV máx (t/m)'])
+    seg = _numeros(seg.assign(**{'Desnivel (m)': seg['Desnivel (m)'].fillna('0')}), ['CM (t/m)', 'CV máx (t/m)', 'Desnivel (m)'])
     if nod is None or seg is None or len(nod) != n + 1 or len(seg) != n:
         st.error('Hay celdas vacías o que no son números. Escribe decimales con punto o coma (por ejemplo 1.5).')
         return
 
     c1, c2, c3, c4 = st.columns(4)
-    grupo = c1.radio('Grupo', ['B', 'A'], horizontal=True, key='v1_grupo', help='Grupo B: 1.3 CM + 1.5 CV. Grupo A: 1.5 CM + 1.7 CV.')
+    grupo = c1.radio('Combinación', list(av.FACTORES), horizontal=True, key='v1_grupo',
+                     help='Grupo B: 1.3 CM + 1.5 CV. Grupo A: 1.5 CM + 1.7 CV. Accidental: 1.1 (CM + CVa), con la CV instantánea en la tabla.')
     alternar = c2.checkbox('Alternar la carga viva', False, key='v1_alt',
                            help='Apagado (como en clase): la CV actúa en toda la viga. Encendido: se coloca solo donde más desfavorece '
                                 'cada sección (patrones por claro y por volado).')
     usa_pp = c3.checkbox('Agregar peso propio', True, key='v1_pp', help='γ·b·h (t/m) sumado a la carga muerta de todos los segmentos.')
     gam = c4.number_input('γ (t/m³)', 2.0, 2.6, 2.4, 0.05, key='v1_gam', disabled=not usa_pp)
     pp = gam * b * h / 1e4 if usa_pp else 0.0
+    dz = np.array(seg['Desnivel (m)'], float)
+    cos = np.array(largos) / np.hypot(largos, dz)
+    inclinada = bool(np.any(np.abs(dz) > 1e-9))
+    pp_seg = pp / cos
     ancho_ap = st.number_input('Ancho del apoyo (cm): 0 = diseñar con el momento y el cortante en el eje del apoyo', 0.0, 300.0, 0.0, 5.0,
                                key='v1_ap', help='Mayor que 0: se diseña en la cara del apoyo (a la mitad del ancho a cada lado).')
 
     cm, cv = list(seg['CM (t/m)']), list(seg['CV máx (t/m)'])
     try:
-        env = av.envolvente_viga(xn, tipos, cm, cv, list(nod['P CM (t)']), list(nod['P CVmáx (t)']), grupo, pp, alternar)
+        env = av.envolvente_viga(xn, tipos, cm, cv, list(nod['P CM (t)']), list(nod['P CVmáx (t)']), grupo, pp_seg, alternar, cos=cos)
     except (ValueError, np.linalg.LinAlgError) as e:
         st.error(str(e) if isinstance(e, ValueError) else 'La viga es inestable: revisa los apoyos.')
         return
@@ -147,14 +157,20 @@ def mostrar():
     st.markdown('#### 0 · Cargas factorizadas')
     if usa_pp:
         st.latex(rf"p.p. = \gamma\,b\,h = {gam:g}({b / 100:g})({h / 100:g}) = {pp:.3f}\ \text{{t/m}}")
+    if inclinada:
+        st.info('Segmentos inclinados: ' + '; '.join(f'segmento {i + 1}: θ = {np.degrees(np.arccos(cos[i])):.1f}°, longitud real = '
+                                                       f'{largos[i] / cos[i]:.2f} m, p.p. por metro horizontal = {pp_seg[i]:.3f} t/m'
+                                                       for i in range(n) if abs(dz[i]) > 1e-9)
+                + '. Las cargas se dan por metro horizontal y los apoyos son verticales, así que los momentos son los de la proyección '
+                  'horizontal; el cortante perpendicular al eje es V·cos θ. (En un pórtico, la acción de marco cambia los momentos.)')
     vistos = set()
     for i in range(n):
-        clave = (cm[i], cv[i])
+        clave = (cm[i], cv[i], round(pp_seg[i], 6))
         if clave in vistos:
             continue
         vistos.add(clave)
-        iguales = [j + 1 for j in range(n) if (cm[j], cv[j]) == clave]
-        st.latex(rf"w_u = F_{{CM}}(CM + p.p.) + F_{{CV}}\,CV_{{m\acute{{a}}x}} = {fcm}({cm[i]:g} + {pp:.3f}) + {fcv}({cv[i]:g}) = "
+        iguales = [j + 1 for j in range(n) if (cm[j], cv[j], round(pp_seg[j], 6)) == clave]
+        st.latex(rf"w_u = F_{{CM}}(CM + p.p.) + F_{{CV}}\,CV = {fcm}({cm[i]:g} + {pp_seg[i]:.3f}) + {fcv}({cv[i]:g}) = "
                  rf"{env['wu'][i]:.3f}\ \text{{t/m}}\qquad (\text{{segmentos }}{', '.join(map(str, iguales))})")
     for k in range(n + 1):
         if nod['P CM (t)'][k] or nod['P CVmáx (t)'][k]:
@@ -162,7 +178,7 @@ def mostrar():
                      rf"\qquad (x = {xn[k]:g}\ \text{{m}})")
 
     st.markdown('#### 1 · Diagramas de momento y cortante')
-    _imagen(av.figura_viga_sola(env, f'Mu y Vu · Grupo {grupo} ({fcm} CM + {fcv} CV)'), 'viga_sola')
+    _imagen(av.figura_viga_sola(env, f'Mu y Vu · {"Grupo " + grupo if grupo != "Accidental" else "Accidental"} ({fcm} CM + {fcv} CV)'), 'viga_sola')
     st.caption('Amarillo: momento positivo (tensión abajo); rojo: negativo (tensión arriba). Reacciones factorizadas (t): '
                + ' · '.join(f'apoyo {s + 1} (x = {xn[k]:g}): {env["R"][k]:.2f}' for s, k in enumerate(env['ap'])))
 
@@ -183,6 +199,14 @@ def mostrar():
     s_tope = c4.number_input('Tope de la separación (cm)', 10.0, 40.0, 25.0, 1.0, key='v1_stope',
                              help='El profesor prefiere 25 cm cuando rige el tope (mayor seguridad en obra). Los apuntes y la hoja de la viga '
                                   'de 13 m usan 30 cm: pon 30 para reproducirla.')
+    c1, c2, c3, c4 = st.columns(4)
+    usa_conf = c1.checkbox('Zona de confinamiento 2h', True, key='v1_conf',
+                           help='Integridad estructural (examen 3): a 2h de cada apoyo, s ≤ mín{d/4; 8 db; 24 db est.; tope}.')
+    piel_var = c2.selectbox('Varilla del acero de piel', ['#3', '#4', '#5'], index=['#3', '#4', '#5'].index(est) if est in ('#3', '#4') else 0,
+                            key=f'v1_pielvar_{est}', help='En el examen se usó la misma varilla que el estribo.')
+    piel_umbral = c3.number_input('Acero de piel si h > (cm)', 30.0, 200.0, 60.0, 5.0, key='v1_pielh',
+                                  help='Criterio de la hoja del examen: h > 60 cm. Verifícalo contra la NTC que te pidan.')
+    piel_s = c4.number_input('Separación máx. del acero de piel (cm)', 10.0, 40.0, 20.0, 1.0, key='v1_piels')
     st.caption(txt_sug)
     rf = r_val if r_fija else None
     est_db, a_est = pt.DIAMETROS[est], p3.VARILLAS[est]
@@ -196,10 +220,19 @@ def mostrar():
 
     st.markdown('#### 3 · Diseño por flexión')
     fichas = [pt.ficha_punto(p['Mu'], b, h, fc, fy, var, rec, est_db, rf, agrupar, lecho=p['lecho']) for p in puntos]
-    filas = [[p['nombre'], p['lecho'], p['Mu'], f['As_req'], f['As_usar'], f['armado'], f['As_real'], f['MR'], f['sep_libre'],
-              '✔' if f['ok'] else '✘'] for p, f in zip(puntos, fichas)]
+    frs = [p3.fr_deformacion(f['As_real'], b, f['d'], fc, fy) if f['As_real'] else None for f in fichas]
+    filas = [[p['nombre'], p['lecho'], p['Mu'], f['As_req'], f['As_usar'], f['armado'], f['As_real'], f['MR'],
+              fr['et'] if fr else np.nan, fr['FR'] if fr else np.nan, f['MR'] * fr['FR'] / 0.9 if fr and f['MR'] else np.nan,
+              f['sep_libre'], '✔' if f['ok'] else '✘'] for p, f, fr in zip(puntos, fichas, frs)]
     st.dataframe(pd.DataFrame(filas, columns=['Punto', 'Lecho', 'Mu (t·m)', 'As req (cm²)', 'As usar (cm²)', 'Armado', 'As real (cm²)',
-                                              'MR (t·m)', 'Sep. libre (cm)', 'OK']).round(2), hide_index=True, width='stretch')
+                                              'MR (t·m)', 'εt', 'FR NTC-2023', 'MR con FR(εt)', 'Sep. libre (cm)', 'OK']).round(4),
+                 hide_index=True, width='stretch')
+    bajos = [p['nombre'] for p, f, fr in zip(puntos, fichas, frs) if fr and f['MR'] and fr['FR'] < 0.9 and f['MR'] * fr['FR'] / 0.9 < p['Mu']]
+    if bajos:
+        st.warning('Con el FR de NTC-2023 por deformación (εt < εy + 0.003) el MR ya no alcanza en: ' + ', '.join(bajos)
+                   + '. Agrega barras o aumenta la sección.')
+    st.caption('FR NTC-2023: 0.65 si εt ≤ εy; 0.65 + 0.25(εt − εy)/0.003 en la transición; 0.9 si εt ≥ εy + 0.003 (εt = 0.003(d − c)/c). '
+               'El MR de la tabla usa FR = 0.9 como en clase; la columna «MR con FR(εt)» lo corrige cuando la sección no es controlada por tensión.')
     for p, f in zip(puntos, fichas):
         with st.container(border=True):
             _desarrollo(f, f'{p["nombre"]}:  Mu = {p["Mu"]:.2f} t·m  ' + ('✔' if f['ok'] else '✘ revisa'))
@@ -222,7 +255,8 @@ def mostrar():
                                            'Colocado desde (m)', 'Colocado hasta (m)', 'Longitud (m)']).round(2),
                      hide_index=True, width='stretch')
         st.caption('Cada bastón se prolonga una distancia d = '
-                   f'{d_c:.1f} cm más allá de donde la envolvente de Mu ya no excede el MR de las corridas.')
+                   f'{d_c:.1f} cm más allá de donde la envolvente de Mu ya no excede el MR de las corridas.'
+                   + (' Longitudes en proyección horizontal: en un segmento inclinado divide entre cos θ.' if inclinada else ''))
     else:
         st.markdown('- No hacen falta bastones: las corridas cubren el momento en toda la viga.')
 
@@ -242,21 +276,93 @@ def mostrar():
         seps.append(cf['s_usar'] if cf['ok'] else None)
         with st.container(border=True):
             st.markdown(f'##### Zona {i}: x = {z["x0"]:g} → {z["x1"]:g} m,  Vu = {z["Vu"]:.2f} t  (As en tensión = {as_t:.2f} cm², '
-                        f'{"del apoyo " + str(s + 1) if tipo == "apoyo" else "del claro " + str(s + 1)})')
+                        f'{"del apoyo " + str(s + 1) if tipo == "apoyo" else "del claro " + str(s + 1)})'
+                        + (f'  ·  inclinada, Vu = V·cos θ' if abs(cos[z['e']] - 1) > 1e-9 else ''))
             for tit, tx in cf['tex']:
                 st.markdown(f'*{tit}*')
                 st.latex(tx)
             if cf['ok']:
                 st.success(f'E {est}, {ramas} ramas @ {cf["s_usar"]} cm')
+                if cf['s_usar'] < 10:
+                    alt = p3.alternativas_estribo(z['Vu'] * 1000, b, d_c, fc, 4200.0, as_t, s_tope)
+                    st.warning(f'@ {cf["s_usar"]} cm es muy cerrado para colar. '
+                               + ('Alternativas con s ≥ 10 cm: ' + ' · '.join(o['texto'] for o in alt[:4]) if alt else
+                                  'Ningún estribo #3/#4 de 2–4 ramas da s ≥ 10 cm: agranda la sección.'))
             else:
                 st.error('Vu excede el límite de la sección: agranda b o h.')
         resumen.append([f'{z["x0"]:g} → {z["x1"]:g}', z['Vu'], as_t, cf['VcR'] / 1000, cf['s_max'], f'E {est}, {ramas}r @ {cf["s_usar"]} cm' if cf['ok'] else 'NO'])
-    st.markdown('**Resumen de estribos**')
+    st.markdown('**Resumen de estribos por cortante**')
     st.dataframe(pd.DataFrame(resumen, columns=['Zona (m)', 'Vu (t)', 'As tens. (cm²)', 'VcR (t)', 'smáx (cm)', 'Estribos']).round(2),
                  hide_index=True, width='stretch')
-    st.caption('En los extremos de claro (a 2h de la cara del apoyo) con sismo, la separación debe cumplir además s ≤ mín{d/4; 8 db long.; '
-               '24 db est.; 30 cm} (integridad estructural).')
 
-    st.markdown('#### 6 · Alzado del armado')
+    integ = p3.integridad_estructural(h, d_c, pt.DIAMETROS[var], est_db, s_tope)
+    with st.container(border=True):
+        st.markdown('##### Zona de confinamiento (integridad estructural)')
+        for tit, tx in integ['tex']:
+            st.latex(tx)
+        if not usa_conf:
+            st.caption('Desactivada: los estribos se dejan como salen por cortante.')
+    tramos = av.tramos_estribos(env, zonas, seps, integ['Lconf'] / 100 if usa_conf else 0.0, integ['s_usar'])
+    st.markdown('**Separación final a lo largo de la viga**')
+    st.dataframe(pd.DataFrame([[f'{t["x0"]:.2f} → {t["x1"]:.2f}', t['x1'] - t['x0'], 'sí' if t['confinado'] else 'no',
+                                f'E {est}, {ramas}r @ {t["s"]} cm' if t['s'] else 'NO']
+                               for t in tramos], columns=['Tramo (m)', 'Longitud (m)', 'Zona 2h', 'Estribos']).round(2),
+                 hide_index=True, width='stretch')
+
+    st.markdown('#### 6 · Acero de piel (temperatura)')
     r_dibujo = r_val if r_fija else rec + est_db + pt.DIAMETROS[var] / 2
-    _imagen(av.figura_alzado_viga(env, arm, zonas, seps, h, r_dibujo, var, est), 'alzado_viga')
+    piel = p3.acero_piel(b, h, r_dibujo, piel_var, piel_umbral, piel_s)
+    for tit, tx in piel['tex']:
+        st.latex(tx)
+    for t in piel['lineas']:
+        st.markdown(f'- {t}')
+    if piel['aplica'] and piel['As_col'] < piel['As_ref']:
+        st.caption(f'El área colocada ({piel["As_col"]:.2f} cm²) es menor que la referencia 0.003·b·h ({piel["As_ref"]:.2f} cm²); la hoja del '
+                   'examen solo controla la separación. Si tu profesor pide el área, sube la varilla de piel.')
+
+    st.markdown('#### 7 · Flechas (estado límite de servicio)')
+    c1, c2, c3 = st.columns(3)
+    fI = c1.number_input('Factor de I (agrietada)', 0.1, 1.0, 0.35, 0.05, key='v1_fI', help='Examen 3: I agrietada = 0.35·I.')
+    fdif = c2.number_input('Factor de flecha diferida', 0.0, 4.0, 2.0, 0.5, key='v1_fdif',
+                           help='Flecha total = (1 + factor)·δinst. En el examen: 3·δinst (factor 2).')
+    lim_txt = c3.selectbox('Límite', list(av.LIMITES_FLECHA), key='v1_flim')
+    w_serv = [cm[i] + pp_seg[i] + cv[i] for i in range(n)]
+    P_serv = [nod['P CM (t)'][k] + nod['P CVmáx (t)'][k] for k in range(n + 1)]
+    fl = av.revision_flechas(xn, tipos, w_serv, P_serv, b, h, fc, fI, fdif, lim_txt)
+    st.latex(rf"E = 14000\sqrt{{f'_c}} = {fl['E']:,.0f}\ \text{{kg/cm}}^2;\quad I_g = \frac{{b h^3}}{{12}} = {fl['Ig']:,.0f};\quad "
+             rf"I = {fI:g}\,I_g = {fl['I']:,.0f}\ \text{{cm}}^4;\quad \delta_{{total}} = {1 + fdif:g}\,\delta_{{inst}} \le \frac{{L}}{{{fl['div']}}} + {fl['extra']:g}\ \text{{cm}}")
+    st.dataframe(pd.DataFrame([[f['tramo'], f['L'], f['x'], f['d_inst'], f['d_total'], f['d_perm'], '✔' if f['ok'] else '✘'] for f in fl['filas']],
+                              columns=['Tramo', 'L (cm)', 'x de δmáx (m)', 'δinst (cm)', 'δtotal (cm)', 'δpermisible (cm)', 'OK']).round(4),
+                 hide_index=True, width='stretch')
+    st.caption('Cargas de servicio sin factorizar (CM + p.p. + CV). La app resuelve la flecha con la misma viga, sin ETABS. '
+               'En un volado se compara con la L del volado.')
+
+    st.markdown('#### 8 · Alzado del armado')
+    _imagen(av.figura_alzado_viga(env, arm, zonas, seps, h, r_dibujo, var, est, tramos=tramos, piel=piel), 'alzado_viga')
+
+
+def _calculadora_losas():
+    """Carga de losas a la viga por áreas tributarias (hoja «CORTANTE» de DISEÑO DE TRABES): trapecio en el lado largo del
+    tablero, triángulo en el corto; w_viga = Σ(w·A)/L. El resultado se copia a la tabla de cargas por segmento."""
+    with st.expander('Calculadora: carga de losas a la viga (áreas tributarias)'):
+        st.caption('Cada renglón es un tablero de losa que se apoya en la viga. Lado largo → trapecio (2·largo − corto)·corto/4; '
+                   'lado corto → triángulo corto²/4. Escribe la carga de la losa sin factorizar (t/m²) y copia el resultado a la tabla.')
+        Lv = st.number_input('Longitud de la viga o del segmento (m)', 0.1, 50.0, 3.0, 0.1, key='v1_trib_L')
+        base = pd.DataFrame({'Corto (m)': ['2.5', '3'], 'Largo (m)': ['3', '3'], 'Lado de la viga': ['largo', 'corto'],
+                             'CM (t/m²)': ['0.512', '0.512'], 'CV (t/m²)': ['0.1', '0.1']})
+        ed = st.data_editor(base, num_rows='dynamic', hide_index=True, width='stretch', key='v1_trib',
+                            column_config={'Lado de la viga': st.column_config.SelectboxColumn('Lado de la viga', options=['largo', 'corto'], required=True),
+                                           **{c: st.column_config.TextColumn(c) for c in ['Corto (m)', 'Largo (m)', 'CM (t/m²)', 'CV (t/m²)']}})
+        ed = _numeros(ed.dropna(subset=['Corto (m)', 'Largo (m)']), ['Corto (m)', 'Largo (m)', 'CM (t/m²)', 'CV (t/m²)'])
+        if ed is None or not len(ed):
+            st.info('Captura al menos un tablero con números.')
+            return
+        filas = []
+        for _, r in ed.iterrows():
+            A = av.area_tributaria(r['Corto (m)'], r['Largo (m)'], r['Lado de la viga'])
+            filas.append([r['Corto (m)'], r['Largo (m)'], r['Lado de la viga'], A, r['CM (t/m²)'] * A, r['CV (t/m²)'] * A])
+        df = pd.DataFrame(filas, columns=['Corto', 'Largo', 'Lado', 'A trib. (m²)', 'CM·A (t)', 'CV·A (t)'])
+        st.dataframe(df.round(4), hide_index=True, width='stretch')
+        c1, c2 = st.columns(2)
+        c1.metric('CM sobre la viga', f'{df["CM·A (t)"].sum() / Lv:.3f} t/m')
+        c2.metric('CV sobre la viga', f'{df["CV·A (t)"].sum() / Lv:.3f} t/m')

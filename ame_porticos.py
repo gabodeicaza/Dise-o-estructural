@@ -84,7 +84,7 @@ def geo_modelo(modelo, datos, cargas_txt, pp=0.0):
     para todos los tramos o uno por tramo» (volado izq. + crujías + volado der.), t/m."""
     import ame_sismico as ame
     if modelo.get('vigas') != 'flexibles':
-        raise ValueError('Para usar el modelo de la pestaña 1 elige «Flexibles (marco plano)» en el tipo de vigas y captura la '
+        raise ValueError('Para usar el modelo del examen 2 (pestaña «1 · Estructura») elige «Flexibles (marco plano)» en el tipo de vigas y captura la '
                          'viga de cada piso.')
     g = modelo['geom']
     xs = np.asarray(g['xs'], float)
@@ -1026,7 +1026,12 @@ def ficha_viga(b, h, fc, fy, varilla, est_var, ramas, rec=4.0, r_fija=None, Mu_m
                                                           + (rf"\ {'\\ge' if ok_f else '<'}\ M_{{u,max}} = {Mu_max:.2f}" if Mu_max is not None else '')),
            ('Cortante máximo de la sección', rf"V_{{lim}} = 2.65\,F_R\,b\,d\sqrt{{f'_c}} = 2.65(0.75)({b:g})({d:.2f})\sqrt{{{fc:g}}} = {V_lim:.1f}\ \text{{t}}"
                                              + (rf"\ {'\\ge' if ok_c else '<'}\ V_{{u,max}} = {Vu_max:.1f}" if Vu_max is not None else ''))]
-    return dict(lineas=lin, tex=tex, d=d, r=r, lim=lim, MR_max=MR_max, V_lim=V_lim, ok_flexion=ok_f, ok_cortante=ok_c)
+    frm = p3.fr_deformacion(lim['As_max'], b, d, fc, fy)
+    tex.insert(7, ('FR por deformación con As,máx (NTC-2023)',
+                   rf"c = \frac{{A_{{s,max}} f_y}}{{0.85 f'_c\,b\,\beta_1}} = {frm['c']:.2f};\ \varepsilon_t = 0.003\frac{{d-c}}{{c}} = {frm['et']:.5f}"
+                   rf"\Rightarrow F_R = {frm['FR']:.3f}" + (rf"\ \Rightarrow\ M_R = {MR_max * frm['FR'] / 0.9:.2f}\ \text{{t}}\cdot\text{{m}}" if frm['FR'] < 0.9 else '')))
+    lin.append(f"FR NTC-2023 con As,máx: εt = {frm['et']:.5f} → FR = {frm['FR']:.3f}")
+    return dict(lineas=lin, tex=tex, d=d, r=r, lim=lim, MR_max=MR_max, V_lim=V_lim, ok_flexion=ok_f, ok_cortante=ok_c, fr_max=frm)
 
 
 def _n(x, dec=0):

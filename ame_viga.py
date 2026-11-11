@@ -68,7 +68,61 @@ def resolver_nodos(xn, tipos, w, P=None, npts=41):
         M.append(f[0] * xl + q * xl ** 2 / 2 - f[1])
         X.append(xn[e] + xl)
     R = np.where([t != '—' for t in tipos], R, 0.0)
-    return dict(x=np.array(X), M=np.array(M), V=np.array(V), R=R, xn=xn)
+    return dict(x=np.array(X), M=np.array(M), V=np.array(V), R=R, xn=xn, u=u, w=w)
+
+
+def flechas_unitarias(xn, tipos, w, P=None, npts=41):
+    """Desplazamiento vertical v(x) con EI = 1 (t·m³): funciones de Hermite con los giros y desplazamientos nodales, más la
+    solución particular de la carga uniforme del segmento (−w·ξ²(L − ξ)²/24). Negativo = hacia abajo. Forma (segmentos × npts)."""
+    r = resolver_nodos(xn, tipos, w, P, npts)
+    xn = np.asarray(xn, float)
+    u, w = r['u'], r['w']
+    V = []
+    for e in range(len(xn) - 1):
+        L = xn[e + 1] - xn[e]
+        xi = np.linspace(0.0, L, npts)
+        t = xi / L
+        N = [1 - 3 * t ** 2 + 2 * t ** 3, L * (t - 2 * t ** 2 + t ** 3), 3 * t ** 2 - 2 * t ** 3, L * (t ** 3 - t ** 2)]
+        ue = u[2 * e:2 * e + 4]
+        V.append(sum(Ni * ui for Ni, ui in zip(N, ue)) - w[e] * xi ** 2 * (L - xi) ** 2 / 24)
+    return np.array(V)
+
+
+LIMITES_FLECHA = {'L/480 + 0.3 cm (hay elementos no estructurales que pueden dañarse)': (480, 0.3),
+                  'L/240 + 0.5 cm (sin elementos que puedan dañarse)': (240, 0.5)}
+
+
+def revision_flechas(xn, tipos, w_serv, P_serv, b, h, fc, factor_I=0.35, factor_dif=2.0, limite=None, npts=81):
+    """Estado límite de servicio (hoja del examen 3, «ELS»): flecha inmediata con las cargas de servicio sin factorizar,
+    E = 14000√f′c e I = factor_I·b·h³/12; flecha total = (1 + factor_dif)·δinst (examen: 3·δinst); se compara con L/480 + 0.3 cm
+    (o L/240 + 0.5 cm) en cada claro entre apoyos y en cada volado (L del volado). Devuelve dict(E, Ig, I, EI, filas, v, x, ok)."""
+    div, extra = LIMITES_FLECHA[limite or next(iter(LIMITES_FLECHA))]
+    E = 14000 * math.sqrt(fc)
+    Ig = b * h ** 3 / 12
+    I = factor_I * Ig
+    EI = E * 10 * I * 1e-8                      # t·m²
+    v = flechas_unitarias(xn, tipos, w_serv, P_serv, npts) / EI * 100   # cm, negativo hacia abajo
+    xn = np.asarray(xn, float)
+    ne = len(xn) - 1
+    X = np.array([np.linspace(xn[e], xn[e + 1], npts) for e in range(ne)])
+    ap = [k for k, t in enumerate(tipos) if t != '—']
+    tramos = []
+    if ap and ap[0] > 0:
+        tramos.append(('Volado izquierdo', 0, ap[0]))
+    tramos += [(f'Claro {i + 1}', ap[i], ap[i + 1]) for i in range(len(ap) - 1)]
+    if ap and ap[-1] < ne:
+        tramos.append(('Volado derecho', ap[-1], ne))
+    filas = []
+    for nombre, k0, k1 in tramos:
+        seg = np.abs(v[k0:k1])
+        i = np.unravel_index(int(np.argmax(seg)), seg.shape)
+        Lc = (xn[k1] - xn[k0]) * 100
+        d_in = float(seg[i])
+        d_tot = (1 + factor_dif) * d_in
+        lim = Lc / div + extra
+        filas.append(dict(tramo=nombre, L=Lc, x=float(X[k0:k1][i]), d_inst=d_in, d_total=d_tot, d_perm=lim, ok=d_tot <= lim))
+    return dict(E=E, Ig=Ig, I=I, EI=EI, v=v, x=X, filas=filas, ok=all(f['ok'] for f in filas), div=div, extra=extra,
+                factor_I=factor_I, factor_dif=factor_dif)
 
 
 def resolver_viga(spans, w, izq='Articulado', der='Articulado', npts=41):
@@ -79,11 +133,15 @@ def resolver_viga(spans, w, izq='Articulado', der='Articulado', npts=41):
     return resolver_nodos(xn, tipos, w, None, npts)
 
 
-def envolvente_viga(xn, tipos, cm, cv, Pcm=None, Pcv=None, grupo='B', pp=0.0, alternar=False, npts=41):
+FACTORES = {'B': (1.3, 1.5), 'A': (1.5, 1.7), 'Accidental': (1.1, 1.1)}
+
+
+def envolvente_viga(xn, tipos, cm, cv, Pcm=None, Pcv=None, grupo='B', pp=0.0, alternar=False, npts=41, cos=None):
     """Cargas de diseño: wu = fcm·(CM + pp) + fcv·CV en cada segmento y Pu = fcm·Pcm + fcv·Pcv en cada nodo (Grupo B: 1.3/1.5;
-    Grupo A: 1.5/1.7). Con alternar, la carga viva se coloca solo donde más desfavorece (patrones por claro y por volado);
+    Grupo A: 1.5/1.7; Accidental: 1.1(CM + CVa), con CV = carga viva instantánea). pp puede ser un valor por segmento.
+    cos: cos θ de cada segmento (vigas inclinadas, cargas por metro horizontal); el cortante de diseño se toma V·cos θ. Con alternar, la carga viva se coloca solo donde más desfavorece (patrones por claro y por volado);
     sin alternar, todo cargado (como en clase). Devuelve dict(x, xn, tipos, ap, Mmax, Mmin, Vmax, Vmin, R, wu, Pu, fcm, fcv)."""
-    fcm, fcv = (1.5, 1.7) if grupo == 'A' else (1.3, 1.5)
+    fcm, fcv = FACTORES[grupo]
     xn = np.asarray(xn, float)
     ne, nn = len(xn) - 1, len(xn)
     cm, cv = np.asarray(cm, float), np.asarray(cv, float)
@@ -106,9 +164,15 @@ def envolvente_viga(xn, tipos, cm, cv, Pcm=None, Pcv=None, grupo='B', pp=0.0, al
         Vp = Vn = c['V']
         Rp = c['R']
     return dict(x=base['x'], xn=xn, tipos=list(tipos), ap=ap, fcm=fcm, fcv=fcv, pp=pp,
+                cos=np.ones(ne) if cos is None else np.asarray(cos, float),
                 Mmax=fcm * base['M'] + fcv * Mp, Mmin=fcm * base['M'] + fcv * Mn,
                 Vmax=fcm * base['V'] + fcv * Vp, Vmin=fcm * base['V'] + fcv * Vn, R=fcm * base['R'] + fcv * Rp,
                 wu=fcm * (cm + pp) + fcv * cv, Pu=fcm * Pcm + fcv * Pcv)
+
+
+def _cos(env, e):
+    c = env.get('cos')
+    return 1.0 if c is None else float(c[e])
 
 
 def _en(env, clave, e, xg):
@@ -153,7 +217,7 @@ def cortantes_diseno(env, ancho_apoyo_cm=0.0):
             if e < 0 or e >= ne:
                 continue
             xg = min(max(xg, xn[e]), xn[e + 1])
-            v = max(abs(_en(env, 'Vmax', e, xg)), abs(_en(env, 'Vmin', e, xg)))
+            v = max(abs(_en(env, 'Vmax', e, xg)), abs(_en(env, 'Vmin', e, xg))) * _cos(env, e)
             out.append(dict(nombre=f'Apoyo {s + 1}, {lado}', Vu=v, s=s, lado=lado))
     return out
 
@@ -164,7 +228,7 @@ def zonas_cortante(env):
     xn, ap, tipos = env['xn'], env['ap'], env['tipos']
     zonas = []
     for e in range(len(xn) - 1):
-        vmax = np.maximum(np.abs(env['Vmax'][e]), np.abs(env['Vmin'][e]))
+        vmax = np.maximum(np.abs(env['Vmax'][e]), np.abs(env['Vmin'][e])) * _cos(env, e)
         ext = []
         for k, ext_v in ((e, vmax[0]), (e + 1, vmax[-1])):
             if tipos[k] != '—':
@@ -175,6 +239,48 @@ def zonas_cortante(env):
             ref = ('claro', max(0, sum(1 for a in ap if a <= e) - 1))
         zonas.append(dict(e=e, x0=float(xn[e]), x1=float(xn[e + 1]), Vu=float(vmax.max()), ref=ref))
     return zonas
+
+
+def tramos_estribos(env, zonas, seps, Lconf_m=0.0, s_conf=None):
+    """Separación final a lo largo de la viga: la de cada zona por cortante y, si Lconf_m > 0, s = mín(s_zona; s_conf) dentro
+    de Lconf (= 2h) a cada lado de cada apoyo (integridad estructural, como en el examen 3). Devuelve lista de
+    dict(x0, x1, s, confinado), uniendo tramos contiguos iguales; s = None si la zona no tiene solución."""
+    xn = env['xn']
+    L = float(xn[-1])
+    conf = [] if not Lconf_m or not s_conf else [(max(0.0, xn[k] - Lconf_m), min(L, xn[k] + Lconf_m)) for k in env['ap']]
+    cortes = sorted({0.0, L} | {z['x0'] for z in zonas} | {z['x1'] for z in zonas} | {c for par in conf for c in par})
+    out = []
+    for a, b in zip(cortes[:-1], cortes[1:]):
+        if b - a < 1e-9:
+            continue
+        m = (a + b) / 2
+        i = next(j for j, z in enumerate(zonas) if z['x0'] - 1e-9 <= m <= z['x1'] + 1e-9)
+        s = seps[i]
+        dentro = any(c0 - 1e-9 <= m <= c1 + 1e-9 for c0, c1 in conf)
+        if dentro and s is not None:
+            s = min(s, s_conf)
+        if out and out[-1]['s'] == s and out[-1]['confinado'] == dentro and abs(out[-1]['x1'] - a) < 1e-9:
+            out[-1]['x1'] = float(b)
+        else:
+            out.append(dict(x0=float(a), x1=float(b), s=s, confinado=dentro))
+    return out
+
+
+def area_tributaria(corto, largo, lado='largo'):
+    """Área de losa (m²) que un tablero corto × largo, con reparto a 45°, manda a una de sus vigas: lado largo → trapecio
+    (2·largo − corto)·corto/4; lado corto → triángulo corto²/4 (hoja «CORTANTE» de DISEÑO DE TRABES)."""
+    corto, largo = min(corto, largo), max(corto, largo)
+    return (2 * largo - corto) * corto / 4 if lado == 'largo' else corto ** 2 / 4
+
+
+def carga_losas_a_viga(tableros, L):
+    """tableros: lista de dict(corto, largo, lado, w) con w en t/m² (o kg/m²); devuelve la carga uniforme equivalente sobre la
+    viga de longitud L: w_viga = Σ(w·A_trib)/L, y el detalle por tablero."""
+    det = []
+    for t in tableros:
+        A = area_tributaria(t['corto'], t['largo'], t.get('lado', 'largo'))
+        det.append(dict(**t, A=A, wA=t['w'] * A))
+    return dict(w=sum(d['wA'] for d in det) / L if L > 0 else 0.0, detalle=det)
 
 
 def _region(xf, cond, i0):
@@ -269,9 +375,10 @@ def figura_viga_sola(env, titulo='', ancho=13.0, alto=7.5, fuente=9):
     return fig
 
 
-def figura_alzado_viga(env, arm, zonas, estribos, h, r, nombre_var, nombre_est, ancho=13.0, alto=4.2, fuente=9):
+def figura_alzado_viga(env, arm, zonas, estribos, h, r, nombre_var, nombre_est, ancho=13.0, alto=4.2, fuente=9, tramos=None, piel=None):
     """Alzado: corridas arriba y abajo (con ganchos), bastones con su longitud y zonas de estribos con su separación.
-    estribos: lista de separaciones (cm) por zona, en el mismo orden que zonas."""
+    estribos: lista de separaciones (cm) por zona, en el mismo orden que zonas. tramos: salida de tramos_estribos (con la zona
+    de confinamiento sombreada); si se da, sustituye a zonas/estribos. piel: salida de ame_parcial3.acero_piel."""
     import ame_porticos as pt
     plt = pt._plt()
     xn = env['xn']
@@ -297,20 +404,32 @@ def figura_alzado_viga(env, arm, zonas, estribos, h, r, nombre_var, nombre_est, 
         ax.plot([bs['x0'], bs['x1']], [y, y], color='#D9534F', lw=3.4, solid_capstyle='butt')
         ax.text((bs['x0'] + bs['x1']) / 2, y + (-0.1 if bs['lecho'] == 'superior' else 0.05), f'+{bs["n"]}{nombre_var}  ({bs["x1"] - bs["x0"]:.2f} m)',
                 ha='center', va='top' if bs['lecho'] == 'superior' else 'bottom', fontsize=fuente - 0.5, color='#B00020')
-    for z, s in zip(zonas, estribos):
+    if tramos is None:
+        tramos = [dict(x0=z['x0'], x1=z['x1'], s=s, confinado=False) for z, s in zip(zonas, estribos)]
+    if piel and piel.get('aplica'):
+        for j in range(1, piel['n_cara'] + 1):
+            y = rr + j * (H - 2 * rr) / (piel['n_cara'] + 1)
+            ax.plot([0, L], [y, y], color='#2a9d8f', lw=1.1, ls=(0, (6, 3)))
+        ax.text(L * 0.75, rr + (H - 2 * rr) / (piel['n_cara'] + 1), f'piel: {piel["n_cara"]}{piel["var"]} por cara @ {piel["sep"]:.1f} cm',
+                ha='center', va='bottom', fontsize=fuente - 1, color='#1d6f65', bbox=caja)
+    for i, t in enumerate(tramos):
+        s = t['s']
         if not s:
             continue
-        xs = np.arange(z['x0'] + 0.05, z['x1'] - 0.01, s / 100.0)
+        if t.get('confinado'):
+            ax.add_patch(plt.Rectangle((t['x0'], 0), t['x1'] - t['x0'], H, fc='#F2C12E', alpha=0.18, ec='none'))
+        xs = np.arange(t['x0'] + 0.05, t['x1'] - 0.01, s / 100.0)
         for xv in xs:
             ax.plot([xv, xv], [0.03, H - 0.03], color='#6c757d', lw=0.7)
-        ax.text((z['x0'] + z['x1']) / 2, H + 0.08, f'E{nombre_est} @ {s} cm', ha='center', fontsize=fuente, color='#0B2545')
-        ax.plot([z['x0']] * 2, [H + 0.02, H + 0.2], color='#0B2545', lw=0.8)
+        ax.text((t['x0'] + t['x1']) / 2, H + (0.08 if i % 2 == 0 else 0.24), f'E{nombre_est} @ {s}' + (' (conf.)' if t.get('confinado') else ''),
+                ha='center', fontsize=fuente - (1 if len(tramos) > 6 else 0), color='#0B2545')
+        ax.plot([t['x0']] * 2, [H + 0.02, H + 0.2], color='#0B2545', lw=0.8)
     ax.plot([L] * 2, [H + 0.02, H + 0.2], color='#0B2545', lw=0.8)
     ax.set_xlim(-0.3, L + 0.3)
-    ax.set_ylim(-0.5 - H * 0.2, H + 0.45)
+    ax.set_ylim(-0.5 - H * 0.2, H + 0.55)
     ax.set_aspect('auto')
     ax.set_yticks([])
     ax.set_xlabel('x (m)')
-    ax.set_title('Alzado del armado: corridas, bastones y estribos', fontsize=fuente + 2)
+    ax.set_title('Alzado del armado: corridas, bastones y estribos (amarillo: zona de confinamiento 2h)', fontsize=fuente + 2)
     fig.tight_layout()
     return fig

@@ -1,4 +1,4 @@
-"""Pestaña «5 · Tercer parcial» de la app: mampostería, viento y concreto reforzado (motor en ame_parcial3.py)."""
+"""Examen 3 · mampostería, viento, viga por puntos y herramientas de una sección de concreto reforzado (motor en ame_parcial3.py)."""
 import numpy as np
 import pandas as pd
 import streamlit as st
@@ -339,8 +339,8 @@ def _viga_completa():
         st.markdown(f'- Corrido: máx(As,mín; 50 % As mayor) = {As_corr:.2f} cm² → n = {As_corr:.2f}/{ab} = {As_corr / ab:.2f} → '
                     f'**{n_corr}{var}** ({n_corr * ab:.2f} cm²) arriba y abajo')
         st.markdown('- Bastones: en cada punto se agregan las barras que falten hasta el As real de la tabla; cada bastón se ancla una '
-                    'distancia d más allá de donde ya no se requiere en el diagrama de Mu. El alzado con las longitudes sale en la pestaña '
-                    '«6 · Diagramas» → «Viga continua del nivel».')
+                    'distancia d más allá de donde ya no se requiere en el diagrama de Mu. El alzado con las longitudes sale en «Examen 3» → '
+                    '«Viga continua» (o en «Pórtico»).')
         faltan = [f'{p_}) +{f["n"] - n_corr}{var}' for p_, f in zip(ed['Punto'], fichas) if f['n'] and f['n'] > n_corr]
         if faltan:
             st.markdown('- Bastones por punto: ' + ' · '.join(faltan))
@@ -380,6 +380,11 @@ def _viga_completa():
                 st.latex(tx)
             if c_['ok']:
                 st.success(f'E {est}, {ramas} ramas @ {c_["s_usar"]} cm  (rige {c_["rige"]} en smáx)')
+                if c_['s_usar'] < 10:
+                    alt = p3.alternativas_estribo(float(vu) * 1000, b, d_c, fc, fyest, float(as_t), s_tope)
+                    st.warning(f'@ {c_["s_usar"]} cm es muy cerrado para colar. '
+                               + ('Alternativas con s ≥ 10 cm: ' + ' · '.join(o['texto'] for o in alt[:4]) if alt else
+                                  'Ningún estribo #3/#4 de 2–4 ramas da s ≥ 10 cm: agranda la sección.'))
             else:
                 st.error('Vu excede el límite de la sección: agranda b o h.')
         resumen.append([tr, vu, as_t, c_['rho'], c_['VcR'], c_['Vs'], c_['s_calc'] if c_['s_calc'] is not None else np.nan, c_['s_max'],
@@ -387,13 +392,24 @@ def _viga_completa():
     st.markdown('**Resumen**')
     _tabla(pd.DataFrame(resumen, columns=['Tramo', 'Vu (t)', 'As tens. (cm²)', 'ρ', 'VcR (kg)', 'Vu−VcR (kg)', 's calc (cm)', 'smáx (cm)',
                                           'Estribos']), 4)
+    st.markdown('#### 5 · Zona de confinamiento (integridad estructural)')
+    integ = p3.integridad_estructural(h, d_c, pt.DIAMETROS[var], est_db, s_tope)
+    for tit, tx in integ['tex']:
+        st.latex(tx)
+    st.success(f'En 2h = {integ["Lconf"]:g} cm desde la cara de cada apoyo: E {est}, {ramas} ramas @ mín(s por cortante; {integ["s_usar"]}) cm')
+    st.markdown('#### 6 · Acero de piel (temperatura)')
+    piel = p3.acero_piel(b, h, r_val if r_fija else rec + est_db + pt.DIAMETROS[var] / 2, est if est in ('#3', '#4') else '#3')
+    for tit, tx in piel['tex']:
+        st.latex(tx)
+    for t in piel['lineas']:
+        st.markdown(f'- {t}')
 
 
-def _concreto():
-    s_viga_c, s_flex, s_tant, s_cort, s_viga = st.tabs(['Viga completa (clase)', 'Flexión: As', 'Tanteos (eje neutro)',
-                                                         'Cortante: estribos', 'Cargas y diagramas'])
-    with s_viga_c:
-        _viga_completa()
+def mostrar_seccion():
+    """Examen 3 · Herramientas de una sección: flexión, tanteos del eje neutro, estribos, revisión de una separación y cargas."""
+    st.caption('Cálculos sueltos de UNA sección de concreto reforzado (NTC-C), para comprobar un punto del examen.')
+    s_flex, s_tant, s_cort, s_rev, s_viga = st.tabs(['Flexión: As', 'Tanteos (eje neutro)', 'Cortante: estribos',
+                                                     'Cortante: revisar una separación', 'Cargas y diagramas'])
     with s_flex:
         c1, c2, c3, c4 = st.columns(4)
         b = c1.number_input('b (cm)', 5.0, 300.0, 40.0, key='cf_b')
@@ -477,9 +493,43 @@ def _concreto():
             c3.metric('Estribos', f'{est[:2]} @ {res["s_usar"]} cm')
         else:
             st.error('Vu excede el límite 2.65·FR·b·d·√f′c: agranda la sección.')
-        st.caption('Extremos de viga (L = 2h) en condición sísmica: integridad estructural s ≤ min{d/4; 8 db long.; 24 db est.; 30 cm}.')
+        import ame_porticos as pt
+        db_l = st.selectbox('Varilla longitudinal (para 8 db de la zona de confinamiento)', list(pt.DIAMETROS), index=list(pt.DIAMETROS).index('#8'),
+                            key='cc_varl')
+        integ = p3.integridad_estructural(h, h - r, pt.DIAMETROS[db_l], pt.DIAMETROS[est[:2]] if est[:2] in pt.DIAMETROS else 0.64, 25.0)
+        st.markdown('**Zona de confinamiento (integridad estructural)**')
+        for tit, tx in integ['tex']:
+            st.latex(tx)
         with st.expander('Procedimiento', expanded=True):
             _pasos(res['pasos'])
+    with s_rev:
+        st.caption('Revisa una separación que ya propusiste (hoja «CORTANTE (2)» del Excel): VsR = FR·Av·fy·d/s y VR = VcR + VsR ≥ Vu.')
+        c1, c2, c3, c4 = st.columns(4)
+        b = c1.number_input('b (cm)', 5.0, 300.0, 30.0, key='cr_b')
+        h = c2.number_input('h (cm)', 10.0, 300.0, 70.0, key='cr_h')
+        r = c3.number_input('r (cm)', 1.0, 20.0, 5.0, key='cr_r')
+        fc = c4.number_input("f′c", 100.0, 1000.0, 250.0, key='cr_fc')
+        c1, c2, c3, c4 = st.columns(4)
+        Vu = c1.number_input('Vu (t)', 0.0, 500.0, 35.184, key='cr_Vu')
+        As = c2.number_input('As en tensión (cm²)', 0.1, 500.0, 30.40, key='cr_As')
+        est = c3.selectbox('Estribo', ['#3', '#4', '#2'], key='cr_est')
+        ramas = c4.number_input('Ramas', 1, 6, 3, key='cr_ramas')
+        c1, c2, c3 = st.columns(3)
+        s_prop = c1.number_input('Separación propuesta s (cm)', 2.0, 60.0, 15.0, 1.0, key='cr_s')
+        fyest = c2.selectbox('fy del estribo', [4200.0, 2530.0], key='cr_fyest')
+        s_tope = c3.number_input('Tope de smáx (cm)', 10.0, 60.0, 25.0, 1.0, key='cr_tope')
+        Av = {'#2': 0.32, '#3': 0.71, '#4': 1.27}[est] * ramas
+        rv = p3.revision_cortante(Vu * 1000, b, h - r, fc, fyest, Av, As, s_prop, s_tope)
+        c1, c2, c3 = st.columns(3)
+        c1.metric('VcR (t)', f'{rv["VcR"] / 1000:.2f}')
+        c2.metric('VsR (t)', f'{rv["VsR"] / 1000:.2f}')
+        c3.metric('VR (t)', f'{rv["VR"] / 1000:.2f}')
+        (st.success if rv['ok'] else st.error)(
+            f'E{est}, {ramas} ramas @ {s_prop:g} cm: ' + ('PASA' if rv['ok'] else
+            'NO PASA (' + ', '.join(t for t, ok in (('VR < Vu', not rv['ok_resistencia']), ('s > smáx', not rv['ok_separacion'])) if ok) + ')'))
+        for tit, tx in rv['tex']:
+            st.markdown(f'*{tit}*')
+            st.latex(tx)
     with s_viga:
         c1, c2, c3 = st.columns(3)
         w = c1.number_input('w (t/m), ya factorizada o no', 0.01, 500.0, 3.55, key='cv_w')
@@ -500,14 +550,16 @@ def _concreto():
         st.metric(f'wu = {fcm}(CM + pp) + {fcv}·CVmáx', f'{fcm * (cm + pp) + fcv * cvm:.4f} t/m')
 
 
-def mostrar():
-    st.caption('Tercer parcial del Dr. Rivero (apuntes pp. 22–35): mampostería, viento y concreto reforzado. Cada módulo '
-               'viene validado contra los ejemplos de tus apuntes. Las normas de material (Mampostería, Viento, Concreto) '
-               'se toman de tus apuntes tal cual.')
-    t_m, t_v, t_c = st.tabs(['Mampostería', 'Viento', 'Concreto reforzado'])
-    with t_m:
-        _mamposteria()
-    with t_v:
-        _viento()
-    with t_c:
-        _concreto()
+def mostrar_viga_puntos():
+    """Examen 3 · Viga por puntos: capturas los Mu y Vu del diagrama (de ETABS o del pórtico) y la app arma todo."""
+    _viga_completa()
+
+
+def mostrar_mamposteria():
+    st.caption('Apuntes pp. 22–26: carga vertical, cortante por muro, fuerzas sísmicas por el método estático y distorsiones.')
+    _mamposteria()
+
+
+def mostrar_viento():
+    st.caption('Apuntes pp. 27–30: velocidad de diseño, presiones por cara, fuerzas por nivel y techo.')
+    _viento()

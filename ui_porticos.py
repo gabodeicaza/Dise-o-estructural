@@ -1,4 +1,4 @@
-"""Pestaña «6 · Diagramas»: envolventes de M y V por viga (sismo de ida, regreso y gravedad), acero requerido,
+"""Examen 3 · Pórtico: envolventes de M y V por viga (sismo de ida, regreso y gravedad), acero requerido,
 armado con la varilla que elige el usuario y render de las secciones."""
 import io
 
@@ -14,9 +14,8 @@ COLS = ['Nivel', 'h (m)', 'Col b (cm)', 'Col h (cm)', 'Viga b (cm)', 'Viga h (cm
 COLS_TXT = ['Nivel', 'CM (t/m)', 'CV máx (t/m)', 'CV acc (t/m)', 'F sismo (t)']
 FUENTES_F = {'Dinámico (SRSS)': 'tabla_din', 'Dinámico escalado al estático': 'tabla_din_esc', 'Estático': 'tabla_est'}
 VARS = list(pt.DIAMETROS)
-OPC_MODELO = ['Modelo de la pestaña 1 (tramos sin losa, columnas continuas, secciones por nivel, volados)',
-              'Pórtico regular (captura rápida)',
-              'Una sola viga (continua, sin pórtico)']
+OPC_MODELO = ['Modelo del examen 2 (tramos sin losa, columnas continuas, secciones por nivel, volados)',
+              'Pórtico regular (captura rápida)']
 
 
 def precargar(p):
@@ -101,14 +100,17 @@ def mostrar(res_sismo=None, crujias_txt='', modelo=None, datos=None):
                '(ductilidad baja, apuntes pp. 31–35).')
     usa_modelo = False
     hay_modelo = modelo is not None and datos is not None and modelo.get('vigas') == 'flexibles'
-    fuente_modelo = st.radio('Geometría del pórtico', OPC_MODELO, key='p6_fm', index=0 if hay_modelo else 1)
-    if fuente_modelo.startswith('Una sola viga'):
-        import ui_viga
-        ui_viga.mostrar()
-        return
+    if st.session_state.get('p6_fm') not in OPC_MODELO:         # proyectos guardados con los nombres anteriores
+        anterior = str(st.session_state.pop('p6_fm', '') or '')
+        if anterior.startswith('Modelo'):
+            st.session_state['p6_fm'] = OPC_MODELO[0]
+        elif anterior.startswith('Pórtico'):
+            st.session_state['p6_fm'] = OPC_MODELO[1]
+    fuente_modelo = st.radio('Geometría del pórtico', OPC_MODELO, key='p6_fm', index=0 if hay_modelo else 1,
+                             help='La viga continua sin columnas está en su propia pestaña: «Examen 3 → Viga continua».')
     usa_modelo = fuente_modelo.startswith('Modelo')
     if usa_modelo and not hay_modelo:
-        st.warning('Para usar el modelo de la pestaña 1 elige **Flexibles (marco plano)** en el tipo de vigas y captura la viga '
+        st.warning('Para usar el modelo del examen 2 (pestaña «1 · Estructura») elige **Flexibles (marco plano)** en el tipo de vigas y captura la viga '
                    'de cada piso. Mientras tanto usa el pórtico regular.')
         return
     fuente = st.selectbox('Fuerzas sísmicas tomadas de', list(FUENTES_F), key='p6_fuente')
@@ -141,7 +143,7 @@ def mostrar(res_sismo=None, crujias_txt='', modelo=None, datos=None):
     if usa_modelo:
         n = len(datos['niveles'])
         st.info('La geometría (columnas por eje, secciones por nivel, vigas, tramos sin losa, columnas que cruzan pisos y '
-                'apoyos) es la de la pestaña 1. Aquí solo captura las cargas por tramo (un valor para todos o uno por tramo: '
+                'apoyos) es la de «Examen 2 → 1 · Estructura». Aquí solo captura las cargas por tramo (un valor para todos o uno por tramo: '
                 'volado izq. + crujías + volado der., t/m) y las fuerzas sísmicas.')
         import ame_sismico as ame
         ej17 = next((v['porticos'] for k, v in ame.EJEMPLOS_MODELO.items() if k.startswith('Ejemplo 17')), None)

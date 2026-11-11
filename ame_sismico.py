@@ -2430,7 +2430,7 @@ EJEMPLOS_MODELO = {
     # Ejercicio de clase (tercer parcial): «Diseñe la viga del nivel 1». Marco de 5 niveles y 6 ejes (5 6 5 5 7 m), columnas de
     # 70x70, vigas de 35x70, E = 221,359.44 kg/cm². El nivel 4 llega al eje 5 y el 5 al eje 4 (el resto, sin losa ni columna).
     # Cargas 10, 10, 10.8, 11.6 y 10 t/m (CM + CVacc) y fuerzas 5, 5, 10, 15 y 20 t. Grupo A: agrega el peso propio.
-    # El espectro es ilustrativo (el ejercicio da las fuerzas); 'porticos' llena la pestaña «6 · Diagramas».
+    # El espectro es ilustrativo (el ejercicio da las fuerzas); 'porticos' llena «Examen 3 → Pórtico».
     'Ejemplo 17 (clase: viga del nivel 1, marco de 5 niveles y 6 ejes, columnas 70x70)': dict(
         crujias='5 6 5 5 7', vigas='flexibles', material='Concreto', direccion='X', unidad_E='kg/cm²', E='221359.44',
         niveles=[dict(h='3.5', ejes='todos', seccion='70x70', viga='35x70', cargas='10'),

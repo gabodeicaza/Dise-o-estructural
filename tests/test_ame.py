@@ -1441,7 +1441,7 @@ def test_pagina_organizada_en_tabs_y_errores_no_la_rompen():
     raiz = Path(__file__).resolve().parents[1]
     at = AppTest.from_file(str(raiz / 'app_web.py'), default_timeout=120).run()
     etiquetas = [t_.label for t_ in at.tabs]
-    assert etiquetas[:3] == ['1 · Estructura', '2 · Sismo y norma', '3 · Resultados']
+    assert etiquetas[:4] == ['Examen 2 · Análisis sísmico', '1 · Estructura', '2 · Sismo y norma', '3 · Resultados']
     assert {'Resumen', 'Calculadora de EI', 'Dimensionar · resolver al revés', '4 · Herramientas'} <= set(etiquetas)
     assert sorted({w.key for w in at.sidebar.text_input}) == ['autor', 'proyecto']          # la barra lateral solo trae el proyecto
     # datos inválidos: el error aparece, las demás pestañas siguen disponibles y la calculadora funciona

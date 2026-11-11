@@ -473,3 +473,98 @@ def test_una_sola_viga_con_claros_cargados_sin_apoyo_se_captura_con_la_posicion_
     at.checkbox(key='v1_emp_i').check()
     at.checkbox(key='v1_emp_d').check().run()
     assert not at.exception and not at.error
+
+
+# ----------------------------------------------------------------- examen 3 (b = 40, h = 80, d = 75, f′c = 250, #8, E#3)
+def test_integridad_estructural_examen3():
+    r = p.integridad_estructural(80, 75, 2.54, 0.95, 25)
+    assert r['Lconf'] == 160 and r['s_max'] == pytest.approx(18.75) and r['rige'] == 'd/4' and r['s_usar'] == 15
+    assert r['terminos']['8 db long.'] == pytest.approx(20.32)
+
+
+def test_acero_piel_examen3():
+    r = p.acero_piel(40, 80, 5, '#3')
+    assert r['aplica'] and r['n_cara'] == 3 and r['sep'] == pytest.approx(17.5) and r['As_ref'] == pytest.approx(9.6)
+    assert not p.acero_piel(30, 60, 5)['aplica']
+
+
+def test_fr_por_deformacion_ntc2023():
+    assert p.fr_deformacion(56.92, 40, 75, 250, 4200)['FR'] == pytest.approx(0.792, abs=1e-3)   # cerca de As,máx: transición
+    assert p.fr_deformacion(40.56, 40, 75, 250, 4200)['FR'] == 0.9                               # 8#8: controlada por tensión
+
+
+def test_cortante_examen3_con_tope_20():
+    # Viga 1 (Vu = 20.66 t, 4#8): s calc 46.55 → @20; viga diagonal (48.4 t, 2#8): s calc 8.89 → @5
+    c = p.cortante_ficha(20660, 40, 75, 250, 4200, 1.42, 20.28, 20)
+    assert c['VcR'] == pytest.approx(13453, abs=1) and c['s_calc'] == pytest.approx(46.55, abs=0.01) and c['s_usar'] == 20
+    c = p.cortante_ficha(48400, 40, 75, 250, 4200, 1.42, 10.14, 20)
+    assert c['VcR'] == pytest.approx(10678, abs=1) and c['s_calc'] == pytest.approx(8.89, abs=0.01) and c['s_usar'] == 5
+    alt = p.alternativas_estribo(48400, 40, 75, 250, 4200, 10.14, 20)
+    assert any(o['estribo'] == '#4' and o['ramas'] == 2 and o['s_usar'] == 15 for o in alt)
+    assert all(o['s_usar'] >= 10 for o in alt)
+
+
+def test_tope_smax_en_regimen_025d():
+    c = p.cortante_ficha(60000, 25, 45, 250, 4200, 2.54, 10, s_tope=40)       # Vu − VcR > 1.1·FR·b·d·√f′c
+    assert not c['regimen_05d'] and c['s_max'] <= 30
+
+
+def test_revision_cortante_hoja_excel():
+    Av = 3 * 0.7125573924808561
+    r = p.revision_cortante(35184, 30, 65, 250, 4200, Av, 30.40244874584986, 20)
+    assert r['VcR'] / 1000 == pytest.approx(11.55, abs=0.01) and r['VsR'] / 1000 == pytest.approx(21.88, abs=0.01)
+    assert r['VR'] / 1000 == pytest.approx(33.44, abs=0.01) and not r['ok_resistencia']
+    assert p.revision_cortante(35184, 30, 65, 250, 4200, Av, 30.40244874584986, 15)['ok']
+
+
+def test_flechas_viga_sola():
+    import ame_viga as av
+    v = av.flechas_unitarias([0, 5], ['Articulado', 'Articulado'], [1.0])
+    assert v.min() == pytest.approx(-5 * 5 ** 4 / 384)
+    v = av.flechas_unitarias([0, 3], ['Empotrado', '—'], [1.0])
+    assert v.min() == pytest.approx(-3 ** 4 / 8)
+    r = av.revision_flechas([0, 5.4], ['Articulado', 'Articulado'], [2.0], [0, 0], 40, 80, 250)
+    f = r['filas'][0]
+    assert f['d_perm'] == pytest.approx(540 / 480 + 0.3) and f['d_total'] == pytest.approx(3 * f['d_inst'])
+    EI = 14000 * 250 ** 0.5 * 10 * 0.35 * 40 * 80 ** 3 / 12 * 1e-8
+    assert f['d_inst'] == pytest.approx(5 * 2 * 5.4 ** 4 / 384 / EI * 100, rel=1e-6)
+
+
+def test_confinamiento_en_los_tramos_de_estribos():
+    import ame_viga as av
+    env = av.envolvente_viga([0, 3, 8, 12], ['Articulado'] * 4, [1, 1, 1], [0.5] * 3)
+    t = av.tramos_estribos(env, av.zonas_cortante(env), [20, 20, 20], 1.6, 15)
+    assert [(x['x0'], x['x1'], x['s']) for x in t] == [(0, 4.6, 15), (4.6, 6.4, 20), (6.4, 9.6, 15), (9.6, 10.4, 20), (10.4, 12, 15)]
+    assert av.tramos_estribos(env, av.zonas_cortante(env), [20, 20, 20]) == [dict(x0=0.0, x1=12.0, s=20, confinado=False)]
+
+
+def test_areas_tributarias_hoja_excel():
+    import ame_viga as av
+    assert av.area_tributaria(2.5, 3, 'largo') == pytest.approx(2.1875)
+    assert av.area_tributaria(3, 3, 'corto') == pytest.approx(2.25)
+    r = av.carga_losas_a_viga([dict(corto=2.5, largo=3, lado='largo', w=938), dict(corto=3, largo=3, lado='corto', w=938)], 3)
+    assert r['w'] / 1000 + 0.45 == pytest.approx(1.8374583, rel=1e-6)          # celda J78: (wu·A/L + pp)/1000
+
+
+def test_combinacion_accidental_y_viga_inclinada():
+    import ame_viga as av
+    env = av.envolvente_viga([0, 5], ['Articulado'] * 2, [2.0], [1.0], grupo='Accidental')
+    assert (env['fcm'], env['fcv']) == (1.1, 1.1) and env['wu'][0] == pytest.approx(3.3)
+    plano = av.envolvente_viga([0, 4], ['Articulado'] * 2, [1.0], [0.0])
+    incl = av.envolvente_viga([0, 4], ['Articulado'] * 2, [1.0], [0.0], cos=[0.8])
+    assert incl['Mmax'].max() == pytest.approx(plano['Mmax'].max())
+    assert av.zonas_cortante(incl)[0]['Vu'] == pytest.approx(0.8 * av.zonas_cortante(plano)[0]['Vu'])
+
+
+def test_app_organizada_por_examenes():
+    pytest.importorskip('streamlit')
+    from pathlib import Path
+    from streamlit.testing.v1 import AppTest
+    at = AppTest.from_file(str(Path(__file__).resolve().parent.parent / 'app_web.py'), default_timeout=300).run()
+    assert not at.exception, [e.value for e in at.exception]
+    etiquetas = [t.label for t in at.tabs]
+    e2, e3 = etiquetas.index('Examen 2 · Análisis sísmico'), etiquetas.index('Examen 3 · Concreto reforzado, mampostería y viento')
+    assert e2 < etiquetas.index('4 · Herramientas') < e3
+    assert {'Viga continua', 'Pórtico', 'Viga por puntos (Mu dados)', 'Sección: flexión y cortante', 'Mampostería', 'Viento'} \
+        <= set(etiquetas[e3:])
+    assert any(m.label == 'VR (t)' for m in at.metric)

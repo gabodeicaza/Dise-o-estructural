@@ -424,7 +424,7 @@ def cortante_ficha(Vu_kg, b, d, fc, fy_est, Av, As_tens, s_tope=25.0, lambda_=1.
     t1 = 0.5 * d if regimen else 0.25 * d
     t2 = Av * fy_est / (0.2 * raiz * b)
     t3 = Av * fy_est / (3.5 * b)
-    t4 = float(s_tope)
+    t4 = float(s_tope) if regimen else min(float(s_tope), TOPE_D4)   # tabla 6.3.7.6.2.2: 600 mm con 0.5d, 300 mm con 0.25d
     s_max = min(t1, t2, t3, t4)
     quien = {t1: ('0.5d' if regimen else '0.25d'), t2: 'Av·fy/(0.2·b·√f′c)', t3: 'Av·fy/(3.5·b)', t4: 'tope'}[s_max]
     tex.append(('Separación máxima',
@@ -439,6 +439,101 @@ def cortante_ficha(Vu_kg, b, d, fc, fy_est, Av, As_tens, s_tope=25.0, lambda_=1.
               f'Vu − VcR = {Vs:,.0f} kg', f'smáx = {s_max:.2f} cm (rige {quien})', f'Estribos @ {s_usar} cm']
     return dict(Vu=Vu_kg, rho=rho, Vc1=Vc1, Vc2=Vc2, VcR=VcR, Vs=Vs, s_calc=s_calc, s_max=s_max, rige=quien, s_usar=s_usar, ok=ok,
                 regimen_05d=regimen, tex=tex, lineas=lineas, limites=lim)
+
+
+TOPE_D4 = 30.0               # cm: tope de smáx cuando Vu − VcR > 1.1·FR·b·d·√f′c (régimen 0.25d)
+
+
+def _sep5(s, minimo=5):
+    """Separación de obra: múltiplo de 5 cm hacia abajo (mínimo 5 cm)."""
+    return max(minimo, int(math.floor(s / 5 + 1e-9) * 5))
+
+
+def integridad_estructural(h, d, db_long, db_est, tope=25.0):
+    """Zona de confinamiento en cada extremo de la viga (examen 3, «Integridad estructural»): Lconf = 2h y
+    s ≤ mín{d/4; 8·db long.; 24·db est.; tope}. Devuelve dict(Lconf, terminos, s_max, s_usar, rige, tex, lineas)."""
+    terminos = {'d/4': d / 4, '8 db long.': 8 * db_long, '24 db est.': 24 * db_est, 'tope': float(tope)}
+    rige = min(terminos, key=terminos.get)
+    s_max = terminos[rige]
+    s_usar = _sep5(s_max)
+    tex = [('Integridad estructural (zona de confinamiento)',
+            rf"L_{{conf}} = 2h = 2({h:g}) = {2 * h:g}\ \text{{cm}};\qquad s_{{max}} \le \begin{{cases}} d/4 = {d / 4:.2f}\\ "
+            rf"8\,d_b = 8({db_long:.2f}) = {8 * db_long:.2f}\\ 24\,d_{{be}} = 24({db_est:.2f}) = {24 * db_est:.2f}\\ {tope:g}\ \text{{(tope)}}"
+            rf"\end{{cases}} = {s_max:.2f}\ \Rightarrow\ \mathbf{{s = {s_usar}\ \text{{cm}}}}")]
+    lineas = [f'Lconf = 2h = {2 * h:g} cm desde la cara de cada apoyo',
+              f'smáx = mín(d/4 = {d / 4:.2f}; 8db = {8 * db_long:.2f}; 24dbe = {24 * db_est:.2f}; {tope:g}) = {s_max:.2f} cm (rige {rige}) '
+              f'→ @ {s_usar} cm']
+    return dict(Lconf=2 * h, terminos=terminos, s_max=s_max, s_usar=s_usar, rige=rige, tex=tex, lineas=lineas)
+
+
+def acero_piel(b, h, r, var='#3', umbral=60.0, s_max=20.0, cuantia=0.003):
+    """Acero por temperatura en las caras laterales (examen 3, «Diseño por temperatura»): si h > umbral se reparten barras en la
+    altura libre h − 2r con separación ≤ s_max (en el examen: 70 cm → 3 barras por cara @ 17.5 cm). Se informa también la
+    referencia As,temp = cuantía·b·h. Devuelve dict(aplica, n_cara, sep, As_col, As_ref, var, lineas, tex)."""
+    aplica = h > umbral
+    libre = h - 2 * r
+    ab = VARILLAS.get(var, 0.71)
+    if not aplica or libre <= 0:
+        return dict(aplica=False, n_cara=0, sep=None, As_col=0.0, As_ref=cuantia * b * h, var=var, libre=libre,
+                    lineas=[f'h = {h:g} cm ≤ {umbral:g} cm → no se requiere acero de piel'], tex=[])
+    espacios = math.ceil(libre / s_max - 1e-9)
+    n = max(1, espacios - 1)
+    sep = libre / espacios
+    As_col = 2 * n * ab
+    As_ref = cuantia * b * h
+    lineas = [f'h = {h:g} cm > {umbral:g} cm → se coloca acero de piel en las dos caras',
+              f'Altura libre = h − 2r = {libre:g} cm; {libre:g}/{s_max:g} = {libre / s_max:.2f} → {espacios} espacios → '
+              f'{n}{var} por cara @ {sep:.1f} cm',
+              f'As colocado = 2·{n}·{ab} = {As_col:.2f} cm²; referencia As,temp = {cuantia:g}·b·h = {As_ref:.2f} cm²']
+    tex = [('Acero por temperatura (caras laterales)',
+            rf"h = {h:g} > {umbral:g}\ \text{{cm}};\quad h - 2r = {libre:g}\ \text{{cm}};\quad \frac{{{libre:g}}}{{{s_max:g}}} = {libre / s_max:.2f}"
+            rf"\Rightarrow {n}\,\text{{{var}}}\ \text{{por cara @ }}{sep:.1f}\ \text{{cm}};\quad A_{{s,temp}} = {cuantia:g}\,b\,h = {As_ref:.2f}\ \text{{cm}}^2")]
+    return dict(aplica=True, n_cara=n, sep=sep, As_col=As_col, As_ref=As_ref, var=var, libre=libre, lineas=lineas, tex=tex)
+
+
+def fr_deformacion(As, b, d, fc, fy, Es=2.0e6):
+    """FR de flexión según la deformación del acero en tensión (NTC-C 2023, hoja «Cálculo de acero de refuerzo»):
+    0.65 si εt ≤ εy; 0.65 + 0.25(εt − εy)/0.003 en la transición; 0.9 si εt ≥ εy + 0.003. Devuelve dict(c, a, et, ey, FR)."""
+    a = As * fy / (0.85 * fc * b)
+    c = a / beta1(fc)
+    et = 0.003 * (d - c) / c if c > 0 else float('inf')
+    ey = fy / Es
+    if et <= ey:
+        fr = 0.65
+    elif et < ey + 0.003:
+        fr = 0.65 + 0.25 * (et - ey) / 0.003
+    else:
+        fr = 0.9
+    return dict(c=c, a=a, et=et, ey=ey, FR=fr)
+
+
+def alternativas_estribo(Vu_kg, b, d, fc, fy_est, As_tens, s_tope=25.0, s_min=10, ramas_posibles=(2, 3, 4)):
+    """Estribos con los que la separación no baja de s_min (el examen aceptó @5 cm en la viga diagonal): prueba #3 y #4 con
+    2, 3 y 4 ramas y devuelve las opciones que cumplen, de menor a mayor Av."""
+    out = []
+    for est in ('#3', '#4'):
+        for ramas in ramas_posibles:
+            Av = VARILLAS[est] * ramas
+            c = cortante_ficha(Vu_kg, b, d, fc, fy_est, Av, As_tens, s_tope)
+            if c['ok'] and c['s_usar'] >= s_min:
+                out.append(dict(estribo=est, ramas=ramas, Av=Av, s_usar=c['s_usar'], texto=f'E{est}, {ramas} ramas @ {c["s_usar"]} cm'))
+    return sorted(out, key=lambda o: (o['Av'], -o['s_usar']))
+
+
+def revision_cortante(Vu_kg, b, d, fc, fy_est, Av, As_tens, s, s_tope=25.0, lambda_=1.0):
+    """Revisión de una separación dada (hoja «CORTANTE (2)»): VsR = FR·Av·fy·d/s, VR = VcR + VsR ≥ Vu y s ≤ smáx."""
+    base = cortante_ficha(Vu_kg, b, d, fc, fy_est, Av, As_tens, s_tope, lambda_)
+    VsR = FR_CORTANTE * Av * fy_est * d / s
+    VR = base['VcR'] + VsR
+    ok_r = VR >= Vu_kg
+    ok_s = s <= base['s_max'] + 1e-9
+    ok_l = VsR <= base['limites']['L22']
+    tex = [('Resistencia del acero', rf"V_{{sR}} = \frac{{F_R\,A_v\,f_y\,d}}{{s}} = \frac{{0.75({Av:.2f})({fy_est:g})({d:.2f})}}{{{s:g}}} = {_tn(VsR)}\ \text{{kg}}"),
+           ('Resistencia total', rf"V_R = V_{{CR}} + V_{{sR}} = {_tn(base['VcR'])} + {_tn(VsR)} = {_tn(VR)}\ \text{{kg}}\ "
+                                 rf"{'\\ge' if ok_r else '<'}\ V_u = {_tn(Vu_kg)}\ \ {'\\checkmark' if ok_r else r'\times'}"),
+           ('Separación máxima', rf"s = {s:g}\ {'\\le' if ok_s else '>'}\ s_{{max}} = {base['s_max']:.2f}\ \text{{cm}}\ \ {'\\checkmark' if ok_s else r'\times'}")]
+    return dict(VcR=base['VcR'], VsR=VsR, VR=VR, s_max=base['s_max'], ok=ok_r and ok_s and ok_l and base['ok'],
+                ok_resistencia=ok_r, ok_separacion=ok_s, tex=base['tex'][:2] + tex)
 
 
 def viga_simple(w, L, P=None):

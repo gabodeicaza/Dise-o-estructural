@@ -18,6 +18,7 @@ import ame_pdf
 import ame_sismico as ame
 import ui_parcial3
 import ui_porticos
+import ui_viga
 from ame_revision import COMBINACIONES
 from ame_secciones import AYUDA_SECCIONES
 
@@ -255,11 +256,17 @@ with st.sidebar:
     st.caption('Tu captura se guarda sola mientras trabajas: si la página se reinicia, vuelve a abrir la misma dirección '
                '(termina en ?p=…) y se recupera. Para un respaldo seguro usa «Guardar proyecto (.json)» en Resultados.')
     st.divider()
-    st.caption('Flujo: 1 · Estructura → 2 · Sismo y norma → 3 · Resultados. Las herramientas (calculadora de EI y '
-               'dimensionado) están en la pestaña 4.')
+    st.caption('Examen 2 (análisis sísmico): 1 · Estructura → 2 · Sismo y norma → 3 · Resultados; las herramientas (calculadora '
+               'de EI, dimensionado y masas desde los modos) están en 4.')
+    st.caption('Examen 3 (concreto reforzado, mampostería y viento): la viga continua es el flujo completo del examen; el pórtico '
+               'usa las fuerzas sísmicas del examen 2.')
 
-T_est, T_sismo, T_res, T_herr, T_p3, T_p6 = st.tabs(['1 · Estructura', '2 · Sismo y norma', '3 · Resultados', '4 · Herramientas',
-                                                     '5 · Tercer parcial', '6 · Diagramas'])
+E2, E3 = st.tabs(['Examen 2 · Análisis sísmico', 'Examen 3 · Concreto reforzado, mampostería y viento'])
+with E2:
+    T_est, T_sismo, T_res, T_herr = st.tabs(['1 · Estructura', '2 · Sismo y norma', '3 · Resultados', '4 · Herramientas'])
+with E3:
+    T_viga, T_port, T_ptos, T_secc, T_mamp, T_vien = st.tabs(['Viga continua', 'Pórtico', 'Viga por puntos (Mu dados)',
+                                                              'Sección: flexión y cortante', 'Mampostería', 'Viento'])
 
 # ------------------------------------------------------------------ 1 · estructura
 _capt_ahora = st.session_state['captura']
@@ -1070,8 +1077,16 @@ with T_herr:
             with st.expander('Procedimiento paso a paso', expanded=True):
                 mostrar_bloques(inv.bloques(r_inv))
 
-with T_p3:
-    ui_parcial3.mostrar()
-
-with T_p6:
+# ------------------------------------------------------------------ examen 3
+with T_viga:
+    ui_viga.mostrar()
+with T_port:
     ui_porticos.mostrar(res, st.session_state.get('crujias', ''), modelo, datos)
+with T_ptos:
+    ui_parcial3.mostrar_viga_puntos()
+with T_secc:
+    ui_parcial3.mostrar_seccion()
+with T_mamp:
+    ui_parcial3.mostrar_mamposteria()
+with T_vien:
+    ui_parcial3.mostrar_viento()
