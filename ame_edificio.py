@@ -1,4 +1,6 @@
 """Bajada de cargas de un edificio de varios niveles con una planta (cuadrícula) distinta por nivel."""
+import numpy as np
+
 import ame_bajada as bj
 import ame_planta as pl
 
@@ -60,3 +62,112 @@ def cargas_tramos(mask, dx, dy, tipo, pp_viga, grupo='B'):
         filas.append(dict(tramo=pl.nombre_tramo(t, L), L=t['L'], A=t['A'], CM=cm, CV=cv, wu=fcm * cm + fcv * cv,
                           wacc=1.1 * (cma + cva), tipo=t['tipo'], i=t['i'], j=t['j']))
     return filas
+
+
+def cargas_eje(niveles, masks, dx, dy, tipos, pp_viga, fila):
+    """Pórtico plano del eje de letra `fila` (0 = A, 1 = B…): claros y cargas por tramo (t/m) de cada piso, de abajo hacia arriba.
+    CM incluye el peso propio de la viga; CV = CVmáx de gravedad; CVacc = CV accidental. Exige que el eje tenga vigas continuas de
+    extremo a extremo y los mismos claros en todos los niveles."""
+    spans_ref, cargas, alturas, nombres = None, dict(CM=[], CV=[], CVacc=[]), [], []
+    letra = pl.letras(len(dy) + 1)[fila]
+    for r in range(len(niveles) - 1, -1, -1):                      # de abajo hacia arriba
+        n, m = niveles[r], masks[r]
+        tr = sorted((t for t in pl.tramos_viga(m, dx, dy) if t['tipo'] == 'x' and t['j'] == fila), key=lambda t: t['i'])
+        if not tr:
+            raise ValueError(f"El eje {letra} no tiene vigas en el nivel {n['nombre']}.")
+        idx = [t['i'] for t in tr]
+        if idx != list(range(idx[0], idx[0] + len(idx))):
+            raise ValueError(f"En el nivel {n['nombre']} las vigas del eje {letra} no son continuas.")
+        spans = [dx[i] for i in idx]
+        if spans_ref is None:
+            spans_ref = spans
+        elif spans != spans_ref:
+            raise ValueError('Los niveles tienen claros distintos en ese eje: este análisis exige el mismo eje en todos los niveles.')
+        tp = tipos[n['tipo']]
+        cm, cv, cva = [], [], []
+        for t in tr:
+            k = t['A'] / t['L']
+            cm.append((tp['CG'][0] * k + pp_viga) / 1000)
+            cv.append(tp['CG'][1] * k / 1000)
+            cva.append(tp['CA'][1] * k / 1000)
+        cargas['CM'].append(cm)
+        cargas['CV'].append(cv)
+        cargas['CVacc'].append(cva)
+        alturas.append(n['h'])
+        nombres.append(n['nombre'])
+    return dict(spans=spans_ref, cargas=cargas, alturas=alturas, nombres=nombres)
+
+
+def fuerzas_triangulares(pesos_kg, alturas_acum, coef):
+    """Reparto estático triangular de un cortante basal V = coef·ΣW (t): F_i = V·W_i·h_i/Σ(W·h). Entradas de abajo hacia arriba.
+    Solo es un valor de partida; las fuerzas del examen salen del modal espectral."""
+    W = [w / 1000 for w in pesos_kg]
+    V = coef * sum(W)
+    den = sum(w * h for w, h in zip(W, alturas_acum))
+    return [V * w * h / den for w, h in zip(W, alturas_acum)]
+
+
+def figura_elevacion(niveles, masks, dx, dy, eje, resaltar=None, titulo=''):
+    """Vista en elevación (corte por un eje) como en los apuntes: niveles con su nombre a la izquierda, altura de cada entrepiso, columnas
+    y vigas del eje, apoyos en la base y E1, E2… a la derecha. eje = ('X', j) corta por el eje de letra j; ('Y', i) por el eje de número i.
+    resaltar = (j, i) de una columna para marcarla."""
+    import matplotlib
+    matplotlib.use('Agg')
+    import matplotlib.pyplot as plt
+    n = len(niveles)
+    ex = [pl.nodos_existentes(m) for m in masks]                # de arriba hacia abajo
+    sentido, idx = eje
+    if sentido == 'X':
+        pos = np.concatenate([[0], np.cumsum(dx)])
+        nodo = lambda r, k: ex[r][idx, k]
+        tramos = lambda r: {t['i'] for t in pl.tramos_viga(masks[r], dx, dy) if t['tipo'] == 'x' and t['j'] == idx}
+        marcas = [str(k + 1) for k in range(len(pos))]
+        claros = dx
+        def es_sel(k):
+            return resaltar is not None and resaltar == (idx, k)
+    else:
+        pos = np.concatenate([[0], np.cumsum(dy)])
+        nodo = lambda r, k: ex[r][k, idx]
+        tramos = lambda r: {t['j'] for t in pl.tramos_viga(masks[r], dx, dy) if t['tipo'] == 'y' and t['i'] == idx}
+        marcas = pl.letras(len(pos))
+        claros = dy
+        def es_sel(k):
+            return resaltar is not None and resaltar == (k, idx)
+    hs = [niveles[r]['h'] for r in range(n - 1, -1, -1)]          # alturas de abajo hacia arriba (entrepiso debajo de cada nivel)
+    zs = np.concatenate([[0], np.cumsum(hs)])
+    fig, ax = plt.subplots(figsize=(max(7, min(15, pos[-1] * 0.55 + 4)), max(4.5, min(11, zs[-1] * 0.5 + 2))))
+    for k in range(1, n + 1):                                   # k = nivel de abajo hacia arriba; r = índice de arriba hacia abajo
+        r = n - k
+        for i in tramos(r):
+            ax.plot([pos[i], pos[i + 1]], [zs[k]] * 2, color='#1d3557', lw=4, solid_capstyle='butt', zorder=3)
+        for c in range(len(pos)):
+            arriba_ok = nodo(r, c)
+            abajo_ok = k == 1 or nodo(r + 1, c)
+            if arriba_ok and abajo_ok:
+                ax.plot([pos[c]] * 2, [zs[k - 1], zs[k]], color='#e76f51' if es_sel(c) else '#1d3557', lw=5 if es_sel(c) else 3,
+                        solid_capstyle='butt', zorder=4 if es_sel(c) else 2)
+    for c in range(len(pos)):                                   # apoyos empotrados
+        if nodo(n - 1, c):
+            ax.plot([pos[c] - .5, pos[c] + .5], [0, 0], color='#222', lw=2)
+            for x in np.arange(pos[c] - .5, pos[c] + .5, .2):
+                ax.plot([x, x - .18], [0, -.35], color='#222', lw=1)
+    for k in range(0, n + 1):
+        nombre = 'PB' if k == 0 else niveles[n - k]['nombre'] + (' (Azotea)' if k == n else '')
+        ax.text(pos[0] - 1.1, zs[k], nombre, ha='right', va='center', fontsize=11, fontweight='bold', color='#1d3557')
+        if k > 0:
+            ax.text(pos[0] - 2.6 - 1.4 * (len(nombre) > 10), (zs[k - 1] + zs[k]) / 2, f'{hs[k - 1]:g}', ha='right', va='center', fontsize=11)
+            ax.annotate('', xy=(pos[0] - 2.3, zs[k]), xytext=(pos[0] - 2.3, zs[k - 1]),
+                        arrowprops=dict(arrowstyle='<->', color='#888', lw=1))
+            ax.text(pos[-1] + 1.2, (zs[k - 1] + zs[k]) / 2, f'E{k}', ha='left', va='center', fontsize=11, fontweight='bold')
+    for c, m in enumerate(marcas):
+        ax.text(pos[c], zs[-1] + .9, m, ha='center', va='bottom', fontsize=12, fontweight='bold',
+                bbox=dict(boxstyle='circle', fc='white', ec='#1d3557'))
+    for i, c in enumerate(claros):
+        ax.text((pos[i] + pos[i + 1]) / 2, -.9, f'{c:g}', ha='center', va='top', fontsize=10)
+    if titulo:
+        ax.set_title(titulo, fontsize=13, fontweight='bold', pad=22)
+    ax.set_xlim(pos[0] - 6.5, pos[-1] + 3)
+    ax.set_ylim(-2, zs[-1] + 2.6)
+    ax.set_aspect('equal')
+    ax.axis('off')
+    return fig

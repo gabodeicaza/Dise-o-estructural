@@ -6,6 +6,7 @@ import streamlit as st
 import ame_bajada as bj
 import ame_edificio as ed
 import ame_planta as pl
+import ame_porticos as pt
 
 COL_T = ['Tipo de piso', 'CM CG', 'CV máx CG', 'CM CA', 'CV acc CA', 'CM CS', 'CV med CS']
 COL_N = ['Nivel', 'Tipo de piso', 'h entrepiso debajo (m)']
@@ -96,7 +97,7 @@ def vista_columna(filas, tipos, caso, pp_v, pp_c, grupo, fc, clave):
     plt.close('all')
 
 
-def mostrar():
+def mostrar(res_sismo=None):
     ss = st.session_state
     st.caption('Edificio de varios niveles: cada nivel tiene su propia cuadrícula (puedes editarla o copiarla de otro nivel). La app baja '
                'las cargas de todas las columnas, da los pesos por nivel (para el análisis sísmico) y la carga repartida de cada viga.')
@@ -213,7 +214,22 @@ def mostrar():
         st.metric('Losa del nivel', f"{res['area']:g} m²")
         st.caption(f"{res['columnas']} columnas y {res['vigas']:g} m de viga en {sel_niv}.")
 
-    tab_a, tab_b, tab_c, tab_d = st.tabs(['Bajada de la columna', 'Todas las columnas', 'Pesos por nivel', 'Cargas de las vigas'])
+    st.markdown('##### Vista en elevación (corte por un eje)')
+    cortes = [f'Eje {x}' for x in L] + [f'Eje {k + 1}' for k in range(nx + 1)]
+    corte = st.selectbox('Corte por el', cortes, index=min(2, len(L) - 1), key='ed_corte')
+    if corte.split()[1].isalpha():
+        eje_c = ('X', L.index(corte.split()[1]))
+    else:
+        eje_c = ('Y', int(corte.split()[1]) - 1)
+    import matplotlib.pyplot as plt
+    st.pyplot(ed.figura_elevacion(niveles, masks, dx, dy, eje_c, (cj, ci), f'{corte} · {len(niveles)} niveles'), width='stretch')
+    plt.close('all')
+    st.caption('Niveles a la izquierda con la altura de cada entrepiso, E1, E2… a la derecha (E1 = el de abajo), columnas y vigas del eje, y '
+               'apoyos empotrados. En naranja, la columna elegida para la bajada cuando está en este eje. Si una columna o viga no '
+               'aparece en un nivel es porque esa casilla de la planta está «Vacío».')
+
+    tab_a, tab_b, tab_c, tab_d, tab_e = st.tabs(['Bajada de la columna', 'Todas las columnas', 'Pesos por nivel',
+                                                 'Cargas de las vigas', 'Análisis de un eje (vigas)'])
     with tab_a:
         filas = todos.get((cj, ci))
         if not filas:
@@ -275,3 +291,79 @@ def mostrar():
         st.dataframe(df.style.format({c: '{:,.3f}' for c in df.columns[2:]}), hide_index=True, width='stretch')
         st.caption(f'Nivel {nombre_lvl}. CM incluye el peso propio de la viga. Con estas cargas y los claros captura la viga en «Examen 3 → Viga continua» '
                    '(la acción del sismo se suma con el pórtico).')
+
+
+    with tab_e:
+        analisis_eje(niveles, masks, dx, dy, tipos, pp_v, pp_c, vb, vh, cb, ch, fc, grupo, res_sismo, L)
+
+
+def analisis_eje(niveles, masks, dx, dy, tipos, pp_v, pp_c, vb, vh, cb, ch, fc, grupo, res_sismo, L):
+    """Pórtico plano de un eje del edificio (p. ej. el eje C): análisis con las cargas de la bajada y el sismo, y diseño de sus vigas."""
+    import ui_porticos as up
+    st.caption('Arma el pórtico plano del eje con las cargas por tramo que salen de la planta, le aplica el sismo y diseña las vigas '
+               'como en la pestaña «Examen 3 → Pórtico»: envolvente, diagramas de M y V, armado y alzado de la viga continua del nivel.')
+    c1, c2, c3 = st.columns(3)
+    eje = c1.selectbox('Eje a analizar (letra)', L, index=min(2, len(L) - 1), key='ed_eje_an')
+    fila = L.index(eje)
+    n = len(niveles)
+    base = c2.radio('Base de las columnas', ['Empotrada', 'Articulada'], horizontal=True, key='ed_eje_base')
+    fi = c3.number_input('Factor de I en vigas y columnas (agrietamiento)', 0.1, 1.0, 1.0, 0.05, key='ed_eje_fi')
+    try:
+        d = ed.cargas_eje(niveles, masks, dx, dy, tipos, pp_v, fila)
+    except ValueError as e:
+        st.error(str(e))
+        return
+    st.markdown('**Fuerzas sísmicas del eje**')
+    c1, c2 = st.columns(2)
+    origen = c1.radio('Origen', ['Capturar (t)', 'Traer del análisis del Examen 2'], key='ed_eje_orig',
+                      help='Las fuerzas del examen salen del modal espectral. Si modelaste todo el edificio en el Examen 2, multiplica por la '
+                           'fracción que toma este eje.')
+    pesos = ed.pesos_por_nivel(niveles, masks, dx, dy, tipos, pp_v, pp_c)[::-1]             # de abajo hacia arriba
+    zs = np.cumsum(d['alturas'])
+    if origen.startswith('Traer'):
+        fuente = c2.selectbox('Fuerzas tomadas de', list(up.FUENTES_F), key='ed_eje_fuente')
+        frac = c2.number_input('Fracción que toma este eje', 0.01, 1.0, 1.0, 0.01, format='%.3f', key='ed_eje_frac')
+        if res_sismo is None or up.FUENTES_F[fuente] not in res_sismo:
+            st.warning('Todavía no hay análisis sísmico en el Examen 2 (completa «1 · Estructura» y «2 · Sismo y norma»).')
+            return
+        Fv = np.asarray(res_sismo[up.FUENTES_F[fuente]]['F'], float)[::-1] * frac
+        if len(Fv) != n:
+            st.warning(f'El análisis del Examen 2 tiene {len(Fv)} niveles y este edificio {n}.')
+            return
+        F = [float(x) for x in Fv]
+    else:
+        coef = c2.number_input('Cortante basal de partida V/W (solo reparte la tabla; cámbiala por tus fuerzas)', 0.0, 1.0, 0.10, 0.01,
+                               key='ed_eje_coef')
+        frac = c1.number_input('Fracción que toma este eje del sismo en X', 0.01, 1.0, 0.333, 0.001, format='%.3f', key='ed_eje_frac2',
+                               help='Sin excentricidades y con ejes iguales, cada eje toma 1/(número de ejes en la dirección): 1/3 para B, C y D.')
+        k_ver = f"{n}_{coef}_{frac}_{sum(p['W'] for p in pesos):.0f}"
+        F0 = [x * frac for x in ed.fuerzas_triangulares([p['W'] for p in pesos], list(zs), coef)]
+        df0 = pd.DataFrame({'Nivel': d['nombres'], 'F sismo del eje (t)': [f'{x:.2f}' for x in F0]})
+        st.caption('De abajo hacia arriba. Valores de partida: reparto triangular de V = c·W. Escribe aquí las fuerzas de tu modal espectral '
+                   '(por eje: si el edificio se reparte entre 3 ejes iguales, cada uno toma 1/3 del total).')
+        dfe = st.data_editor(df0, hide_index=True, width='stretch', disabled=['Nivel'], key=f'ed_eje_F_{k_ver}',
+                             column_config={'F sismo del eje (t)': st.column_config.TextColumn('F sismo del eje (t)')})
+        try:
+            F = [float(str(x).replace(',', '.')) for x in dfe['F sismo del eje (t)']]
+        except ValueError:
+            st.error('Escribe las fuerzas como números.')
+            return
+    st.markdown('**Combinaciones** (apuntes p. 2): gravitacional, y CM + CVacc ± sismo con FC = 1.1')
+    fcm, fcv = bj.FC_GRUPO[grupo]
+    combos = {'Gravedad': (fcm, fcv, 0.0, 0.0),
+              'CM+CVacc + 100%SX (+30%SY)': (1.1, 0.0, 1.1, 1.1), 'CM+CVacc − 100%SX': (1.1, 0.0, 1.1, -1.1),
+              'CM+CVacc − 30%SX (+100%SY)': (1.1, 0.0, 1.1, -0.33), 'CM+CVacc + 30%SX': (1.1, 0.0, 1.1, 0.33)}
+    st.caption('Las vigas de este eje trabajan en el plano del pórtico: el sismo en la otra dirección (SY) casi no les produce flexión, así que se '
+               'toma solo la componente SX de cada combinación (100 % o 30 %). Con ± 100 % SX la envolvente ya cubre las demás.')
+    try:
+        res = pt.resolver(d['spans'], d['alturas'], [(cb, ch)] * n, [(vb, vh)] * n, 14000 * np.sqrt(fc), d['cargas'], F, base, fi, fi, 0.0)
+    except (np.linalg.LinAlgError, ValueError) as e:
+        st.error(f'No se pudo resolver el pórtico: {e}')
+        return
+    st.caption('Numeración de pisos en las pestañas de abajo: ' + ', '.join(f'piso {k + 1} = {nm}' for k, nm in enumerate(d['nombres'])) + '.')
+    c1, c2, c3 = st.columns(3)
+    est = c1.selectbox('Estribo', ['#3', '#4'], index=1, key='ed_eje_est')
+    rec = c2.number_input('Recubrimiento libre (cm)', 1.5, 8.0, 4.0, 0.5, key='ed_eje_rec')
+    agr = c3.checkbox('Permitir barras de 2 en 2 en un lecho', True, key='ed_eje_agr')
+    up._resultados(res, res['geo'], F, combos, {'Gravedad': (fcm, fcv, 0.0, 0.0)}, 'CM+CVacc + 100%SX (+30%SY)', 'CM+CVacc − 100%SX', fc,
+                   4200.0, est, rec, agr, True, pref='ed_eje')

@@ -114,13 +114,13 @@ def _planta():
     return mask
 
 
-def mostrar():
+def mostrar(res_sismo=None):
     st.caption('Bajada de cargas de una columna, de arriba hacia abajo, como en los apuntes: en cada nivel se suma la losa del '
                'área tributaria, el peso propio de las vigas y el de la columna. Se lleva CM y CV por separado para aplicar '
                'después el factor de carga que corresponde (Grupo A: 1.5 / 1.7, Grupo B: 1.3 / 1.5, accidental 1.1, servicio 1.0).')
     if st.radio('¿Qué vas a bajar?', ['Edificio de varios niveles (planta por nivel)', 'Una columna (captura manual o planta única)'],
                 horizontal=True, key='bj_que').startswith('Edificio'):
-        ui_edificio.mostrar()
+        ui_edificio.mostrar(res_sismo)
         return
     if 'bj_tipos' not in st.session_state:
         _cargar(list(EJEMPLOS)[0])

@@ -263,8 +263,6 @@ with st.sidebar:
                'usa las fuerzas sísmicas del examen 2.')
 
 E1, E2, E3 = st.tabs(['Examen 1 · Bajada de cargas', 'Examen 2 · Análisis sísmico', 'Examen 3 · Concreto reforzado, mampostería y viento'])
-with E1:
-    ui_bajada.mostrar()
 with E2:
     T_est, T_sismo, T_res, T_herr = st.tabs(['1 · Estructura', '2 · Sismo y norma', '3 · Resultados', '4 · Herramientas'])
 with E3:
@@ -1081,6 +1079,8 @@ with T_herr:
                 mostrar_bloques(inv.bloques(r_inv))
 
 # ------------------------------------------------------------------ examen 3
+with E1:
+    ui_bajada.mostrar(res)
 with T_viga:
     ui_viga.mostrar()
 with T_port:

@@ -216,9 +216,15 @@ def mostrar(res_sismo=None, crujias_txt='', modelo=None, datos=None):
             return
         geo = res['geo']
 
-    ne = res['ne']
     todas = pt.combinaciones(grupo, estab)
     combos = pt.combinaciones(grupo, estab, gravedad=usa_grav)
+    return _resultados(res, geo, F, combos, todas, 'Sismo ida (+)', 'Sismo regreso (−)', fc, fy, est_var, rec, agrupar, paño)
+
+
+def _resultados(res, geo, F, combos, todas, nom_ida, nom_reg, fc, fy, est_var, rec, agrupar, paño, pref='p6'):
+    """Diagramas, envolvente, diseño por viga y armado del nivel de un pórtico ya resuelto. Se usa en la pestaña Pórtico y en el análisis de un eje del edificio (pref distingue las claves de los widgets)."""
+    K = lambda s: f'{pref}_{s}'
+    ne = res['ne']
     env, mats = pt.envolvente(res, combos)
     ux, dist = pt.desplazamientos(res)
     with st.expander('Combinaciones de carga usadas'):
@@ -228,21 +234,21 @@ def mostrar(res_sismo=None, crujias_txt='', modelo=None, datos=None):
 
     st.markdown('##### Tamaño y etiquetas de los renders')
     c1, c2, c3, c4 = st.columns(4)
-    etiquetas = c1.selectbox('Etiquetas', ['extremos', 'todas', 'ninguna'], key='p6_etq',
+    etiquetas = c1.selectbox('Etiquetas', ['extremos', 'todas', 'ninguna'], key=K('etq'),
                              help='«extremos»: valores en los apoyos y el máximo de cada viga; «todas»: más valores; «ninguna»: solo la forma.')
-    piso_sel = c2.selectbox('Mostrar', ['Todo el pórtico'] + [f'Solo el piso {k}' for k in range(1, res['n'] + 1)], key='p6_piso')
+    piso_sel = c2.selectbox('Mostrar', ['Todo el pórtico'] + [f'Solo el piso {k}' for k in range(1, res['n'] + 1)], key=K('piso'))
     piso = None if piso_sel.startswith('Todo') else int(piso_sel.split()[-1])
-    ancho = c3.slider('Ancho de la figura (pulgadas)', 8, 30, int(round(pt._tam(res)[0])), key='p6_ancho',
+    ancho = c3.slider('Ancho de la figura (pulgadas)', 8, 30, int(round(pt._tam(res)[0])), key=K('ancho'),
                       help='10 pulgadas se lee bien en la página. Más ancho da más espacio entre etiquetas pero la letra se ve más chica '
                            '(usa la pantalla completa de la imagen).')
-    alto = c4.slider('Alto de la figura (pulgadas)', 4, 30, int(round(pt._tam(res)[1])), key='p6_alto')
+    alto = c4.slider('Alto de la figura (pulgadas)', 4, 30, int(round(pt._tam(res)[1])), key=K('alto'))
     c1, c2, c3 = st.columns(3)
     elementos = {'Solo vigas': 'vigas', 'Vigas y columnas': 'todos', 'Solo columnas': 'columnas'}[
-        c1.selectbox('Diagramas de', ['Solo vigas', 'Vigas y columnas', 'Solo columnas'], key='p6_elem',
+        c1.selectbox('Diagramas de', ['Solo vigas', 'Vigas y columnas', 'Solo columnas'], key=K('elem'),
                      help='Con «Solo vigas» los diagramas no se enciman en los nudos; es lo que se diseña en el examen 3.')]
-    cols_etq = c2.checkbox('Mostrar valores en las columnas', False, key='p6_etq_col',
+    cols_etq = c2.checkbox('Mostrar valores en las columnas', False, key=K('etq_col'),
                            help='Apagado: solo se rotulan las vigas, que es lo que se diseña. Enciéndelo para ver también las columnas.')
-    fuente = c3.slider('Tamaño de las etiquetas', 8, 16, 11, key='p6_fuente_etq')
+    fuente = c3.slider('Tamaño de las etiquetas', 8, 16, 11, key=K('fuente_etq'))
     st.caption('Tip: pasa el cursor sobre la imagen y usa el icono de pantalla completa (arriba a la derecha) para ver todo el pórtico '
                'a todo el ancho; con «Solo el piso N» el diagrama sale aún más grande.')
     kw = dict(etiquetas=etiquetas, piso=piso, ancho=ancho, alto=alto, columnas=cols_etq, fuente=fuente, elementos=elementos)
@@ -258,13 +264,13 @@ def mostrar(res_sismo=None, crujias_txt='', modelo=None, datos=None):
         st.caption('Distorsiones del sismo de ida sin factor de carga: ' + ' · '.join(
             f'N{i + 1}: {d:.5f}' for i, d in enumerate(dist)) + '. Revisa con tu análisis sísmico los límites γ.')
     with tabs[1]:
-        _fig(pt.figura_diagrama(res, pt.combinar(res, todas['Gravedad']), selector('p6_t1'), f'Gravedad {todas["Gravedad"][:2]}', **kw))
+        _fig(pt.figura_diagrama(res, pt.combinar(res, todas['Gravedad']), selector(K('t1')), f'Gravedad {todas["Gravedad"][:2]}', **kw))
     with tabs[2]:
-        _fig(pt.figura_diagrama(res, mats['Sismo ida (+)'], selector('p6_t2'), 'Sismo de ida: 1.1(CM + CVacc) + 1.1 S', **kw))
+        _fig(pt.figura_diagrama(res, mats[nom_ida], selector(K('t2')), 'Sismo de ida: 1.1(CM + CVacc) + 1.1 S', **kw))
     with tabs[3]:
-        _fig(pt.figura_diagrama(res, mats['Sismo regreso (−)'], selector('p6_t3'), 'Sismo de regreso: 1.1(CM + CVacc) − 1.1 S', **kw))
+        _fig(pt.figura_diagrama(res, mats[nom_reg], selector(K('t3')), 'Sismo de regreso: 1.1(CM + CVacc) − 1.1 S', **kw))
     with tabs[4]:
-        tp = selector('p6_t4')
+        tp = selector(K('t4'))
         mx = {k: dict(x=v['x'], p=v['p'], M=v['Mmax'], V=v['Vmax']) for k, v in env.items()}
         mn = {k: dict(x=v['x'], p=v['p'], M=v['Mmin'], V=v['Vmin']) for k, v in env.items()}
         _fig(pt.figura_diagrama(res, mx, tp, 'Envolvente (máximo + mínimo de todas las combinaciones)', extra=mn, **kw))
@@ -291,7 +297,7 @@ def mostrar(res_sismo=None, crujias_txt='', modelo=None, datos=None):
             sug, txt = pt.varilla_sugerida(h)
             filas.append(dict(Viga=nm, b=env[k]['b'], h=h, sugerida=txt, superior=sug, inferior=sug))
         base_df = pd.DataFrame(filas)
-        key_ed = 'p6_vars_' + str(hash(tuple(nombres) + tuple(base_df['h'])))
+        key_ed = K('vars_') + str(hash(tuple(nombres) + tuple(base_df['h'])))
         ed = st.data_editor(base_df, hide_index=True, width='stretch', key=key_ed, disabled=['Viga', 'b', 'h', 'sugerida'],
                             column_config={'superior': st.column_config.SelectboxColumn('Varilla superior', options=VARS, required=True),
                                            'inferior': st.column_config.SelectboxColumn('Varilla inferior', options=VARS, required=True),
@@ -308,7 +314,7 @@ def mostrar(res_sismo=None, crujias_txt='', modelo=None, datos=None):
                        f'({min(c["b"] for c in ch):g} cm).')
 
     with tabs[6]:
-        nombre = st.selectbox('Viga', nombres, key='p6_viga')
+        nombre = st.selectbox('Viga', nombres, key=K('viga'))
         d = dis[claves[nombres.index(nombre)]]
         (st.success if d['ok'] else st.error)(
             f'Viga {d["b"]:g}×{d["h"]:g} cm, L = {d["L"]:g} m: ' + ('el acero cabe y cumple.' if d['ok'] else
@@ -340,13 +346,13 @@ def mostrar(res_sismo=None, crujias_txt='', modelo=None, datos=None):
     with tabs[7]:
         niveles = sorted({k[1] for k in claves})
         c1, c2, c3 = st.columns(3)
-        nivel = c1.selectbox('Nivel', niveles, key='p6_nivel')
+        nivel = c1.selectbox('Nivel', niveles, key=K('nivel'))
         h_n = next(env[k]['h'] for k in claves if k[1] == nivel)
         sug, txt_sug = pt.varilla_sugerida(h_n)
-        vs = c2.selectbox('Varilla superior', VARS, index=VARS.index(sug), key=f'p6_nvs_{nivel}_{sug}')
-        vi = c3.selectbox('Varilla inferior', VARS, index=VARS.index(sug), key=f'p6_nvi_{nivel}_{sug}')
+        vs = c2.selectbox('Varilla superior', VARS, index=VARS.index(sug), key=K(f'nvs_{nivel}_{sug}'))
+        vi = c3.selectbox('Varilla inferior', VARS, index=VARS.index(sug), key=K(f'nvi_{nivel}_{sug}'))
         st.caption(txt_sug + ' Los renders y tablas de esta pestaña usan estas varillas para toda la viga del nivel.')
-        apoyo_unico = st.checkbox('Un solo momento por apoyo: el mayor de ambos lados (como en clase)', True, key='p6_apoyo',
+        apoyo_unico = st.checkbox('Un solo momento por apoyo: el mayor de ambos lados (como en clase)', True, key=K('apoyo'),
                                   help='En un apoyo interior el diagrama tiene un valor a cada lado de la columna; en clase se dibujó y se '
                                        'diseñó con el mayor, con el mismo acero a ambos lados.')
         niv = pt.armado_nivel(env, res, nivel, fc, fy, vs, vi, est_var, rec, agrupar, paño, apoyo_unico)
@@ -390,7 +396,7 @@ def mostrar(res_sismo=None, crujias_txt='', modelo=None, datos=None):
             st.caption('La longitud de desarrollo del anclaje se toma como d (regla de clase). Verifica con tu profesor si además '
                        'pide la Ld de la NTC. Los puntos a), b)… son caras de apoyo y centros de cada crujía.')
     with tabs[8]:
-        nombre2 = st.selectbox('Viga', nombres, key='p6_viga2')
+        nombre2 = st.selectbox('Viga', nombres, key=K('viga2'))
         d2 = dis[claves[nombres.index(nombre2)]]
         _fig(pt.figura_secciones(d2))
         st.caption('Se revisa la separación libre entre barras (≥ máx(Ø, 2.5 cm)) con el ancho útil descontando recubrimiento y '
@@ -418,4 +424,4 @@ def mostrar(res_sismo=None, crujias_txt='', modelo=None, datos=None):
         with pd.ExcelWriter(bio, engine='openpyxl') as w:
             tabla.to_excel(w, index=False, sheet_name='Armado de vigas')
         st.download_button('Descargar resumen de armado (.xlsx)', bio.getvalue(), 'armado_vigas.xlsx',
-                           'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
+                           'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', key=K('dl_resumen'))

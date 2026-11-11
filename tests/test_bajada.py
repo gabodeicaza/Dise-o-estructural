@@ -107,3 +107,39 @@ def test_vista_columna_y_rapido():
     rap = bj.bajada_rapida([dict(nombre=x['nombre'], At=x['At'], Lv=x['Lv'], hc=x['hc']) for x in f], 1.3, True)
     assert rap[-1]['P'] == pytest.approx(3 * 11.25 * 1300)
     assert bj.figura_columna([('P3', 'P3 = a', 1.0), ('P2', 'P2 = b', 2.0), ('P0', 'P0 = c', 3.0)], 't', 'Pu = 1') is not None
+
+
+def test_eje_C_del_pizarron_equilibrio_y_cargas():
+    import numpy as np
+
+    import ame_edificio as ed
+    import ame_planta as pl
+    import ame_porticos as pt
+    dx, dy = [8, 6, 8, 8, 8, 6], [4, 6, 6]
+    m = np.full((3, 6), pl.LOSA); m[0, :] = pl.VACIO; m[0, :3] = pl.VOL
+    tipos = {'O': dict(CG=(300, 250), CA=(300, 180), CS=(300, 100))}
+    niv = [dict(nombre=f'N{k}', tipo='O', h=3.8) for k in range(8, 0, -1)]
+    d = ed.cargas_eje(niv, [m] * 8, dx, dy, tipos, bj.pp_lineal(40, 80), 2)
+    assert d['spans'] == dx and len(d['alturas']) == 8
+    # tramo de 8 m entre dos tableros de 6 m: trapecios (2·8−6)·6/4 = 15 m² por lado → 30 m²
+    assert d['cargas']['CM'][0][0] == pytest.approx((300 * 30 / 8 + 768) / 1000)
+    F = ed.fuerzas_triangulares([1000.0] * 8, [3.8 * k for k in range(1, 9)], 0.1)
+    assert sum(F) == pytest.approx(0.1 * 8)
+    res = pt.resolver(d['spans'], d['alturas'], [(70, 70)] * 8, [(40, 80)] * 8, 14000 * 250 ** .5, d['cargas'], F)
+    env, _ = pt.envolvente(res, {'g': (1.3, 1.5, 0, 0), '+': (1.1, 0, 1.1, 1.1), '-': (1.1, 0, 1.1, -1.1)})
+    assert len([k for k in env if k[0] == 'b' and k[1] == 2]) == 6
+    with pytest.raises(ValueError):
+        ed.cargas_eje(niv, [m] * 8, dx, dy, tipos, 0, 0)         # el eje A solo tiene voladizo: sin vigas
+
+
+def test_elevacion_se_dibuja_por_eje_y_respeta_columnas_ausentes():
+    import numpy as np
+
+    import ame_edificio as ed
+    import ame_planta as pl
+    dx, dy = [5, 4], [3, 2]
+    m = np.full((2, 2), pl.LOSA)
+    m_arriba = m.copy(); m_arriba[:, 1] = pl.VACIO
+    niv = [dict(nombre='N2', tipo='O', h=3), dict(nombre='N1', tipo='O', h=3)]
+    for eje in (('X', 1), ('Y', 0), ('Y', 2)):
+        assert ed.figura_elevacion(niv, [m_arriba, m], dx, dy, eje, (1, 1), 't') is not None
