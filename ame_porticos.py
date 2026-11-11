@@ -497,24 +497,38 @@ def _plt():
     return plt
 
 
+ANCHO_FIG = 10.0          # pulgadas: en la página la figura se ve a ~940 px, así el texto de 11 pt queda de ~14 px
+
+
 def _tam(res, ancho=None, alto=None):
+    """Tamaño de la figura de un pórtico: 10 pulgadas de ancho (lo que se ve legible en la página) y el alto que pide la
+    proporción del marco, entre 5 y 12 pulgadas."""
     xs, zs = res['xs'], res['zs']
-    w = ancho or float(np.clip(1.0 * (xs[-1] - xs[0]) + 8, 12, 24))
-    h = alto or float(np.clip(1.6 * (zs[-1]) + 3.5, 6, 16))
+    w = ancho or ANCHO_FIG
+    h = alto or float(np.clip(w * (zs[-1] + 1.8) / ((xs[-1] - xs[0]) + 3.5), 5, 12))
     return w, h
 
 
-def figura_diagrama(res, diag, tipo='M', titulo='', unidad=None, extra=None, escala=0.4, etiquetas='extremos', piso=None,
-                    ancho=None, alto=None, columnas=True, fuente=9, umbral=0.12):
+def _ejes_limpios(ax, fuente=11):
+    ax.tick_params(labelsize=fuente - 1)
+    for s_ in ('top', 'right'):
+        ax.spines[s_].set_visible(False)
+
+
+def figura_diagrama(res, diag, tipo='M', titulo='', unidad=None, extra=None, escala=0.28, etiquetas='extremos', piso=None,
+                    ancho=None, alto=None, columnas=True, fuente=11, umbral=0.12, elementos='todos'):
     """Marco con el diagrama de M o V de todos los elementos (o de un piso). extra: diagrama mínimo para superponer.
     etiquetas: 'todas', 'extremos' (extremos y valor máximo; se omiten los valores menores que umbral·máximo para no amontonar)
-    o 'ninguna'. columnas=False oculta los valores de las columnas; fuente = tamaño de las etiquetas."""
+    o 'ninguna'. columnas=False oculta los valores de las columnas; fuente = tamaño de las etiquetas.
+    elementos: 'todos', 'vigas' o 'columnas' (dibujar solo unos evita que los diagramas se encimen en los nudos)."""
     plt = _plt()
     xs, zs, n, ne = res['xs'], res['zs'], res['n'], res['ne']
     unidad = unidad or ('t·m' if tipo == 'M' else 't')
     cl = ('#F2D027', '#D63B3B') if tipo == 'M' else ('#69B7E8', '#F29A2E')
 
     def visible(clave):
+        if (elementos == 'vigas' and clave[0] != 'b') or (elementos == 'columnas' and clave[0] != 'c'):
+            return False
         if piso is None:
             return True
         return clave[1] == piso or (clave[0] == 'c' and clave[1] == piso + 1)
@@ -532,7 +546,7 @@ def figura_diagrama(res, diag, tipo='M', titulo='', unidad=None, extra=None, esc
     for k in range(1, n + 1):
         if z_lo <= zs[k] <= z_hi:
             ax.plot([xs[0], xs[-1]], [zs[k]] * 2, color='#777', lw=0.8, zorder=1)
-    box = dict(boxstyle='round,pad=0.12', fc='white', ec='none', alpha=0.78)
+    box = dict(boxstyle='round,pad=0.15', fc='white', ec='none', alpha=0.88)
     for idx_d, d in enumerate(todos):
         signo = (1 if idx_d == 0 else -1) if extra else 0         # envolvente: el máximo rotula (+) y el mínimo (−)
         for clave, v in d.items():
@@ -552,11 +566,17 @@ def figura_diagrama(res, diag, tipo='M', titulo='', unidad=None, extra=None, esc
                     if etiquetas == 'todas':
                         ids.update({i: 'center' for i in range(5, len(val) - 5, 5)})
                     ids[im] = 'center'
+                    if extra and etiquetas == 'extremos':
+                        # envolvente: solo los valores de diseño (M−: en los apoyos; M+: al centro; V: en los extremos)
+                        if tipo == 'V' or signo < 0:
+                            ids = {0: 'left', len(val) - 1: 'right'}
+                        else:
+                            ids = {im: 'center'}
                     for i, ha in ids.items():
                         if (etiquetas == 'extremos' and abs(val[i]) < umbral * vmax) or (signo and val[i] * signo < 0):
                             continue
                         ax.annotate(f'{val[i]:.2f}', (px[i], py[i]),
-                                    xytext=(5 if ha == 'left' else (-5 if ha == 'right' else 0), -10 if val[i] >= 0 else 10),
+                                    xytext=(5 if ha == 'left' else (-5 if ha == 'right' else 0), -11 if val[i] >= 0 else 11),
                                     textcoords='offset points', fontsize=fuente, ha=ha, va='center', bbox=box, zorder=6)
             else:
                 e = clave[2]
@@ -571,17 +591,18 @@ def figura_diagrama(res, diag, tipo='M', titulo='', unidad=None, extra=None, esc
                         if (etiquetas == 'extremos' and abs(val[i]) < umbral * vmax) or (signo and val[i] * signo < 0):
                             continue
                         lado = 1 if val[i] >= 0 else -1
-                        ax.annotate(f'{val[i]:.2f}', (px[i], pz[i]), xytext=(10 * lado, dy), textcoords='offset points',
+                        ax.annotate(f'{val[i]:.2f}', (px[i], pz[i]), xytext=(8 * lado, dy), textcoords='offset points',
                                     fontsize=fuente, ha='left' if lado > 0 else 'right', va='center', bbox=box, zorder=6)
     for j in range(ne):
-        ax.plot(xs[j], 0, marker='s', color='#222', ms=7, zorder=7)
+        ax.plot(xs[j], 0, marker='s', color='#222', ms=8, zorder=7)
     ax.set_aspect('equal')
-    ax.set_title(f'{titulo}  [{unidad}]', fontsize=13, color='#0B2545', pad=10)
-    ax.set_xlabel('x (m)')
-    ax.set_ylabel('z (m)')
-    ax.margins(0.07)
-    for s in ('top', 'right'):
-        ax.spines[s].set_visible(False)
+    ax.set_title(f'{titulo}  [{unidad}]', fontsize=fuente + 2, color='#0B2545', pad=10)
+    ax.set_xlabel('x (m)', fontsize=fuente)
+    ax.set_ylabel('z (m)', fontsize=fuente)
+    ax.set_xticks(xs)
+    ax.set_yticks([z for z in zs if z_lo - 1e-9 <= z <= z_hi + 1e-9])
+    ax.margins(0.08)
+    _ejes_limpios(ax, fuente)
     fig.tight_layout()
     return fig
 
@@ -599,34 +620,41 @@ def figura_cargas(res, F_sismo):
                 continue
             top = c.get('hasta', i + 1)
             ax.plot([xs[c['eje'] - 1]] * 2, [zs[i], zs[top]], color='#1D4E89', lw=3.5 if c['h'] >= 40 else 2.5, zorder=2)
-            ax.text(xs[c['eje'] - 1] + 0.12, (zs[i] + zs[top]) / 2, f'{c["b"]:.0f}×{c["h"]:.0f}', fontsize=7.5, color='#13315C',
+            ax.text(xs[c['eje'] - 1] + 0.12, (zs[i] + zs[top]) / 2, f'{c["b"]:.0f}×{c["h"]:.0f}', fontsize=10, color='#13315C',
                     rotation=90, va='center')
         k = i + 1
         tr = _etiquetas(nv, ne)
         for j in range(1, ne):
             if (j - 1) in nv['sin']:
-                ax.text((xs[j - 1] + xs[j]) / 2, zs[k] + 0.1, 'sin losa', ha='center', fontsize=7.5, color='#999', style='italic')
+                ax.text((xs[j - 1] + xs[j]) / 2, zs[k] + 0.1, 'sin losa', ha='center', fontsize=10, color='#999', style='italic')
                 continue
             ax.plot([xs[j - 1], xs[j]], [zs[k]] * 2, color='#1D4E89', lw=3, zorder=2)
             q = [nv['q'][c][tr.index(j)] for c in ('CM', 'CV', 'CVacc')]
-            ax.text((xs[j - 1] + xs[j]) / 2, zs[k] + 0.12, f'CM {q[0]:g} · CV {q[1]:g} · CVacc {q[2]:g}', ha='center', fontsize=7.5,
-                    color='#0B2545')
+            ancho_tr = xs[j] - xs[j - 1]
+            txt = f'CM {q[0]:g} · CV {q[1]:g} · CVacc {q[2]:g}' if ancho_tr >= 3.5 else f'CM {q[0]:g}\nCV {q[1]:g}\nCVa {q[2]:g}'
+            ax.text((xs[j - 1] + xs[j]) / 2, zs[k] + 0.12, txt, ha='center', va='bottom', fontsize=10, color='#0B2545', linespacing=1.1)
         for lado, vol, x0, x1 in (('vi', nv['vi'], xs[0] - nv['vi'], xs[0]), ('vd', nv['vd'], xs[-1], xs[-1] + nv['vd'])):
             if vol > 0 and any(nv['q'][c][tr.index(lado)] for c in ('CM', 'CV', 'CVacc')):
                 ax.plot([x0, x1], [zs[k]] * 2, color='#3E7CB1', lw=3, zorder=2)
-                ax.text((x0 + x1) / 2, zs[k] + 0.12, f'vol. {vol:g} m', ha='center', fontsize=7.5, color='#0B2545')
-        ax.text(xs[-1] + 0.4, zs[k] + 0.35, f'viga {nv["viga"]["b"]:.0f}×{nv["viga"]["h"]:.0f}', ha='left', fontsize=7.5, color='#13315C')
+                ax.text((x0 + x1) / 2, zs[k] + 0.12, f'vol. {vol:g} m', ha='center', fontsize=10, color='#0B2545')
+        x_fin = xs[-1] + max(nv['vd'], 0)
+        ax.text(x_fin + 0.3, zs[k], f'N{k} · z = {zs[k]:g} m\nviga {nv["viga"]["b"]:.0f}×{nv["viga"]["h"]:.0f}', ha='left', va='center',
+                fontsize=10, color='#13315C', linespacing=1.2)
         x_ini = xs[0] - max(nv['vi'], 0)
-        ax.annotate('', xy=(x_ini, zs[k]), xytext=(x_ini - 1.2, zs[k]), arrowprops=dict(arrowstyle='-|>', color='#D63B3B', lw=2))
-        ax.text(x_ini - 1.25, zs[k] + 0.15, f'F{k} = {F_sismo[k - 1]:.2f} t', ha='right', fontsize=8.5, color='#D63B3B')
+        ax.annotate('', xy=(x_ini, zs[k]), xytext=(x_ini - 1.4, zs[k]), arrowprops=dict(arrowstyle='-|>', color='#D63B3B', lw=2))
+        ax.text(x_ini - 0.7, zs[k] + 0.15, f'F{k} = {F_sismo[k - 1]:.2f} t', ha='center', va='bottom', fontsize=10.5, color='#D63B3B',
+                fontweight='bold')
     for j in range(ne):
-        ax.plot(xs[j], 0, marker='s', color='#222', ms=7)
+        ax.plot(xs[j], 0, marker='s', color='#222', ms=8)
     ax.set_aspect('equal')
     ax.set_title('Modelo del pórtico, cargas (t/m) y fuerzas sísmicas del sismo de ida', fontsize=13, color='#0B2545')
-    ax.margins(0.12)
+    ax.margins(0.1)
     for s in ('top', 'right', 'left'):
         ax.spines[s].set_visible(False)
-    ax.set_yticks(zs)
+    ax.set_yticks([])
+    ax.set_xticks(xs)
+    ax.tick_params(labelsize=10)
+    ax.set_xlabel('x (m)', fontsize=11)
     fig.tight_layout()
     return fig
 
@@ -638,7 +666,7 @@ def figura_deformada(res, caso='S', signo=1.0, titulo='Deformada'):
     mx = max(max(abs(v[0]), abs(v[1])) for v in desp.values()) or 1.0
     f = 0.6 / (mx / 100)
     fw, fh = _tam(res)
-    fig, ax = plt.subplots(figsize=(fw / 1.5, fh / 1.3))
+    fig, ax = plt.subplots(figsize=(5.2, max(3.5, 5.2 * fh / fw)))      # se muestra en media columna (~460 px)
     geo = res['geo']
 
     def pto(k, e):
@@ -660,8 +688,11 @@ def figura_deformada(res, caso='S', signo=1.0, titulo='Deformada'):
             ax.plot([xs[j - 1], xs[j]], [zs[k], zs[k]], color='#bbb', lw=1)
             ax.plot([a[0], b[0]], [a[1], b[1]], color='#1D4E89', lw=2)
     ax.set_aspect('equal')
-    ax.set_title(f'{titulo} (amplificada ×{f:.0f})', fontsize=12, color='#0B2545')
+    ax.set_title(f'{titulo}\n(amplificada ×{f:.0f})', fontsize=12, color='#0B2545')
     ax.margins(0.1)
+    ax.set_xticks(xs)
+    ax.set_yticks(zs)
+    _ejes_limpios(ax, 11)
     fig.tight_layout()
     return fig
 
@@ -672,7 +703,7 @@ def figura_viga(env, dis, mats=None):
     clave = dis['clave']
     e = env[clave]
     x = e['x']
-    fig, axs = plt.subplots(3, 1, figsize=(13, 11), sharex=True)
+    fig, axs = plt.subplots(3, 1, figsize=(10, 10.5), sharex=True, layout='constrained')
     a = axs[0]
     if mats:
         for nombre, m in mats.items():
@@ -684,8 +715,8 @@ def figura_viga(env, dis, mats=None):
         a.axvline(s['x'], color='#555', lw=0.7, ls=':')
     a.invert_yaxis()
     a.axhline(0, color='#333', lw=0.8)
-    a.set_ylabel('M (t·m)   tensión abajo = +', fontsize=10)
-    a.legend(fontsize=8, ncol=3)
+    a.set_ylabel('M (t·m)\ntensión abajo = +', fontsize=11)
+    a.legend(fontsize=10, loc='upper left', bbox_to_anchor=(1.01, 1.0), frameon=False)
     a.set_title(f'{dis["b"]:g}×{dis["h"]:g} cm · envolventes de momento, cortante y acero', fontsize=12, color='#0B2545')
     a = axs[1]
     if mats:
@@ -694,7 +725,9 @@ def figura_viga(env, dis, mats=None):
     a.fill_between(x, 0, e['Vmax'], color='#69B7E8', alpha=0.85)
     a.fill_between(x, 0, e['Vmin'], color='#F29A2E', alpha=0.85)
     a.axhline(0, color='#333', lw=0.8)
-    a.set_ylabel('V (t)', fontsize=10)
+    a.set_ylabel('V (t)', fontsize=11)
+    a.text(1.01, 0.5, 'Mismas combinaciones\n(líneas punteadas)\nque en el momento', transform=a.transAxes, fontsize=10, color='#555',
+           va='center')
     a = axs[2]
     b, h, fc, fy = dis['b'], dis['h'], dis['fc'], dis['fy']
     d = h - 5.0
@@ -718,13 +751,12 @@ def figura_viga(env, dis, mats=None):
             izq = pn == 'izquierdo'
             a.hlines(s['armado']['As'], x[0] if izq else x[-1] - dis['L'] / 3, x[0] + dis['L'] / 3 if izq else x[-1],
                      color='#D63B3B', lw=3, alpha=0.45, label=f'superior {pn} {s["armado"]["armado"]}')
-    a.set_ylabel('As (cm²)', fontsize=10)
-    a.set_xlabel('x (m)')
-    a.legend(fontsize=8, ncol=3)
+    a.set_ylabel('As (cm²)', fontsize=11)
+    a.set_xlabel('x (m)', fontsize=11)
+    a.legend(fontsize=10, loc='upper left', bbox_to_anchor=(1.01, 1.0), frameon=False)
     for ax_ in axs:
-        for s in ('top', 'right'):
-            ax_.spines[s].set_visible(False)
-    fig.tight_layout()
+        _ejes_limpios(ax_, 11)
+        ax_.grid(alpha=0.25)
     return fig
 
 
@@ -759,7 +791,8 @@ def figura_secciones(dis):
     plt = _plt()
     b, h, rec = dis['b'], dis['h'], dis['rec']
     est_db = DIAMETROS[dis['est_var']]
-    fig, axs = plt.subplots(1, 3, figsize=(15, max(6.5, 15 / 3 * (h + 20) / (b + 12) + 1.5)))
+    alto_sec = float(np.clip(3.0 * (h + 12) / (b + 12), 2.6, 5.0))
+    fig, axs = plt.subplots(1, 3, figsize=(10, alto_sec + 2.6), layout='constrained')
     for ax, pn in zip(axs, ('izquierdo', 'centro', 'derecho')):
         ss = {lc: next(s for s in dis['secciones'] if s['posicion'] == pn and s['lecho'] == lc) for lc in ('superior', 'inferior')}
         pars = {lc: (dict(lech=s['armado']['lech'], varilla=s['armado']['varilla']) if s['armado'] else None) for lc, s in ss.items()}
@@ -772,21 +805,24 @@ def figura_secciones(dis):
                 continue
             forma = ' agrupadas 2 en 2' if a['lech']['agrupado'] else ''
             col = '#B00020' if (not a['cabe'] or not s['ok']) else '#13315C'
-            textos.append((f'{"Sup." if lecho == "superior" else "Inf."}: {a["armado"]} ({" + ".join(map(str, a["capas"]))} por lecho{forma})\n'
-                           f'As = {a["As"]:.2f} cm² · MR = {a["MR"]:.2f} / Mu = {s["Mu"]:.2f} t·m', col))
-        ax.text(b / 2, h + 5.5, f'{pn.capitalize()} · x = {ss["superior"]["x"]:.2f} m', ha='center', fontsize=11, fontweight='bold',
-                color='#0B2545')
+            capas = ' + '.join(map(str, a['capas']))
+            textos.append((f'{"Sup." if lecho == "superior" else "Inf."}: {a["armado"]} ({capas} por lecho{forma})\n'
+                           f'As = {a["As"]:.2f} cm²\nMR = {a["MR"]:.2f} ≥ Mu = {s["Mu"]:.2f} t·m' if s['ok'] else
+                           f'{"Sup." if lecho == "superior" else "Inf."}: {a["armado"]} ({capas} por lecho{forma})\n'
+                           f'As = {a["As"]:.2f} cm²\nMR = {a["MR"]:.2f} < Mu = {s["Mu"]:.2f} t·m', col))
+        ax.set_title(f'{pn.capitalize()} · x = {ss["superior"]["x"]:.2f} m', fontsize=11.5, fontweight='bold', color='#0B2545')
+        ax.text(b / 2, h + 1.5, f'b = {b:g} cm', ha='center', va='bottom', fontsize=10, color='#555')
+        ax.text(-1.5, h / 2, f'h = {h:g} cm', rotation=90, va='center', ha='right', fontsize=10, color='#555')
+        sep = 0.30 * (b + 12)
         for i, (tx, c) in enumerate(textos):
-            ax.text(b / 2, -6 - 6.5 * i, tx, ha='center', va='top', fontsize=8.2, color=c)
-        ax.text(b / 2, h + 1, f'b = {b:g} cm', ha='center', fontsize=8, color='#555')
-        ax.text(-1.5, h / 2, f'h = {h:g} cm', rotation=90, va='center', ha='right', fontsize=8, color='#555')
-        ax.set_ylim(-6 - 6.5 * 2 - 8, h + 9)
+            ax.text(b / 2, -3 - sep * 1.15 * i, tx, ha='center', va='top', fontsize=10, color=c, linespacing=1.25)
+        ax.set_xlim(-8, b + 6)
+        ax.set_ylim(-3 - sep * 1.15 * 2 - 2, h + 7)
         if malo:
             ax.text(b / 2, h / 2, 'SEPARACIÓN\nINSUFICIENTE', ha='center', va='center', fontsize=12, color='#B00020', alpha=0.4,
                     fontweight='bold')
     fig.suptitle(f'Secciones de la viga {b:g}×{h:g} cm · rec. {rec:g} cm · estribo {dis["est_var"]} @ '
-                 f'{dis["cortante"].get("s_usar", "—")} cm ({dis["cortante"]["ramas"]} ramas)', fontsize=12, color='#0B2545')
-    fig.tight_layout()
+                 f'{dis["cortante"].get("s_usar", "—")} cm ({dis["cortante"]["ramas"]} ramas)', fontsize=12.5, color='#0B2545', y=1.06)
     return fig
 
 
@@ -901,81 +937,100 @@ def armado_nivel(env, res, k, fc, fy, var_sup, var_inf, est_var='#3', rec=4.0, a
                        f'{d_sup:.1f} cm (sup.) / {d_inf:.1f} cm (inf.) más allá de donde ya no se requiere en el diagrama Mu'])
 
 
-def figura_alzado(niv, res):
-    """Alzado de la viga continua del nivel: corrido con ganchos, bastones con su longitud, puntos a), b)… y, abajo, la
-    sección en cada punto con las barras finales (corrido + bastones que pasan por ahí)."""
+def figura_alzado(niv, res, fuente=11):
+    """Alzado de la viga continua del nivel: corrido con ganchos, bastones B1, B2… con su longitud (en filas para que ni las
+    barras ni sus etiquetas se encimen), puntos a), b)… y, abajo, la sección en cada punto con las barras finales.
+    La altura de la viga se dibuja exagerada (no a escala) para que quepan las barras y los textos."""
     plt = _plt()
     from matplotlib.gridspec import GridSpec
+    from matplotlib.lines import Line2D
     geo = res['geo']
     k, b, h, rec = niv['nivel'], niv['b'], niv['h'], niv['rec']
     est_db = DIAMETROS[niv['est_var']]
     P = niv['P']
     xs_ej = res['xs']
-    hv = h / 100.0
     pts = niv['puntos']
-    ncol = min(len(pts), 8)
+    L = float(P.max() - P.min())
+    ancho = float(np.clip(0.45 * L + 6, 10, 14))
+    pulg_m = ancho * 0.85 / max(L, 1e-9)                      # pulgadas por metro en el dibujo
+    ncol = min(len(pts), 6)
     nfil = math.ceil(len(pts) / ncol)
-    ancho = float(np.clip(0.9 * (P.max() - P.min()) + 6, 14, 30))
-    fig = plt.figure(figsize=(ancho, 6.0 + 3.6 * nfil))
-    gs = GridSpec(1 + nfil, ncol, height_ratios=[2.4] + [1.6] * nfil, figure=fig)
-    ax = fig.add_subplot(gs[0, :])
+    w_sec = ancho / ncol
+    alto_sec = float(np.clip(w_sec * 0.55 * (h + 8) / (b + 12), 1.6, 3.0))
     corte = np.diff(P) > 1.5 * niv['max_paso']
     inicios = [P[0]] + [P[i + 1] for i in range(len(P) - 1) if corte[i]]
     fines = [P[i] for i in range(len(P) - 1) if corte[i]] + [P[-1]]
+    # bastones agrupados por tramo y lecho; fila de cada grupo para que barra y etiqueta no se encimen con otro
+    grupos = {}
+    for q in niv['bastones']:
+        grupos.setdefault((q['lecho'], round(q['x_ini'], 2), round(q['x_fin'], 2), q['varilla']), []).append(q)
+    orden = sorted(grupos.items(), key=lambda kv: kv[0][1])
+    filas, ocupado = [], {'superior': [], 'inferior': []}
+    for n_b, ((lecho, xi, xf, var), qs) in enumerate(orden, 1):
+        txt = f'B{n_b}: {len(qs)}{var} · {xf - xi:.2f} m'
+        mitad = 0.5 * len(txt) * 0.085 * (fuente - 1) / 10 / pulg_m + 0.15
+        a_, b_ = min(xi, (xi + xf) / 2 - mitad), max(xf, (xi + xf) / 2 + mitad)
+        f = next(f for f in range(20) if all(not (a_ < bb and aa < b_) for aa, bb, ff in ocupado[lecho] if ff == f))
+        ocupado[lecho].append((a_, b_, f))
+        filas.append((lecho, xi, xf, var, qs, txt, f))
+    n_fs = 1 + max([f for l_, *_, f in filas if l_ == 'superior'], default=-1)
+    n_fi = 1 + max([f for l_, *_, f in filas if l_ == 'inferior'], default=-1)
+    dy = 0.15                                                 # paso entre filas de bastones (barra + etiqueta)
+    top = max(1.0, 0.24 + dy * (n_fs + n_fi) + 0.25)          # alto dibujado de la viga (exagerado)
+    alto_viga = 2.2 + 0.9 * top
+    fig = plt.figure(figsize=(ancho, alto_viga + 0.9 + (alto_sec + 1.0) * nfil), layout='constrained')
+    gs = GridSpec(1 + nfil, ncol, height_ratios=[alto_viga + 0.9] + [alto_sec + 1.0] * nfil, figure=fig)
+    ax = fig.add_subplot(gs[0, :])
+    caja = dict(boxstyle='round,pad=0.15', fc='white', ec='none', alpha=0.92)
+    y_sup, y_inf = top - 0.12, 0.12
     for a_, b_ in zip(inicios, fines):
-        ax.add_patch(plt.Rectangle((a_, 0), b_ - a_, hv, fc='#E8EEF6', ec='#13315C', lw=1.6, zorder=1))
+        ax.add_patch(plt.Rectangle((a_, 0), b_ - a_, top, fc='#F4F7FB', ec='#13315C', lw=1.6, zorder=1))
     for c in geo['niveles'][k - 1]['cols']:
         if c.get('omitir'):
             continue
         xe, w = xs_ej[c['eje'] - 1], c['h'] / 100.0
-        ax.add_patch(plt.Rectangle((xe - w / 2, -0.45), w, 0.45, fc='#CFCFCF', ec='#555', hatch='///', lw=1, zorder=0))
-        ax.text(xe, -0.6, f'eje {c["eje"]}', ha='center', va='top', fontsize=8, color='#555')
-    yt, yb = hv - 0.07, 0.07
-    for lecho, y, n, var, col, sg in (('superior', yt, niv['n_corr']['superior'], niv['var_sup'], '#D63B3B', -1),
-                                      ('inferior', yb, niv['n_corr']['inferior'], niv['var_inf'], '#13315C', 1)):
+        ax.add_patch(plt.Rectangle((xe - w / 2, -0.2), w, 0.2, fc='#CFCFCF', ec='#555', hatch='///', lw=1, zorder=0))
+        ax.text(xe, -0.24, f'eje {c["eje"]}', ha='center', va='top', fontsize=fuente - 1, color='#555')
+    for lecho, y, col, sg in (('superior', y_sup, '#C0392B', -1), ('inferior', y_inf, '#13315C', 1)):
         for a_, b_ in zip(inicios, fines):
             ax.plot([a_ + 0.05, b_ - 0.05], [y, y], color=col, lw=3.2, zorder=4, solid_capstyle='butt')
-            for xg in (a_ + 0.05, b_ - 0.05):          # ganchos al inicio y al final
-                ax.plot([xg, xg], [y, y + sg * 0.22 * hv], color=col, lw=3.2, zorder=4)
-        ax.annotate(f'{n}{var} corridas', (inicios[0], y), xytext=(inicios[0] - 0.3, y + (0.5 if lecho == 'superior' else -0.5)),
-                    fontsize=9, color=col, fontweight='bold', ha='right', arrowprops=dict(arrowstyle='-', color=col, lw=0.8))
-    grupos = {}                                       # bastones con el mismo tramo se rotulan juntos («2#8»)
-    for q in niv['bastones']:
-        grupos.setdefault((q['lecho'], round(q['x_ini'], 2), round(q['x_fin'], 2), q['varilla']), []).append(q)
-    cont = {'superior': 0, 'inferior': 0}
-    for (lecho, xi, xf, var), qs in sorted(grupos.items(), key=lambda kv: kv[0][1]):
+            for xg in (a_ + 0.05, b_ - 0.05):
+                ax.plot([xg, xg], [y, y + sg * 0.2], color=col, lw=3.2, zorder=4)
+    for lecho, xi, xf, var, qs, txt, f in filas:
         sup = lecho == 'superior'
-        col = '#D63B3B' if sup else '#13315C'
-        for q in qs:
-            y = (yt - 0.06 * q['nivel']) if sup else (yb + 0.06 * q['nivel'])
-            ax.plot([xi, xf], [y, y], color=col, lw=2.2, zorder=5, solid_capstyle='butt')
-        i = cont[lecho]
-        cont[lecho] += 1
-        yy = hv + 0.4 + 0.5 * (i % 4) if sup else -0.9 - 0.5 * (i % 4)
-        ax.annotate(f'{len(qs)}{var}  L = {xf - xi:.2f} m', ((xi + xf) / 2, y), xytext=((xi + xf) / 2, yy),
-                    fontsize=8, ha='center', va='bottom' if sup else 'top', color=col, zorder=8,
-                    bbox=dict(boxstyle='round,pad=0.15', fc='white', ec=col, lw=0.6, alpha=0.95),
-                    arrowprops=dict(arrowstyle='-', color=col, lw=0.6, ls=':'))
+        col = '#C0392B' if sup else '#13315C'
+        y = y_sup - dy * (f + 1) if sup else y_inf + dy * (f + 1)
+        ax.plot([xi, xf], [y, y], color=col, lw=2.6, zorder=5, solid_capstyle='butt', alpha=0.8)
+        ax.text((xi + xf) / 2, y - 0.012 if sup else y + 0.012, txt, ha='center', va='top' if sup else 'bottom', fontsize=fuente - 1,
+                color=col, bbox=caja, zorder=7)
     for q in pts:
-        ax.plot([q['x'], q['x']], [-0.45, hv + 0.25], color='#777', lw=0.8, ls='--', zorder=2)
-        ax.text(q['x'], hv + 0.27, f'{q["letra"]})', ha='center', va='bottom', fontsize=9, fontweight='bold', color='#333')
-    ax.set_xlim(P.min() - 2.6, P.max() + 1.2)
-    ax.set_ylim(-3.1, hv + 2.9)
+        ax.plot([q['x'], q['x']], [-0.02, top + 0.04], color='#777', lw=0.8, ls='--', zorder=2)
+        ax.text(q['x'], top + 0.05, f'{q["letra"]})', ha='center', va='bottom', fontsize=fuente, fontweight='bold', color='#333')
+    ax.set_xlim(P.min() - 0.05 * L, P.max() + 0.05 * L)
+    ax.set_ylim(-0.42, top + 0.2)
     ax.set_yticks([])
-    ax.set_xlabel('x (m)')
+    ax.set_xticks(sorted(set([float(x) for x in xs_ej] + [float(P.min()), float(P.max())])))
+    ax.tick_params(labelsize=fuente - 1)
+    ax.set_xlabel('x (m)', fontsize=fuente)
     for sp in ('top', 'right', 'left'):
         ax.spines[sp].set_visible(False)
-    ax.set_title(f'Nivel {k} · viga {b:g}×{h:g} cm · corrido, bastones y anclaje (d = {niv["d_sup"]:.0f} cm) · vista no a escala vertical',
-                 fontsize=12, color='#0B2545')
+    hand = [Line2D([], [], color='#C0392B', lw=3.2, label=f'{niv["n_corr"]["superior"]}{niv["var_sup"]} corridas arriba'),
+            Line2D([], [], color='#13315C', lw=3.2, label=f'{niv["n_corr"]["inferior"]}{niv["var_inf"]} corridas abajo')]
+    if filas:
+        hand.append(Line2D([], [], color='#777', lw=2.6, label='Bastones B1, B2… (barras · longitud)'))
+    ax.legend(handles=hand, loc='upper center', bbox_to_anchor=(0.5, -0.22), ncol=3, fontsize=fuente - 1, frameon=False)
+    ax.set_title(f'Nivel {k} · viga {b:g}×{h:g} cm · corrido, bastones y anclaje (d = {niv["d_sup"]:.0f} cm) · altura exagerada',
+                 fontsize=fuente + 1, color='#0B2545', loc='left')
     for i, q in enumerate(pts):
         a2 = fig.add_subplot(gs[1 + i // ncol, i % ncol])
         ls_ = distribuir_lechos(q['n_sup'], DIAMETROS[niv['var_sup']], b, rec, est_db, niv['agrupar'])
         li_ = distribuir_lechos(q['n_inf'], DIAMETROS[niv['var_inf']], b, rec, est_db, niv['agrupar'])
         malo = _dibuja_seccion(a2, b, h, rec, est_db, dict(lech=ls_, varilla=niv['var_sup']), dict(lech=li_, varilla=niv['var_inf']))
-        a2.set_title(f'{q["letra"]}) x = {q["x"]:.2f} m', fontsize=9, color='#B00020' if malo else '#0B2545')
-        a2.text(b / 2, -6, f'sup {q["n_sup"]}{niv["var_sup"]} · inf {q["n_inf"]}{niv["var_inf"]}', ha='center', va='top', fontsize=7.5,
-                color='#B00020' if malo else '#13315C')
-    fig.tight_layout()
+        col = '#B00020' if malo else '#0B2545'
+        a2.set_title(f'{q["letra"]}) x = {q["x"]:.2f} m', fontsize=fuente - 0.5, color=col, fontweight='bold')
+        a2.text(b / 2, -3, f'sup {q["n_sup"]}{niv["var_sup"]}\ninf {q["n_inf"]}{niv["var_inf"]}', ha='center', va='top',
+                fontsize=fuente - 1, color=col, linespacing=1.25)
+        a2.set_ylim(-0.45 * (b + 12), h + 5)
     return fig
 
 
@@ -1205,21 +1260,22 @@ def figura_puntos(fichas, b, h, rec, est_db, titulos):
     n = len(fichas)
     ncol = min(n, 4)
     nfil = math.ceil(n / ncol)
-    fig, axs = plt.subplots(nfil, ncol, figsize=(4.6 * ncol, (h / b * 3.2 + 2.2) * nfil), squeeze=False)
+    w_col = 2.5                                              # 4 secciones en 10 pulgadas: el texto queda de ~13 px en pantalla
+    alto_sec = float(np.clip(w_col * 0.62 * (h + 8) / (b + 12), 1.8, 3.4))
+    fig, axs = plt.subplots(nfil, ncol, figsize=(w_col * ncol, (alto_sec + 1.3) * nfil), squeeze=False, layout='constrained')
     for ax in axs.ravel():
         ax.axis('off')
     for ax, f, t in zip(axs.ravel(), fichas, titulos):
         if not f.get('lech'):
-            ax.set_title(f'{t}: sin solución', color='#B00020')
+            ax.set_title(f'{t}: sin solución', color='#B00020', fontsize=11)
             continue
         par = dict(lech=f['lech'], varilla=f['varilla'])
         sup = par if f.get('lecho', 'superior') == 'superior' else None
         inf = par if f.get('lecho', 'superior') != 'superior' else None
         malo = _dibuja_seccion(ax, b, h, rec, est_db, sup, inf)
-        ax.set_title(f'{t}  Mu = {f["Mu"]:.2f} t·m', fontsize=10, color='#B00020' if (malo or not f['ok']) else '#0B2545')
-        ax.text(b / 2, -6, f'{f["armado"]} = {f["As_real"]:.2f} cm² · MR = {f["MR"]:.2f}\n'
-                           f'sep. libre = {f["sep_libre"]:.2f} cm', ha='center', va='top', fontsize=8.5,
-                color='#B00020' if (malo or not f['ok']) else '#13315C')
-        ax.set_ylim(-14, h + 8)
-    fig.tight_layout()
+        col = '#B00020' if (malo or not f['ok']) else '#0B2545'
+        ax.set_title(f'{t}\nMu = {f["Mu"]:.2f} t·m', fontsize=11, color=col, fontweight='bold')
+        ax.text(b / 2, -3, f'{f["armado"]} = {f["As_real"]:.2f} cm²\nMR = {f["MR"]:.2f} t·m\nsep. libre {f["sep_libre"]:.1f} cm',
+                ha='center', va='top', fontsize=10, color=col, linespacing=1.3)
+        ax.set_ylim(-0.75 * (b + 12), h + 6)
     return fig

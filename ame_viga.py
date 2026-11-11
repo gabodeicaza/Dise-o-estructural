@@ -327,109 +327,182 @@ def armado_longitudinal(env, puntos, fichas, b, fc, fy, var, d, As_min, ab, paso
     return dict(n_corr=n_c, As_corr=As_c, MRc=MRc, bastones=bast, lineas=[t for t in lin if t])
 
 
-def figura_viga_sola(env, titulo='', ancho=13.0, alto=7.5, fuente=9):
-    """Envolvente de M (positivo hacia abajo, tensión abajo) y de V, con valores en apoyos, claros y extremos de segmento."""
+# ------------------------------------------------------------------ figuras
+# Las figuras se ven en la página a ~940 px de ancho: se dibujan de ANCHO pulgadas con letra de FUENTE puntos para que el texto
+# quede de ~14 px en pantalla. Ninguna etiqueta va encima de una línea: todas llevan fondo blanco y se separan del trazo.
+ANCHO, FUENTE = 10.0, 11
+_CAJA = dict(boxstyle='round,pad=0.18', fc='white', ec='none', alpha=0.9)
+
+
+def _estilo(ax, fuente=FUENTE):
+    ax.tick_params(labelsize=fuente - 1)
+    for s in ('top', 'right'):
+        ax.spines[s].set_visible(False)
+
+
+def figura_viga_sola(env, titulo='', ancho=ANCHO, alto=7.0, fuente=FUENTE):
+    """Envolvente de M (positivo hacia abajo, tensión abajo) y de V. Se rotulan el momento negativo de cada apoyo, el positivo
+    máximo de cada claro y el cortante en los extremos de cada segmento, siempre fuera del diagrama y con fondo blanco."""
     import ame_porticos as pt
     plt = pt._plt()
     xn, ne = env['xn'], len(env['xn']) - 1
-    fig, (a1, a2) = plt.subplots(2, 1, figsize=(ancho, alto), sharex=True)
+    fig, (a1, a2) = plt.subplots(2, 1, figsize=(ancho, alto), sharex=True, layout='constrained')
+    Mtodo = np.concatenate([env['Mmax'].ravel(), env['Mmin'].ravel()])
+    Vtodo = np.concatenate([env['Vmax'].ravel(), env['Vmin'].ravel()])
     for ax in (a1, a2):
-        ax.axhline(0, color='#0B2545', lw=2.4)
+        ax.axhline(0, color='#0B2545', lw=2.0, zorder=3)
         for k, t in enumerate(env['tipos']):
             if t != '—':
-                ax.plot([xn[k]], [0], marker='^' if t == 'Articulado' else 's', color='#0B2545', ms=8, clip_on=False, zorder=5)
+                ax.plot([xn[k]], [0], marker='^' if t == 'Articulado' else 's', color='#0B2545', ms=10, clip_on=False, zorder=6)
         ax.grid(alpha=0.25)
+        _estilo(ax, fuente)
     for e in range(ne):
         x = env['x'][e]
-        a1.fill_between(x, 0, np.maximum(env['Mmax'][e], 0), color='#F2C12E', alpha=0.75, lw=0)
-        a1.fill_between(x, 0, np.minimum(env['Mmin'][e], 0), color='#D9534F', alpha=0.75, lw=0)
+        a1.fill_between(x, 0, np.maximum(env['Mmax'][e], 0), color='#F2C12E', alpha=0.8, lw=0)
+        a1.fill_between(x, 0, np.minimum(env['Mmin'][e], 0), color='#D9534F', alpha=0.8, lw=0)
         a1.fill_between(x, 0, np.maximum(env['Mmin'][e], 0), color='#F2C12E', alpha=0.9, lw=0)
         a1.fill_between(x, 0, np.minimum(env['Mmax'][e], 0), color='#D9534F', alpha=0.9, lw=0)
-        a1.plot(x, env['Mmax'][e], color='#6b5300', lw=0.8)
-        a1.plot(x, env['Mmin'][e], color='#7a1f1f', lw=0.8)
+        a1.plot(x, env['Mmax'][e], color='#6b5300', lw=1.0)
+        a1.plot(x, env['Mmin'][e], color='#7a1f1f', lw=1.0)
         a2.fill_between(x, 0, env['Vmax'][e], color='#4C9BE8', alpha=0.55, lw=0)
         a2.fill_between(x, 0, env['Vmin'][e], color='#4C9BE8', alpha=0.55, lw=0)
-        a2.plot(x, env['Vmax'][e], color='#0B3D75', lw=0.8)
-        a2.plot(x, env['Vmin'][e], color='#0B3D75', lw=0.8)
-        k = int(np.argmax(env['Mmax'][e]))
-        if env['Mmax'][e][k] > 0.05 and 0 < k < len(x) - 1:
-            a1.annotate(f'{env["Mmax"][e][k]:.2f}', (x[k], env['Mmax'][e][k]), textcoords='offset points', xytext=(0, 6),
-                        ha='center', fontsize=fuente, fontweight='bold')
-        for xe, i, lado in ((x[0], 0, 1), (x[-1], -1, -1)):
-            v = env['Vmax'][e][i] if abs(env['Vmax'][e][i]) >= abs(env['Vmin'][e][i]) else env['Vmin'][e][i]
-            if abs(v) > 0.05:
-                a2.annotate(f'{v:.2f}', (xe, v), textcoords='offset points', xytext=(4 * lado, 5 if v > 0 else -13),
-                            ha='left' if lado > 0 else 'right', fontsize=fuente)
+        a2.plot(x, env['Vmax'][e], color='#0B3D75', lw=1.0)
+        a2.plot(x, env['Vmin'][e], color='#0B3D75', lw=1.0)
+    # momento positivo máximo de cada claro: debajo del diagrama (el eje está invertido: positivo hacia abajo)
+    for s in range(len(env['ap']) - 1):
+        es = range(env['ap'][s], env['ap'][s + 1])
+        e = max(es, key=lambda i: env['Mmax'][i].max())
+        i = int(np.argmax(env['Mmax'][e]))
+        m = float(env['Mmax'][e][i])
+        if m > 0.05:
+            a1.annotate(f'{m:.2f}', (env['x'][e][i], m), textcoords='offset points', xytext=(0, -6), ha='center', va='top',
+                        fontsize=fuente, fontweight='bold', color='#6b5300', bbox=_CAJA, zorder=8)
+    # momento negativo en cada nodo con valor: arriba del pico
     for k in range(ne + 1):
         vals = ([float(env['Mmin'][k - 1][-1])] if k > 0 else []) + ([float(env['Mmin'][k][0])] if k < ne else [])
         mn = min(vals)
-        if mn < -0.05:
-            a1.annotate(f'{mn:.2f}', (xn[k], mn), textcoords='offset points', xytext=(0, -13), ha='center', fontsize=fuente,
-                        fontweight='bold', color='#7a1f1f')
+        if mn < -0.05 and abs(mn) > 0.04 * max(abs(Mtodo).max(), 1e-9):
+            a1.annotate(f'{mn:.2f}', (xn[k], mn), textcoords='offset points', xytext=(0, 7), ha='center', va='bottom',
+                        fontsize=fuente, fontweight='bold', color='#7a1f1f', bbox=_CAJA, zorder=8)
+    # cortante en los extremos de cada segmento: la etiqueta va hacia adentro del segmento y, en vertical, del lado que la línea
+    # deja libre (afuera del diagrama si la línea se aleja; dentro del relleno, con fondo blanco, si la línea pasaría por encima)
+    rangoV = float(np.abs(Vtodo).max()) or 1.0
+    for e in range(ne):
+        x = env['x'][e]
+        curva = np.where(np.abs(env['Vmax'][e]) >= np.abs(env['Vmin'][e]), env['Vmax'][e], env['Vmin'][e])
+        paso = max(1, len(x) // 6)
+        for i, lado, j in ((0, 1, paso), (-1, -1, -1 - paso)):
+            v = float(curva[i])
+            if abs(v) <= 0.05:
+                continue
+            vecino = float(curva[j])
+            afuera = (vecino < v) if v > 0 else (vecino > v)
+            if not afuera and abs(v) < 0.2 * rangoV:       # valor chico: no cabe dentro; va afuera, del otro lado del nodo
+                afuera, lado = True, -lado
+            arriba = (v > 0) == afuera
+            a2.annotate(f'{v:.2f}', (x[i], v), textcoords='offset points', xytext=(5 * lado, 7 if arriba else -7),
+                        ha='left' if lado > 0 else 'right', va='bottom' if arriba else 'top', fontsize=fuente - 0.5,
+                        color='#0B3D75', bbox=dict(boxstyle='round,pad=0.12', fc='white', ec='none', alpha=0.85), zorder=8)
+    for ax, datos in ((a1, Mtodo), (a2, Vtodo)):
+        lo, hi = float(min(datos.min(), 0)), float(max(datos.max(), 0))
+        pad = 0.22 * (hi - lo or 1.0)
+        ax.set_ylim(lo - pad, hi + pad)
     a1.invert_yaxis()
-    a1.set_ylabel('M (t·m)  tensión abajo ↓')
-    a2.set_ylabel('V (t)')
-    a2.set_xlabel('x (m)')
-    a1.set_title(titulo or 'Envolvente de momento y cortante', fontsize=fuente + 2)
-    fig.tight_layout()
+    a1.set_ylabel('M (t·m)\ntensión abajo ↓', fontsize=fuente)
+    a2.set_ylabel('V (t)', fontsize=fuente)
+    a2.set_xlabel('x (m)', fontsize=fuente)
+    a2.set_xticks(xn)
+    a2.set_xticklabels([f'{v:g}' for v in xn])
+    a2.set_xlim(-0.05 * xn[-1], 1.05 * xn[-1])
+    a1.set_title(titulo or 'Envolvente de momento y cortante', fontsize=fuente + 2, color='#0B2545')
     return fig
 
 
-def figura_alzado_viga(env, arm, zonas, estribos, h, r, nombre_var, nombre_est, ancho=13.0, alto=4.2, fuente=9, tramos=None, piel=None):
-    """Alzado: corridas arriba y abajo (con ganchos), bastones con su longitud y zonas de estribos con su separación.
-    estribos: lista de separaciones (cm) por zona, en el mismo orden que zonas. tramos: salida de tramos_estribos (con la zona
-    de confinamiento sombreada); si se da, sustituye a zonas/estribos. piel: salida de ame_parcial3.acero_piel."""
+def figura_alzado_viga(env, arm, zonas, estribos, h, r, nombre_var, nombre_est, ancho=ANCHO, alto=None, fuente=FUENTE, tramos=None,
+                       piel=None):
+    """Alzado del armado en dos franjas: arriba, la separación de estribos por tramo (amarillo = zona de confinamiento 2h); abajo,
+    la viga con las corridas (con ganchos), los bastones numerados B1, B2… con su longitud, el acero de piel y los apoyos.
+    La altura se dibuja exagerada (no a escala) para que quepan las barras; lo que no cabe en el dibujo va en la leyenda.
+    estribos: separaciones (cm) por zona, en el orden de zonas. tramos: salida de tramos_estribos; si se da, sustituye a zonas/estribos.
+    piel: salida de ame_parcial3.acero_piel."""
     import ame_porticos as pt
+    from matplotlib.lines import Line2D
+    from matplotlib.patches import Patch
     plt = pt._plt()
     xn = env['xn']
     L = float(xn[-1])
-    H = h / 100.0
-    rr = r / 100.0
-    fig, ax = plt.subplots(figsize=(ancho, alto))
-    ax.add_patch(plt.Rectangle((0, 0), L, H, fill=False, ec='#0B2545', lw=1.8))
-    for k, t in enumerate(env['tipos']):
-        if t != '—':
-            ax.plot([xn[k]], [-0.02], marker='^' if t == 'Articulado' else 's', color='#0B2545', ms=9, clip_on=False, zorder=5)
-    g = 0.08
-    for y in (rr, H - rr):
-        ax.plot([0, L], [y, y], color='#13315C', lw=2.6, solid_capstyle='butt')
-        sgn = 1 if y < H / 2 else -1
-        ax.plot([0, 0], [y, y + sgn * 0.22], color='#13315C', lw=2.6)
-        ax.plot([L, L], [y, y + sgn * 0.22], color='#13315C', lw=2.6)
-    caja = dict(fc='white', ec='none', pad=1.5)
-    ax.text(L * 0.3, H - rr - 0.1, f'{arm["n_corr"]}{nombre_var} corridas (arriba)', ha='center', va='top', fontsize=fuente, color='#13315C', bbox=caja)
-    ax.text(L * 0.5, rr + 0.1, f'{arm["n_corr"]}{nombre_var} corridas (abajo)', ha='center', va='bottom', fontsize=fuente, color='#13315C', bbox=caja)
-    for i, bs in enumerate(arm['bastones']):
-        y = H - rr - g * (1 + i % 2) if bs['lecho'] == 'superior' else rr + g * (1 + i % 2)
-        ax.plot([bs['x0'], bs['x1']], [y, y], color='#D9534F', lw=3.4, solid_capstyle='butt')
-        ax.text((bs['x0'] + bs['x1']) / 2, y + (-0.1 if bs['lecho'] == 'superior' else 0.05), f'+{bs["n"]}{nombre_var}  ({bs["x1"] - bs["x0"]:.2f} m)',
-                ha='center', va='top' if bs['lecho'] == 'superior' else 'bottom', fontsize=fuente - 0.5, color='#B00020')
     if tramos is None:
         tramos = [dict(x0=z['x0'], x1=z['x1'], s=s, confinado=False) for z, s in zip(zonas, estribos)]
+    bast = list(arm['bastones'])
+    fila = []                                     # fila (0, 1, …) de cada bastón dentro de su lecho para que no se encimen
+    for i, bs in enumerate(bast):
+        ocup = [fila[j] for j in range(i) if bast[j]['lecho'] == bs['lecho'] and bast[j]['x0'] < bs['x1'] and bs['x0'] < bast[j]['x1']]
+        fila.append(next(f for f in range(10) if f not in ocup))
+    nfil = max(fila, default=-1) + 1
+    alto = alto or 4.6 + 0.35 * max(0, nfil - 1)
+    fig, (ae, ax) = plt.subplots(2, 1, figsize=(ancho, alto), sharex=True, layout='constrained',
+                                 gridspec_kw=dict(height_ratios=[1, 3.2]))
+    # ---- franja de estribos
+    escala = (ancho * 0.85) / L                  # pulgadas por metro, aprox.
+    for t in tramos:
+        if not t['s']:
+            continue
+        w = t['x1'] - t['x0']
+        ae.add_patch(plt.Rectangle((t['x0'], 0), w, 1, fc='#F7DC6F' if t.get('confinado') else '#D6E6F5', ec='white', lw=2))
+        txt = f'@{t["s"]}'
+        cabe = w * escala > 0.12 * len(txt) * fuente / 11
+        ae.text((t['x0'] + t['x1']) / 2, 0.5, txt, ha='center', va='center', fontsize=fuente if cabe else fuente - 2,
+                rotation=0 if cabe else 90, color='#0B2545', fontweight='bold')
+    ae.set_ylim(0, 1)
+    ae.set_yticks([])
+    for s in ('top', 'right', 'left'):
+        ae.spines[s].set_visible(False)
+    ae.set_title(f'Estribos E{nombre_est} (separación en cm)', fontsize=fuente, color='#0B2545', loc='left')
+    # ---- viga (altura exagerada: 0 → 1)
+    rr = 0.13
+    ax.add_patch(plt.Rectangle((0, 0), L, 1, fc='#F4F7FB', ec='#0B2545', lw=1.8, zorder=1))
+    for t in tramos:
+        if t.get('confinado') and t['s']:
+            ax.add_patch(plt.Rectangle((t['x0'], 0), t['x1'] - t['x0'], 1, fc='#F7DC6F', alpha=0.35, ec='none', zorder=1))
+        if t['s']:
+            for xv in np.arange(t['x0'] + 0.05, t['x1'] - 0.01, t['s'] / 100.0):
+                ax.plot([xv, xv], [0.04, 0.96], color='#9AA5B1', lw=0.6, zorder=2)
+    for y in (rr, 1 - rr):
+        ax.plot([0.03, L - 0.03], [y, y], color='#13315C', lw=3.0, solid_capstyle='butt', zorder=4)
+        sgn = 1 if y < 0.5 else -1
+        for xg in (0.03, L - 0.03):
+            ax.plot([xg, xg], [y, y + sgn * 0.22], color='#13315C', lw=3.0, zorder=4)
     if piel and piel.get('aplica'):
         for j in range(1, piel['n_cara'] + 1):
-            y = rr + j * (H - 2 * rr) / (piel['n_cara'] + 1)
-            ax.plot([0, L], [y, y], color='#2a9d8f', lw=1.1, ls=(0, (6, 3)))
-        ax.text(L * 0.75, rr + (H - 2 * rr) / (piel['n_cara'] + 1), f'piel: {piel["n_cara"]}{piel["var"]} por cara @ {piel["sep"]:.1f} cm',
-                ha='center', va='bottom', fontsize=fuente - 1, color='#1d6f65', bbox=caja)
-    for i, t in enumerate(tramos):
-        s = t['s']
-        if not s:
-            continue
-        if t.get('confinado'):
-            ax.add_patch(plt.Rectangle((t['x0'], 0), t['x1'] - t['x0'], H, fc='#F2C12E', alpha=0.18, ec='none'))
-        xs = np.arange(t['x0'] + 0.05, t['x1'] - 0.01, s / 100.0)
-        for xv in xs:
-            ax.plot([xv, xv], [0.03, H - 0.03], color='#6c757d', lw=0.7)
-        ax.text((t['x0'] + t['x1']) / 2, H + (0.08 if i % 2 == 0 else 0.24), f'E{nombre_est} @ {s}' + (' (conf.)' if t.get('confinado') else ''),
-                ha='center', fontsize=fuente - (1 if len(tramos) > 6 else 0), color='#0B2545')
-        ax.plot([t['x0']] * 2, [H + 0.02, H + 0.2], color='#0B2545', lw=0.8)
-    ax.plot([L] * 2, [H + 0.02, H + 0.2], color='#0B2545', lw=0.8)
-    ax.set_xlim(-0.3, L + 0.3)
-    ax.set_ylim(-0.5 - H * 0.2, H + 0.55)
-    ax.set_aspect('auto')
+            y = rr + j * (1 - 2 * rr) / (piel['n_cara'] + 1)
+            ax.plot([0.1, L - 0.1], [y, y], color='#2a9d8f', lw=1.3, ls=(0, (6, 3)), zorder=3)
+    for i, (bs, f) in enumerate(zip(bast, fila), 1):
+        sup = bs['lecho'] == 'superior'
+        y = (1 - rr - 0.075 * (f + 1)) if sup else (rr + 0.075 * (f + 1))
+        ax.plot([bs['x0'], bs['x1']], [y, y], color='#C0392B', lw=3.4, solid_capstyle='butt', zorder=5)
+        ax.text((bs['x0'] + bs['x1']) / 2, y + (-0.035 if sup else 0.035), f'B{i}: +{bs["n"]}{nombre_var} · {bs["x1"] - bs["x0"]:.2f} m',
+                ha='center', va='top' if sup else 'bottom', fontsize=fuente - 1, color='#922B21', bbox=_CAJA, zorder=7)
+    for k, t in enumerate(env['tipos']):
+        if t != '—':
+            ax.plot([xn[k]], [-0.07], marker='^' if t == 'Articulado' else 's', color='#0B2545', ms=12, clip_on=False, zorder=6)
+    ax.set_ylim(-0.16, 1.06)
     ax.set_yticks([])
-    ax.set_xlabel('x (m)')
-    ax.set_title('Alzado del armado: corridas, bastones y estribos (amarillo: zona de confinamiento 2h)', fontsize=fuente + 2)
-    fig.tight_layout()
+    for s in ('top', 'right', 'left'):
+        ax.spines[s].set_visible(False)
+    ax.set_xlim(-0.02 * L, 1.02 * L)
+    marcas = sorted(set([float(v) for v in xn]))
+    ax.set_xticks(marcas)
+    ax.set_xticklabels([f'{v:g}' for v in marcas])
+    ax.tick_params(labelsize=fuente - 1)
+    ax.set_xlabel('x (m)', fontsize=fuente)
+    hand = [Line2D([], [], color='#13315C', lw=3, label=f'{arm["n_corr"]}{nombre_var} corridas arriba y abajo (con gancho)')]
+    if bast:
+        hand.append(Line2D([], [], color='#C0392B', lw=3.4, label='Bastones B1, B2… (+n barras · longitud)'))
+    if piel and piel.get('aplica'):
+        hand.append(Line2D([], [], color='#2a9d8f', lw=1.3, ls=(0, (6, 3)),
+                           label=f'Piel: {piel["n_cara"]}{piel["var"]} por cara @ {piel["sep"]:.1f} cm'))
+    if any(t.get('confinado') for t in tramos):
+        hand.append(Patch(fc='#F7DC6F', ec='none', label='Zona de confinamiento 2h'))
+    ax.legend(handles=hand, loc='upper center', bbox_to_anchor=(0.5, -0.2), ncol=2, fontsize=fuente - 1, frameon=False)
+    ax.set_title(f'Alzado del armado (h = {h:g} cm, altura exagerada)', fontsize=fuente + 1, color='#0B2545', loc='left')
     return fig

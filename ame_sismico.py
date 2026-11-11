@@ -2003,16 +2003,20 @@ def fig_distorsiones(res):
     fig = Figure(figsize=(7.5, 5), dpi=100)
     ax = fig.add_subplot(111)
     estilos = {'DL': (AZULES[3], 'o'), 'SV': (AZULES[2], 's'), 'OI': (AZULES[0], '^')}
+    lims = sorted({e['limite'] for e in est.values() if e['limite'] is not None})
     for c, e in est.items():
         col, mk = estilos[c]
         ax.plot(e['dist'], zmid, marker=mk, color=col, lw=2, label=e['nombre'])
         if e['limite'] is not None:
             ax.axvline(e['limite'], color=col, ls='--', lw=1)
-            ax.text(e['limite'], zm[-1] * 1.02, f'{e["limite"]:g}', color=col, ha='center', fontsize=8)
+            # límites cercanos (p. ej. 0.004 y 0.005) se rotulan a distintas alturas para que no se encimen
+            fila = lims.index(e['limite']) % 2
+            ax.text(e['limite'], zm[-1] * (1.02 + 0.07 * fila), f'{e["limite"]:g}', color=col, ha='center', fontsize=10,
+                    bbox=dict(boxstyle='round,pad=0.12', fc='white', ec='none', alpha=0.9))
     ax.set_xlabel('Distorsión de entrepiso γ = Δ / h')
     ax.set_ylabel('Altura (m)')
     ax.set_title('Revisión de distorsiones por estado límite', color=AZULES[2], fontweight='bold', loc='left')
-    ax.set_ylim(0, zm[-1] * 1.08)
+    ax.set_ylim(0, zm[-1] * 1.16)
     ax.grid(alpha=0.3)
     ax.legend(loc='lower right')
     fig.tight_layout()

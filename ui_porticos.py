@@ -232,15 +232,20 @@ def mostrar(res_sismo=None, crujias_txt='', modelo=None, datos=None):
                              help='«extremos»: valores en los apoyos y el máximo de cada viga; «todas»: más valores; «ninguna»: solo la forma.')
     piso_sel = c2.selectbox('Mostrar', ['Todo el pórtico'] + [f'Solo el piso {k}' for k in range(1, res['n'] + 1)], key='p6_piso')
     piso = None if piso_sel.startswith('Todo') else int(piso_sel.split()[-1])
-    ancho = c3.slider('Ancho de la figura (pulgadas)', 10, 36, int(pt._tam(res)[0]), key='p6_ancho')
-    alto = c4.slider('Alto de la figura (pulgadas)', 6, 30, int(pt._tam(res)[1]), key='p6_alto')
-    c1, c2 = st.columns(2)
-    cols_etq = c1.checkbox('Mostrar valores en las columnas', False, key='p6_etq_col',
+    ancho = c3.slider('Ancho de la figura (pulgadas)', 8, 30, int(round(pt._tam(res)[0])), key='p6_ancho',
+                      help='10 pulgadas se lee bien en la página. Más ancho da más espacio entre etiquetas pero la letra se ve más chica '
+                           '(usa la pantalla completa de la imagen).')
+    alto = c4.slider('Alto de la figura (pulgadas)', 4, 30, int(round(pt._tam(res)[1])), key='p6_alto')
+    c1, c2, c3 = st.columns(3)
+    elementos = {'Solo vigas': 'vigas', 'Vigas y columnas': 'todos', 'Solo columnas': 'columnas'}[
+        c1.selectbox('Diagramas de', ['Solo vigas', 'Vigas y columnas', 'Solo columnas'], key='p6_elem',
+                     help='Con «Solo vigas» los diagramas no se enciman en los nudos; es lo que se diseña en el examen 3.')]
+    cols_etq = c2.checkbox('Mostrar valores en las columnas', False, key='p6_etq_col',
                            help='Apagado: solo se rotulan las vigas, que es lo que se diseña. Enciéndelo para ver también las columnas.')
-    fuente = c2.slider('Tamaño de las etiquetas', 7, 16, 10, key='p6_fuente_etq')
+    fuente = c3.slider('Tamaño de las etiquetas', 8, 16, 11, key='p6_fuente_etq')
     st.caption('Tip: pasa el cursor sobre la imagen y usa el icono de pantalla completa (arriba a la derecha) para ver todo el pórtico '
                'a todo el ancho; con «Solo el piso N» el diagrama sale aún más grande.')
-    kw = dict(etiquetas=etiquetas, piso=piso, ancho=ancho, alto=alto, columnas=cols_etq, fuente=fuente)
+    kw = dict(etiquetas=etiquetas, piso=piso, ancho=ancho, alto=alto, columnas=cols_etq, fuente=fuente, elementos=elementos)
 
     tabs = st.tabs(['Modelo', 'Gravedad', 'Sismo de ida', 'Sismo de regreso', 'Envolvente', 'Deformadas', 'Diseño por viga',
                     'Viga continua del nivel', 'Secciones (render)', 'Resumen de acero'])
