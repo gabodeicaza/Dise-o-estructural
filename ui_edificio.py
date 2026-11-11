@@ -29,21 +29,45 @@ def _df_mask(codigos, dx, dy):
                         columns=[f'{k + 1}–{k + 2}' for k in range(len(dx))])
 
 
-def _cargar_pizarron():
-    """Ejercicio del pizarrón: 8 niveles de 3.8 m, oficinas, CM = 300 kg/m², ejes 1–7 y A–D, voladizo de 4 m en la franja A–B (ejes 1–4)."""
-    ss = st.session_state
-    ss['ed_ver'] = ss.get('ed_ver', 0) + 1
-    ss['ed_cx'], ss['ed_cy'] = '8 6 8 8 8 6', '4 6 6'
-    ss['ed_tipos'] = pd.DataFrame([['Oficinas', '300', '250', '300', '180', '300', '100'],
-                                   ['Azotea', '300', '100', '300', '70', '300', '15']], columns=COL_T)
-    nombres = [f'N{k}' for k in range(8, 0, -1)]
-    ss['ed_niv'] = pd.DataFrame([[n, 'Azotea' if k == 0 else 'Oficinas', '3.8'] for k, n in enumerate(nombres)], columns=COL_N)
+EJEMPLOS = {
+    'Ejercicio del pizarrón (8 niveles, oficinas, voladizo en A–B)': dict(
+        cx='8 6 8 8 8 6', cy='4 6 6', grupo='B', vig=(40, 80), col=(70, 70), sel=('N2', 'C-4'),
+        tipos=[('Oficinas', 300, 250, 300, 180, 300, 100), ('Azotea', 300, 100, 300, 70, 300, 15)],
+        niveles=[(f'N{k}', 'Azotea' if k == 8 else 'Oficinas', 3.8) for k in range(8, 0, -1)],
+        mask=lambda: _mask_pizarron()),
+    'Apuntes · Ejemplo 1: columna B-2, biblioteca, Grupo A (p. 5)': dict(
+        cx='5 4', cy='3 2', grupo='A', vig=(25, 50), col=(40, 45), sel=('N1', 'B-2'),
+        tipos=[('Azotea', 530, 100, 530, 70, 530, 15), ('Intermedio', 610, 350, 610, 250, 610, 40)],
+        niveles=[('N3 (azotea)', 'Azotea', 3), ('N2', 'Intermedio', 3), ('N1', 'Intermedio', 4.5)],
+        mask=lambda: np.full((2, 2), pl.LOSA)),
+    'Apuntes · Ejemplo 2: columna A-1, oficinas, Grupo B (p. 8)': dict(
+        cx='4 2.5 5.4', cy='4 2', grupo='B', vig=(20, 50), col=(50, 50), sel=('N1', 'A-1'),
+        tipos=[('Azotea', 530, 100, 530, 70, 530, 15), ('Oficinas', 670, 250, 670, 180, 670, 100)],
+        niveles=[('Azotea', 'Azotea', 3), ('N2', 'Oficinas', 3), ('N1', 'Oficinas', 4)],
+        mask=lambda: np.full((2, 3), pl.LOSA)),
+}
+
+
+def _mask_pizarron():
     m = np.full((3, 6), pl.LOSA)
     m[0, :] = pl.VACIO
     m[0, :3] = pl.VOL
-    ss['ed_masks'] = {n: _df_mask(m, [8, 6, 8, 8, 8, 6], [4, 6, 6]) for n in nombres}
-    ss['ed_key_dims'] = (6, 3)
-    ss.update({'ed_grupo': 'B', 'ed_vb': 40.0, 'ed_vh': 80.0, 'ed_cb': 70.0, 'ed_ch': 70.0, 'ed_sel_niv': 'N2', 'ed_hlosa': 0.0})
+    return m
+
+
+def _cargar_ejemplo(clave=None):
+    """Llena claros, niveles, cargas, secciones y la cuadrícula de cada nivel con uno de los ejemplos."""
+    ss = st.session_state
+    e = EJEMPLOS[clave or ss.get('ed_ej') or list(EJEMPLOS)[0]]
+    ss['ed_ver'] = ss.get('ed_ver', 0) + 1
+    ss['ed_cx'], ss['ed_cy'] = e['cx'], e['cy']
+    ss['ed_tipos'] = pd.DataFrame([[t[0]] + [str(v) for v in t[1:]] for t in e['tipos']], columns=COL_T)
+    ss['ed_niv'] = pd.DataFrame([[n[0], n[1], str(n[2])] for n in e['niveles']], columns=COL_N)
+    dx, dy = pl.parse_claros(e['cx']), pl.parse_claros(e['cy'])
+    ss['ed_masks'] = {n[0]: _df_mask(e['mask'](), dx, dy) for n in e['niveles']}
+    ss['ed_key_dims'] = (len(dx), len(dy))
+    ss.update({'ed_grupo': e['grupo'], 'ed_vb': float(e['vig'][0]), 'ed_vh': float(e['vig'][1]), 'ed_cb': float(e['col'][0]),
+               'ed_ch': float(e['col'][1]), 'ed_sel_niv': e['sel'][0], 'ed_col': e['sel'][1], 'ed_hlosa': 0.0})
 
 
 def _copiar(origen, destinos):
@@ -102,8 +126,11 @@ def mostrar(res_sismo=None):
     st.caption('Edificio de varios niveles: cada nivel tiene su propia cuadrícula (puedes editarla o copiarla de otro nivel). La app baja '
                'las cargas de todas las columnas, da los pesos por nivel (para el análisis sísmico) y la carga repartida de cada viga.')
     if 'ed_niv' not in ss:
-        _cargar_pizarron()
-    st.button('Cargar el ejercicio del pizarrón (8 niveles, oficinas, voladizo en la franja A–B)', key='ed_pizarron', on_click=_cargar_pizarron)
+        _cargar_ejemplo(list(EJEMPLOS)[0])
+    c1, c2 = st.columns([3, 1])
+    c1.selectbox('Ejemplo', list(EJEMPLOS), key='ed_ej')
+    c2.write('')
+    c2.button('Cargar ejemplo', key='ed_cargar', on_click=_cargar_ejemplo)
 
     c1, c2, c3, c4, c5 = st.columns(5)
     grupo = c1.radio('Grupo', ['A', 'B'], horizontal=True, key='ed_grupo')
