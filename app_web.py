@@ -16,6 +16,7 @@ import ame_dimensionado as dim
 import ame_inverso as inv
 import ame_pdf
 import ame_sismico as ame
+import ui_bajada
 import ui_parcial3
 import ui_porticos
 import ui_viga
@@ -261,7 +262,9 @@ with st.sidebar:
     st.caption('Examen 3 (concreto reforzado, mampostería y viento): la viga continua es el flujo completo del examen; el pórtico '
                'usa las fuerzas sísmicas del examen 2.')
 
-E2, E3 = st.tabs(['Examen 2 · Análisis sísmico', 'Examen 3 · Concreto reforzado, mampostería y viento'])
+E1, E2, E3 = st.tabs(['Examen 1 · Bajada de cargas', 'Examen 2 · Análisis sísmico', 'Examen 3 · Concreto reforzado, mampostería y viento'])
+with E1:
+    ui_bajada.mostrar()
 with E2:
     T_est, T_sismo, T_res, T_herr = st.tabs(['1 · Estructura', '2 · Sismo y norma', '3 · Resultados', '4 · Herramientas'])
 with E3:
