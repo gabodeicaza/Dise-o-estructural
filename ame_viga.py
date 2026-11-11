@@ -327,6 +327,50 @@ def armado_longitudinal(env, puntos, fichas, b, fc, fy, var, d, As_min, ab, paso
     return dict(n_corr=n_c, As_corr=As_c, MRc=MRc, bastones=bast, lineas=[t for t in lin if t])
 
 
+def comprobaciones(env, puntos, fichas, b, fc, fy):
+    """Comprobaciones independientes que se corren con los datos del usuario (no reutilizan la fórmula que se está revisando):
+    equilibrio vertical, momento nulo en extremos libres o articulados, estática de los volados, As con el método de la cuantía q
+    (distinto de la cuadrática) y MR ≥ Mu. Devuelve lista de dict(que, programa, referencia, ok, como)."""
+    xn, tipos = np.asarray(env['xn'], float), env['tipos']
+    ne = len(xn) - 1
+    wu, Pu = np.asarray(env['wu'], float) * np.ones(ne), np.asarray(env['Pu'], float)
+    out = []
+
+    def add(que, prog, ref, como, tol=1e-6):
+        out.append(dict(que=que, programa=float(prog), referencia=float(ref), como=como,
+                        ok=abs(prog - ref) <= tol * max(1.0, abs(ref))))
+    r = resolver_nodos(xn, tipos, wu, Pu)
+    total = float(np.sum(wu * np.diff(xn)) + Pu.sum())
+    add('Equilibrio vertical: ΣR = Σ cargas (t)', r['R'].sum(), total, 'Σ wu·L + Σ Pu')
+    for k, lado in ((0, 'izquierdo'), (ne, 'derecho')):
+        if tipos[k] in ('—', 'Articulado'):
+            m = r['M'][0][0] if k == 0 else r['M'][-1][-1]
+            add(f'Momento en el extremo {lado} (t·m)', m, 0.0, 'extremo libre o articulado: M = 0', 1e-6)
+    ap = [k for k, t in enumerate(tipos) if t != '—']
+    if ap and ap[0] > 0:
+        k0 = ap[0]
+        Mv = sum(wu[i] * (xn[i + 1] - xn[i]) * (xn[k0] - (xn[i] + xn[i + 1]) / 2) for i in range(k0)) + \
+            sum(Pu[i] * (xn[k0] - xn[i]) for i in range(k0))
+        add('Volado izquierdo: M en el apoyo (t·m)', -r['M'][k0 - 1][-1], Mv, 'estática: Σ carga × brazo')
+    if ap and ap[-1] < ne:
+        k1 = ap[-1]
+        Mv = sum(wu[i] * (xn[i + 1] - xn[i]) * ((xn[i] + xn[i + 1]) / 2 - xn[k1]) for i in range(k1, ne)) + \
+            sum(Pu[i] * (xn[i] - xn[k1]) for i in range(k1 + 1, ne + 1))
+        add('Volado derecho: M en el apoyo (t·m)', -r['M'][k1][0], Mv, 'estática: Σ carga × brazo')
+    fcc = 0.85 * fc
+    for p, f in zip(puntos, fichas):
+        nom = p['nombre'].split(' (')[0]
+        if f.get('As_req') and f.get('d'):
+            arg = 1 - 2 * p['Mu'] * 1e5 / (0.9 * b * f['d'] ** 2 * fcc)
+            if arg > 0:
+                q = 1 - math.sqrt(arg)
+                add(f'{nom}: As requerida (cm²)', f['As_req'], q * fcc / fy * b * f['d'], 'método de la cuantía q', 1e-6)
+        if f.get('MR') and f.get('As_real'):
+            out.append(dict(que=f'{nom}: MR ≥ Mu (t·m)', programa=float(f['MR']), referencia=float(p['Mu']),
+                            como='MR del armado contra Mu', ok=f['MR'] >= p['Mu'] - 1e-9))
+    return out
+
+
 # ------------------------------------------------------------------ figuras
 # Las figuras se ven en la página a ~940 px de ancho: se dibujan de ANCHO pulgadas con letra de FUENTE puntos para que el texto
 # quede de ~14 px en pantalla. Ninguna etiqueta va encima de una línea: todas llevan fondo blanco y se separan del trazo.

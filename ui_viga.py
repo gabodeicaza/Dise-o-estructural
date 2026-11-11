@@ -241,6 +241,8 @@ def mostrar():
     st.pyplot(fig, width='stretch')
     plt.close(fig)
 
+    _comprobaciones(av.comprobaciones(env, puntos, fichas, b, fc, fy))
+
     st.markdown('#### 4 · Armado longitudinal: corridas y bastones')
     d_c = viga['d']
     arm = av.armado_longitudinal(env, puntos, fichas, b, fc, fy, var, d_c, viga['lim']['As_min'], ab)
@@ -339,6 +341,20 @@ def mostrar():
 
     st.markdown('#### 8 · Alzado del armado')
     _imagen(av.figura_alzado_viga(env, arm, zonas, seps, h, r_dibujo, var, est, tramos=tramos, piel=piel), 'alzado_viga')
+
+
+def _comprobaciones(lista):
+    """Comprobaciones automáticas con los datos capturados: cada una recalcula un resultado por otro camino."""
+    malas = [c for c in lista if not c['ok']]
+    with st.expander(('✔ Comprobaciones automáticas: todas pasan' if not malas else f'✘ Comprobaciones automáticas: {len(malas)} no pasan')
+                     + f' ({len(lista)} revisiones)', expanded=bool(malas)):
+        st.caption('Cada renglón recalcula un resultado por un camino distinto al del programa (equilibrio, estática del volado, '
+                   'método de la cuantía q) con TUS datos. Si algo no coincide, aparece en rojo y el expansor se abre solo.')
+        st.dataframe(pd.DataFrame([['✔' if c['ok'] else '✘', c['que'], c['programa'], c['referencia'], c['como']] for c in lista],
+                                  columns=['', 'Qué se revisa', 'Programa', 'Otro camino', 'Cómo']).round(4),
+                     hide_index=True, width='stretch')
+        if malas:
+            st.error('Hay resultados que no coinciden: revisa los datos (apoyos, cargas, sección) antes de usar los resultados.')
 
 
 def _calculadora_losas():
