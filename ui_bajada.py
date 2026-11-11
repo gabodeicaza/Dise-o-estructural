@@ -2,19 +2,22 @@
 import pandas as pd
 import streamlit as st
 
+import numpy as np
+
 import ame_bajada as bj
+import ame_planta as pl
 
 COL_T = ['Tipo de piso', 'CM CG', 'CV máx CG', 'CM CA', 'CV acc CA', 'CM CS', 'CV med CS']
 COL_N = ['Nivel', 'Tipo de piso', 'At (m²)', 'L viga (m)', 'h col (m)']
 
 EJEMPLOS = {
     'Ejemplo 1 · columna B-2, biblioteca, Grupo A (apuntes p. 5)': dict(
-        grupo='A', vig=(25, 50), col=(40, 45),
+        grupo='A', vig=(25, 50), col=(40, 45), planta=('5 4', '3 2', 'B', 2),
         tipos=[('Azotea', 530, 100, 530, 70, 530, 15), ('Intermedio', 610, 350, 610, 250, 610, 40)],
         niveles=[('N3 (azotea)', 'Azotea', 11.25, 7, 0), ('N2', 'Intermedio', 11.25, 7, 3), ('N1', 'Intermedio', 11.25, 7, 3),
                  ('PB', 'Intermedio', 0, 0, 4.5)]),
     'Ejemplo 2 · columna A-1, oficinas, Grupo B (apuntes p. 8)': dict(
-        grupo='B', vig=(20, 50), col=(50, 50),
+        grupo='B', vig=(20, 50), col=(50, 50), planta=('4 2.5 5.4', '4 2', 'A', 1),
         tipos=[('Azotea', 530, 100, 530, 70, 530, 15), ('Oficinas', 670, 250, 670, 180, 670, 100)],
         niveles=[('Azotea', 'Azotea', 4, 4, 0), ('N2', 'Oficinas', 4, 4, 3), ('N1', 'Oficinas', 4, 4, 3), ('PB', 'Oficinas', 0, 0, 4)]),
 }
@@ -29,12 +32,85 @@ def _cargar(clave):
     st.session_state['bj_ver'] = st.session_state.get('bj_ver', 0) + 1
     st.session_state['bj_tipos'] = pd.DataFrame([[t[0]] + [str(v) for v in t[1:]] for t in e['tipos']], columns=COL_T)
     st.session_state['bj_niv'] = pd.DataFrame([[n[0], n[1]] + [str(v) for v in n[2:]] for n in e['niveles']], columns=COL_N)
+    cx, cy, fila, eje = e['planta']
+    st.session_state.update({'bj_cx': cx, 'bj_cy': cy, 'bj_mask_key': None, 'bj_sel': f'{fila}-{eje}'})
     st.session_state.update({'bj_grupo': e['grupo'], 'bj_vb': float(e['vig'][0]), 'bj_vh': float(e['vig'][1]),
                              'bj_cb': float(e['col'][0]), 'bj_ch': float(e['col'][1])})
 
 
 def _kg(x):
     return f'{x:,.2f}'.rstrip('0').rstrip('.') if abs(x - round(x)) > 1e-9 else f'{x:,.0f}'
+
+
+def _planta():
+    st.markdown('##### Planta (tablero)')
+    st.caption('Define los ejes y marca dónde hay losa: las columnas aparecen en las intersecciones de los tableros marcados y el '
+               'área tributaria de cada una se calcula sola (mitad de cada claro, como en los apuntes). Desmarca tableros para '
+               'plantas en L, patios o huecos.')
+    c1, c2 = st.columns(2)
+    cx = c1.text_input('Claros en X (m), de izquierda a derecha — ejes 1, 2, 3…', key='bj_cx')
+    cy = c2.text_input('Claros en Y (m), de arriba hacia abajo — ejes A, B, C…', key='bj_cy')
+    try:
+        dx, dy = pl.parse_claros(cx), pl.parse_claros(cy)
+    except ValueError as e:
+        st.error(str(e))
+        return None
+    nx, ny = len(dx), len(dy)
+    if st.session_state.get('bj_mask_key') != (nx, ny):
+        st.session_state['bj_mask'] = pd.DataFrame(True, index=[f'{L}–{pl.letras(ny + 1)[k + 1]}' for k, L in enumerate(pl.letras(ny))],
+                                                    columns=[f'{k + 1}–{k + 2}' for k in range(nx)])
+        st.session_state['bj_mask_key'] = (nx, ny)
+        st.session_state['bj_mask_v'] = st.session_state.get('bj_mask_v', 0) + 1
+    ed = st.data_editor(st.session_state['bj_mask'], width='stretch', key=f"bj_mask_ed_{st.session_state.get('bj_mask_v', 0)}",
+                        column_config={c: st.column_config.CheckboxColumn(c) for c in st.session_state['bj_mask'].columns})
+    mask = ed.to_numpy(dtype=bool)
+    if not mask.any():
+        st.info('Marca al menos un tablero de losa.')
+        return None
+    ex = pl.nodos_existentes(mask)
+    L = pl.letras(ny + 1)
+    cols = [f'{L[j]}-{i + 1}' for j in range(ny + 1) for i in range(nx + 1) if ex[j, i]]
+    c1, c2 = st.columns(2)
+    sel = c1.selectbox('Columna a bajar (eje fila-columna)', cols, key='bj_sel')
+    j, i = L.index(sel.split('-')[0]), int(sel.split('-')[1]) - 1
+    At, Lv = pl.columna(mask, dx, dy, i, j)
+    tr = pl.tramos_viga(mask, dx, dy)
+    nombres = [pl.nombre_tramo(t, L) for t in tr]
+    ver = c2.selectbox('Tramo de viga a resaltar (opcional)', ['—'] + nombres, key='bj_tramo')
+    t_sel = tr[nombres.index(ver)] if ver != '—' else None
+    modo_txt = st.radio('Qué marcar en la planta', ['Área de la columna elegida', 'Áreas de todas las columnas',
+                                                    'Áreas de las vigas (reparto a 45°)'], horizontal=True, key='bj_modo')
+    modo = {'Á': 'sel'}.get(modo_txt[0], 'sel')
+    modo = 'todas' if 'todas' in modo_txt else 'vigas' if 'vigas' in modo_txt else 'sel'
+    col_a, col_b = st.columns([3, 2])
+    with col_a:
+        import matplotlib.pyplot as plt
+        st.pyplot(pl.figura_planta(mask, dx, dy, (i, j), t_sel, modo), width='stretch')
+        plt.close('all')
+    with col_b:
+        st.metric(f'Área tributaria de {sel}', f'{At:g} m²')
+        st.metric('Metros de viga que bajan a la columna', f'{Lv:g} m')
+        if t_sel:
+            st.metric(f'Viga {ver}: área de losa que recibe', f"{t_sel['A']:.3f} m²")
+            st.caption(f"Claro L = {t_sel['L']:g} m → w = w_losa·A/L = w_losa × {t_sel['A'] / t_sel['L']:.3f} m "
+                       '(súmale el peso propio y usa el cuadro de abajo para el factor de carga).')
+        def usar():
+            df = st.session_state['bj_niv'].copy()
+            vig = [str(v) for v in df['At (m²)']]
+            for k in range(len(df)):
+                if _num(df.iloc[k]['At (m²)']) != 0:
+                    df.iloc[k, df.columns.get_loc('At (m²)')] = f'{At:g}'
+                    df.iloc[k, df.columns.get_loc('L viga (m)')] = f'{Lv:g}'
+            st.session_state['bj_niv'] = df
+            st.session_state['bj_ver'] = st.session_state.get('bj_ver', 0) + 1
+        st.button('Usar esta At y estos metros de viga en todos los niveles con losa', key='bj_usar', on_click=usar)
+    with st.expander('Tabla de vigas: claro y área tributaria de cada tramo'):
+        st.dataframe(pd.DataFrame([[n, t['L'], round(t['A'], 3), round(t['A'] / t['L'], 3)] for n, t in zip(nombres, tr)],
+                                  columns=['Tramo', 'L (m)', 'A losa (m²)', 'A/L (m)']), hide_index=True, width='stretch')
+        st.caption('Tablero de dos direcciones (lado largo ≤ 2 × lado corto): trapecio hacia las vigas largas y triángulo hacia las '
+                   'cortas; si es más alargado trabaja en una dirección y solo carga a las vigas largas. Si tu losa lleva vigas '
+                   'secundarias (como en el ejemplo de la p. 8), captura sus áreas a mano en la tabla de niveles.')
+    return mask
 
 
 def mostrar():
@@ -59,6 +135,8 @@ def mostrar():
     ch = c2.number_input('Columna h (cm)', 10.0, 300.0, 45.0, key='bj_ch')
     pp_v, pp_c = bj.pp_lineal(vb, vh, gam), bj.pp_lineal(cb, ch, gam)
     c3.metric('p.p. viga / columna (kg/m)', f'{pp_v:g} / {pp_c:g}')
+
+    _planta()
 
     st.markdown('##### Cargas por m² de cada tipo de piso (kg/m²)')
     st.caption('CG = gravedad (CM y CVmáx), CA = accidental (CM y CVacc), CS = servicio (CM y CVmed). Cada CM ya incluye losa, '

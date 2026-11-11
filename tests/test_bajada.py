@@ -37,3 +37,36 @@ def test_ejemplo_columna_A1_grupo_B():
 def test_tipo_inexistente():
     with pytest.raises(ValueError):
         bj.bajada([dict(nombre='x', At=1, tipo='no', Lv=0, hc=0)], {}, 0, 0)
+
+
+def test_planta_areas_columnas_de_los_apuntes():
+    import numpy as np
+
+    import ame_planta as pl
+    m = np.ones((2, 2), bool)
+    assert pl.columna(m, [5, 4], [3, 2], 1, 1) == (11.25, 7.0)          # B-2 (ejemplo 1)
+    m2 = np.ones((2, 3), bool)
+    assert pl.columna(m2, [4, 2.5, 5.4], [4, 2], 0, 0) == (4.0, 4.0)    # A-1 (ejemplo 2)
+    m3 = np.ones((2, 2), bool); m3[1, 1] = False                        # planta en L: la columna B-2 es de esquina entrante
+    assert pl.columna(m3, [5, 4], [3, 2], 1, 1)[0] == pytest.approx(5 / 2 * 3 / 2 + 4 / 2 * 3 / 2 + 5 / 2 * 2 / 2)
+    assert not pl.nodos_existentes(m3)[2, 2]
+
+
+def test_planta_viga_area_45():
+    import numpy as np
+
+    import ame_planta as pl
+    t = pl.tramos_viga(np.ones((1, 1), bool), [5], [4])
+    largo = next(x for x in t if x['tipo'] == 'x')
+    corto = next(x for x in t if x['tipo'] == 'y')
+    assert largo['A'] == pytest.approx((2 * 5 - 4) * 4 / 4) and corto['A'] == pytest.approx(4)
+
+
+def test_regiones_45_coinciden_con_areas_de_viga():
+    import ame_planta as pl
+    for w, h in [(5, 4), (4, 5), (4, 4), (6, 2), (2, 6)]:
+        reg = pl.regiones_tablero(w, h)
+        assert sum(a for _, _, a in reg) == pytest.approx(w * h)
+        lado_largo = {'arriba': 'x', 'abajo': 'x'} if w >= h else {'izq': 'y', 'der': 'y'}
+        suma_largos = sum(a for _, v, a in reg if v in lado_largo)
+        assert suma_largos == pytest.approx(2 * pl.area_a_viga(min(w, h), max(w, h), True))
