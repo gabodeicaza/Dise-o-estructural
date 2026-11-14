@@ -51,7 +51,8 @@ EJEMPLOS = {
         niveles=[('Azotea', 'Azotea', 3), ('N2', 'Oficinas', 3), ('N1', 'Oficinas', 4)],
         mask=lambda: np.full((2, 3), pl.LOSA)),
 }
-USOS = {'Oficinas': (250, 180, 100), 'Azotea': (100, 70, 15), 'Biblioteca': (350, 250, 40), 'Otro (capturar CV)': None}
+USOS = {'Oficinas': (250, 180, 100), 'Azotea': (100, 70, 15), 'Biblioteca': (350, 250, 40), 'Vivienda': (170, 90, 70),
+        'Otro (capturar CV)': None}
 
 
 def _mask_pizarron():
@@ -273,6 +274,7 @@ def mostrar(res_sismo=None):
                'Agrega o quita filas para cambiar el número de niveles.')
     conf = {c: st.column_config.TextColumn(c) for c in COL_N[1:]}
     conf['Incluir'] = st.column_config.CheckboxColumn('Incluir', default=True)
+    conf['Tipo de piso'] = st.column_config.SelectboxColumn('Tipo de piso', options=list(ss['ed_pisos']), required=True)
     ndf = st.data_editor(ss['ed_niv'], num_rows='dynamic', hide_index=True, width='stretch', key=f'ed_n_{v}', column_config=conf)
     ndf = ndf.dropna(subset=COL_N[1:])
 
