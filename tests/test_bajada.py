@@ -154,7 +154,9 @@ def test_formato_de_apuntes_totales_y_columnas_sin_losa():
     # los totales del formato de los apuntes (p. 5 y 7): Azotea 530/630, Intermedio 610/960, Oficinas 670/920, Terraza 700/950
     esperado = {'Azotea': (530, 100), 'Intermedio': (610, 350), 'Oficinas': (670, 250), 'Terraza': (700, 250)}
     vistos = {}
-    for e in ue.EJEMPLOS.values():
+    for clave, e in ue.EJEMPLOS.items():
+        if clave.startswith('Tutorial'):
+            continue
         for nom, hl, comp, cv, uso in e['tipos']:
             if nom in esperado:
                 t = ue._tipo(dict(hl=str(hl), comp=ue._df_pisos(comp), cv=[str(x) for x in cv]))
@@ -183,3 +185,25 @@ def test_calculadora_de_cargas_formato_de_los_apuntes():
     assert [f[3] for f in filas] == [False, False, True, False, True]
     _, cm_acc, cv_acc = bj.desglose_piso(15, 2.4, [('CM adicional', 140, None, 150)], (250, 180, 100), 'CS')
     assert cm_acc == pytest.approx(510) and cv_acc == 100
+
+
+def test_comprobacion_tutorial_etabs():
+    import ame_edificio as ed
+    import ame_planta as pl
+    import ui_edificio as ue
+    e = ue.EJEMPLOS['Tutorial ETABS · edificio 20×10 m, 3 niveles, oficinas (guía con comprobación)']
+    dx, dy = pl.parse_claros(e['cx']), pl.parse_claros(e['cy'])
+    tipos = {t[0]: ue._tipo(dict(hl=str(t[1]), comp=ue._df_pisos(t[2]), cv=[str(x) for x in t[3]])) for t in e['tipos']}
+    niveles = [dict(nombre=n[0], tipo=n[1], h=float(n[2])) for n in e['niveles']]
+    masks = [e['mask']() for _ in niveles]
+    r = ed.comprobacion(niveles, masks, dx, dy, tipos, 300.0, 384.0, {'Azotea': 15, 'Oficinas': 15}, 2.4, 'CG', 'B')
+    t = r['tot']
+    assert t['pp_losa'] / 1000 == pytest.approx(216) and t['pp_vigas'] / 1000 == pytest.approx(99) and t['pp_cols'] / 1000 == pytest.approx(51.84)
+    assert t['cm_ad'] / 1000 == pytest.approx(84) and t['cv'] / 1000 == pytest.approx(120) and t['servicio'] / 1000 == pytest.approx(570.84)
+    assert r['suma_cols'] == pytest.approx(t['servicio'])
+    pn = sorted(round(c[2] / 1000, 2) for c in r['cols'])
+    assert pn == [21.08] * 4 + [36.46] * 8 + [64.96] * 3
+    # práctica 1 de la guía: losa de 20 cm -> 642.84 t
+    tipos20 = {t[0]: ue._tipo(dict(hl='20', comp=ue._df_pisos(t[2]), cv=[str(x) for x in t[3]])) for t in e['tipos']}
+    r20 = ed.comprobacion(niveles, masks, dx, dy, tipos20, 300.0, 384.0, {'Azotea': 20, 'Oficinas': 20}, 2.4, 'CG', 'B')
+    assert r20['tot']['servicio'] / 1000 == pytest.approx(642.84)

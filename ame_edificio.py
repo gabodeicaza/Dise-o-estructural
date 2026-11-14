@@ -245,3 +245,31 @@ def figura_3d(niveles, masks, dx, dy, extras=None, resaltar=None, elev=24, azim=
     if titulo:
         ax.set_title(titulo, fontsize=13, fontweight='bold')
     return fig
+
+
+def comprobacion(niveles, masks, dx, dy, tipos, pp_viga, pp_col, hl_tipo, gamma=2.4, caso='CG', grupo='B', extras=None):
+    """Comprobación del peso total (Paso D de la guía): por nivel PP de la losa (espesor × γ), CM adicional, CV, PP de vigas y de
+    columnas (kg), y la misma suma obtenida columna por columna (suma de las cargas en la base). hl_tipo = {tipo: espesor (cm)}.
+    El tramo de columna se asigna al nivel que lo carga (el de arriba); el último nivel carga el tramo hasta el desplante."""
+    extras = extras or [None] * len(masks)
+    ex = [pl.nodos_existentes(m, x) for m, x in zip(masks, extras)]
+    filas = []
+    for r, (n, m) in enumerate(zip(niveles, masks)):
+        res = pl.resumen_nivel(m, dx, dy, extras[r])
+        cm, cv = tipos[n['tipo']][caso]
+        pp_l = min(hl_tipo.get(n['tipo'], 0.0) / 100 * gamma * 1000, cm)
+        sig = ex[r + 1] if r + 1 < len(niveles) else np.ones_like(ex[r])
+        n_seg = int(np.sum(ex[r] & sig))
+        filas.append(dict(nombre=n['nombre'], area=res['area'], pp_l=pp_l, pp_losa=res['area'] * pp_l, cm_ad=res['area'] * (cm - pp_l),
+                          cv=res['area'] * cv, vigas_m=res['vigas'], pp_vigas=res['vigas'] * pp_viga, n_seg=n_seg,
+                          col_m=n_seg * n['h'], pp_cols=n_seg * n['h'] * pp_col))
+    t = {k: sum(f[k] for f in filas) for k in ('pp_losa', 'pp_vigas', 'pp_cols', 'cm_ad', 'cv')}
+    t['pp'] = t['pp_losa'] + t['pp_vigas'] + t['pp_cols']
+    t['servicio'] = t['pp'] + t['cm_ad'] + t['cv']
+    fcm, fcv = bj.FC_GRUPO[grupo] if caso == 'CG' else (bj.FC_CASO[caso],) * 2
+    t['factorada_grupo'] = fcm * (t['pp'] + t['cm_ad']) + fcv * t['cv']
+    cols = []
+    for (j, i), fl in columnas_edificio(niveles, masks, dx, dy, tipos, pp_viga, pp_col, extras).items():
+        d = fl[-1][caso]
+        cols.append((j, i, d['cm'] + d['cv'], d['cm'] * fcm + d['cv'] * fcv))
+    return dict(filas=filas, tot=t, cols=cols, suma_cols=sum(c[2] for c in cols), suma_cols_u=sum(c[3] for c in cols), fc=(fcm, fcv))

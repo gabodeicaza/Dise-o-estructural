@@ -51,6 +51,11 @@ EJEMPLOS = {
         niveles=[('Azotea', 'Azotea', 3), ('N2', 'Oficinas', 3), ('N1', 'Oficinas', 4)],
         mask=lambda: np.full((2, 3), pl.LOSA)),
 }
+EJEMPLOS['Tutorial ETABS · edificio 20×10 m, 3 niveles, oficinas (guía con comprobación)'] = dict(
+    cx='5 5 5 5', cy='5 5', grupo='B', vig=(25, 50), col=(40, 40), sel=('N1', 'B-3'),
+    tipos=[('Azotea', 15, [('CM adicional', 140)], (100, 70, 15), 'Azotea'), ('Oficinas', 15, [('CM adicional', 140)], (250, 180, 100), 'Oficinas')],
+    niveles=[('N3 (azotea)', 'Azotea', 3), ('N2', 'Oficinas', 3), ('N1', 'Oficinas', 3)],
+    mask=lambda: np.full((2, 4), pl.LOSA))
 USOS = {'Oficinas': (250, 180, 100), 'Azotea': (100, 70, 15), 'Biblioteca': (350, 250, 40), 'Vivienda': (170, 90, 70),
         'Otro (capturar CV)': None}
 
@@ -407,8 +412,8 @@ def mostrar(res_sismo=None):
             st.caption('Niveles a la izquierda con la altura de cada entrepiso, E1, E2… a la derecha (E1 = el de abajo), columnas y vigas del eje, y '
                        'apoyos empotrados. En naranja, la columna elegida cuando está en este eje.')
 
-        tab_a, tab_b, tab_c, tab_d, tab_e = st.tabs(['Bajada de la columna', 'Todas las columnas', 'Pesos por nivel',
-                                                     'Cargas de las vigas', 'Análisis de un eje (vigas)'])
+        tab_a, tab_b, tab_c, tab_d, tab_e, tab_f = st.tabs(['Bajada de la columna', 'Todas las columnas', 'Pesos por nivel',
+                                                            'Cargas de las vigas', 'Análisis de un eje (vigas)', 'Comprobación (peso total)'])
         with tab_a:
             filas = todos.get((cj, ci))
             if not filas:
@@ -490,6 +495,9 @@ def mostrar(res_sismo=None):
         with tab_e:
             analisis_eje(niveles, masks, dx, dy, tipos, pp_v, pp_c, vb, vh, cb, ch, fc, grupo, res_sismo, L, extras)
 
+        with tab_f:
+            _comprobacion(niveles, masks, dx, dy, tipos, pp_v, pp_c, extras, grupo, gam, L)
+
     resultados()
 
 
@@ -563,3 +571,66 @@ def analisis_eje(niveles, masks, dx, dy, tipos, pp_v, pp_c, vb, vh, cb, ch, fc, 
     agr = c3.checkbox('Permitir barras de 2 en 2 en un lecho', True, key='ed_eje_agr')
     up._resultados(res, res['geo'], F, combos, {'Gravedad': (fcm, fcv, 0.0, 0.0)}, 'CM+CVacc + 100%SX (+30%SY)', 'CM+CVacc − 100%SX', fc,
                    4200.0, est, rec, agr, True, pref='ed_eje')
+
+
+def _comprobacion(niveles, masks, dx, dy, tipos, pp_v, pp_c, extras, grupo, gam, L):
+    """El «número de control» de la guía: el peso total del edificio por patrón (PP, CM, CV), contra la suma de las columnas y contra
+    lo que da ETABS."""
+    ss = st.session_state
+    hl_tipo = {nom: _num(p.get('hl', '0') or 0) for nom, p in ss['ed_pisos'].items()}
+    c1, c2 = st.columns([2, 1])
+    caso = c1.radio('Combinación', bj.CASOS, format_func=lambda c: bj.NOMBRE_CASO[c], horizontal=True, key='ed_cmp_caso',
+                    help='La guía llama «servicio» a PP + CM + CV con la carga viva de 250 y 100 kg/m² y factor 1.0: eso es la combinación de '
+                         'gravedad (CVmáx) sin factores. La combinación de servicio de la norma usa CVmed.')
+    fact = c2.number_input('Factor de la combinación «factorada»', 1.0, 2.0, 1.4, 0.05, key='ed_cmp_fact')
+    r = ed.comprobacion(niveles, masks, dx, dy, tipos, pp_v, pp_c, hl_tipo, gam, caso, grupo, extras)
+    t = r['tot']
+    k = lambda x: f'{x / 1000:,.2f}'
+    mas = ' + …' if len(r['filas']) > 2 else ''
+    st.markdown('**Peso total del edificio** (tu número de control)')
+    filas = [('PP losas', ' + '.join(f"{f['area']:g} m² × {f['pp_l'] / 1000:.3f}" for f in r['filas'][:2]) + mas, k(t['pp_losa']), False),
+             ('PP vigas', ' + '.join(f"{f['vigas_m']:g} m × {pp_v / 1000:.3f}" for f in r['filas'][:2]) + mas, k(t['pp_vigas']), False),
+             ('PP columnas', ' + '.join(f"{f['n_seg']} × {niveles[n]['h']:g} m × {pp_c / 1000:.3f}" for n, f in enumerate(r['filas'][:2])) + mas,
+              k(t['pp_cols']), False),
+             ('Peso propio total (PP)', 'Losas + vigas + columnas', k(t['pp']), True),
+             ('CM adicional', 'Σ área × CM adicional', k(t['cm_ad']), False),
+             ('CV', 'Σ área × CV de cada nivel', k(t['cv']), False),
+             (f'TOTAL ({caso}, sin factores)', 'PP + CM + CV', k(t['servicio']), True),
+             (f'Factorada (× {fact:g})', f"{k(t['servicio'])} × {fact:g}", k(t['servicio'] * fact), False),
+             (f'Con factores del grupo {grupo}' if caso == 'CG' else 'Con los factores de la combinación',
+              f"CM×{r['fc'][0]:g} + CV×{r['fc'][1]:g}", k(t['factorada_grupo']), False)]
+    st.markdown(_tabla_html(['Concepto', 'Cálculo', 't', ''], [(a, b, c, '', neg) for a, b, c, neg in filas]), unsafe_allow_html=True)
+    with st.expander('Desglose por nivel'):
+        df = pd.DataFrame([[f['nombre'], f['area'], f['pp_losa'] / 1000, f['vigas_m'], f['pp_vigas'] / 1000, f['n_seg'], f['pp_cols'] / 1000,
+                            f['cm_ad'] / 1000, f['cv'] / 1000] for f in r['filas']],
+                          columns=['Nivel', 'Losa (m²)', 'PP losa (t)', 'Viga (m)', 'PP vigas (t)', 'Tramos de col.', 'PP col. (t)', 'CM adic. (t)', 'CV (t)'])
+        st.dataframe(df.style.format({c: '{:,.2f}' for c in df.columns[1:]}), hide_index=True, width='stretch')
+        st.caption('El tramo de columna se asigna al nivel que lo carga (el de arriba); el último nivel carga el tramo hasta el desplante.')
+
+    st.markdown('**La gran comprobación: la suma de las columnas tiene que dar el mismo total**')
+    grupos = {}
+    for j, i, pn, _ in r['cols']:
+        grupos.setdefault(round(pn / 1000, 2), []).append(f'{L[j]}-{i + 1}')
+    fg = [(f'{len(n)} columnas', ', '.join(n), f'{pn * len(n):,.2f}', f'{pn:,.2f}', False) for pn, n in sorted(grupos.items())]
+    fg.append(('Suma de las columnas', f'{len(r["cols"])} columnas', k(r['suma_cols']), '', True))
+    st.markdown(_tabla_html(['Columnas con la misma carga', 'Ejes', 't (todas)', 't (cada una)'], fg), unsafe_allow_html=True)
+    dif = r['suma_cols'] - t['servicio']
+    (st.success if abs(dif) < 1 else st.error)(
+        f"Suma de columnas {k(r['suma_cols'])} t  vs  total {k(t['servicio'])} t  →  diferencia {dif / 1000:+,.3f} t. "
+        + ('La carga no se perdió en ningún tablero.' if abs(dif) < 1 else
+           'No coinciden: revisa que todos los tableros tengan viga en el contorno y columna en las esquinas.'))
+
+    with st.expander('Comparar con lo que te dio ETABS (Base Reactions, FZ)'):
+        st.caption('Captura en toneladas lo que te dio la tabla de reacciones. Menos de 1 % es redondeo; si es más, el patrón que falla te dice dónde '
+                   'buscar (CM mal → multiplicador o asignación; PP mal → secciones o elementos faltantes; todo ×1000 → unidades).')
+        d1, d2, d3, d4 = st.columns(4)
+        vals = [('PP', t['pp'], d1.number_input('PP (t)', 0.0, key='ed_et_pp', format='%.2f')),
+                ('CM', t['cm_ad'], d2.number_input('CM (t)', 0.0, key='ed_et_cm', format='%.2f')),
+                ('CV', t['cv'], d3.number_input('CV (t)', 0.0, key='ed_et_cv', format='%.2f')),
+                ('Total', t['servicio'], d4.number_input('Servicio (t)', 0.0, key='ed_et_tot', format='%.2f'))]
+        rows = []
+        for nom, mio, et in vals:
+            if et > 0:
+                p = (et - mio / 1000) / (mio / 1000) * 100 if mio else 0.0
+                rows.append(f"**{nom}**: tu cuenta {mio / 1000:,.2f} t · ETABS {et:,.2f} t · diferencia {p:+.2f} % " + ('✅' if abs(p) < 1 else '⚠️'))
+        st.markdown('\n\n'.join(rows) if rows else 'Aún no capturas valores de ETABS.')
