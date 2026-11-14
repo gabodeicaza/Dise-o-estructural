@@ -155,9 +155,9 @@ def test_formato_de_apuntes_totales_y_columnas_sin_losa():
     esperado = {'Azotea': (530, 100), 'Intermedio': (610, 350), 'Oficinas': (670, 250), 'Terraza': (700, 250)}
     vistos = {}
     for e in ue.EJEMPLOS.values():
-        for nom, comp, cv in e['tipos']:
+        for nom, hl, comp, cv, uso in e['tipos']:
             if nom in esperado:
-                t = bj.tipo_desde_componentes([(c, v, '', '') for c, v in comp], cv)
+                t = ue._tipo(dict(hl=str(hl), comp=ue._df_pisos(comp), cv=[str(x) for x in cv]))
                 vistos[nom] = (t['CG'][0], t['CG'][1])
                 assert t['CA'][0] == t['CG'][0] and t['CA'][1] == cv[1] and t['CS'][1] == cv[2]
     assert vistos == esperado
@@ -173,3 +173,13 @@ def test_formato_de_apuntes_totales_y_columnas_sin_losa():
     assert (0, 2) in sin and sin[(0, 2)][1]['hc'] == 0                  # sin forzar, la columna del eje 3 no baja del nivel 2
     assert con[(0, 2)][1]['hc'] == 3 and con[(0, 2)][1]['At'] == 0 and con[(0, 2)][-1]['nombre'] == 'Base'
     assert ed.figura_3d(niv, [arriba, abajo], dx, dy, [None, extra_abajo], (0, 2), 24, -62, 't', {'N1'}) is not None
+
+
+def test_calculadora_de_cargas_formato_de_los_apuntes():
+    # ejemplo del formato: losa 0.15 m × 2400 = 360 + 140 = 500; CV oficinas 250 → total 750; azotea CV 100
+    filas, cm, cv = bj.desglose_piso(15, 2.4, [('CM adicional', 140, None, None)], (250, 180, 100), 'CG', 'Oficinas')
+    assert filas[0][2] == pytest.approx(360) and cm == pytest.approx(500) and cv == 250
+    assert filas[-1][2] == pytest.approx(750) and filas[-1][1] == '500 + 250'
+    assert [f[3] for f in filas] == [False, False, True, False, True]
+    _, cm_acc, cv_acc = bj.desglose_piso(15, 2.4, [('CM adicional', 140, None, 150)], (250, 180, 100), 'CS')
+    assert cm_acc == pytest.approx(510) and cv_acc == 100

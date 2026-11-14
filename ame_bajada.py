@@ -127,3 +127,28 @@ def tipo_desde_componentes(comp, cv):
         for k in range(3):
             cm[k] += float(vals[k])
     return dict(CG=(cm[0], float(cv[0])), CA=(cm[1], float(cv[1])), CS=(cm[2], float(cv[2])))
+
+
+NOMBRE_CV = {'CG': 'CVmáx', 'CA': 'CVacc', 'CS': 'CVmed'}
+
+
+def desglose_piso(hl_cm, gamma_tm3, comp, cv, caso='CG', uso=''):
+    """Cálculo de las cargas de un tipo de piso, renglón por renglón como en los apuntes. comp = [(concepto, CG, CA, CS)] de la carga
+    muerta adicional (CA o CS vacíos o None = igual que CG); cv = (CVmáx, CVacc, CVmed). Devuelve (filas, CM, CV) con cada fila
+    (concepto, cálculo, kg/m², negrita)."""
+    k = CASOS.index(caso)
+    filas, sumandos = [], []
+    if hl_cm > 0:
+        pp = hl_cm / 100 * gamma_tm3 * 1000
+        filas.append(('Peso propio de la losa (PP losa)', f'{hl_cm / 100:g} m × {gamma_tm3 * 1000:,.0f} kg/m³', pp, False))
+        sumandos.append(pp)
+    for concepto, cg, ca, cs in comp:
+        v = [cg, cg if ca in (None, '') else ca, cg if cs in (None, '') else cs][k]
+        filas.append((concepto, 'Dato del ejemplo', float(v), False))
+        sumandos.append(float(v))
+    cm = sum(sumandos)
+    filas.append(('Carga muerta total sobre la losa', ' + '.join(f'{x:g}' for x in sumandos) if len(sumandos) > 1 else 'Suma', cm, True))
+    cvv = float(cv[k])
+    filas.append((f'Carga viva ({NOMBRE_CV[caso]})' + (f' · {uso}' if uso else ''), uso or 'Dato', cvv, False))
+    filas.append((f'Total ({NOMBRE_CASO[caso].split(" (")[0].lower()})', f'{cm:g} + {cvv:g}', cm + cvv, True))
+    return filas, cm, cvv

@@ -45,7 +45,7 @@ def pesos_por_nivel(niveles, masks, dx, dy, tipos, pp_viga, pp_col, extras=None)
         vig = res['vigas'] * pp_viga
         col = res['columnas'] * (h_dev + h_arr) * pp_col
         pesos.append(dict(nombre=n['nombre'], area=res['area'], vigas_m=res['vigas'], columnas=res['columnas'],
-                          losa=losa, vigas=vig, cols=col, W=losa + vig + col))
+                          losa=losa, vigas=vig, cols=col, W=losa + vig + col, cm=cm, cv=cv, h_col=h_dev + h_arr))
     return pesos
 
 
