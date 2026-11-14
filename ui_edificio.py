@@ -56,6 +56,16 @@ EJEMPLOS['Tutorial ETABS · edificio 20×10 m, 3 niveles, oficinas (guía con co
     tipos=[('Azotea', 15, [('CM adicional', 140)], (100, 70, 15), 'Azotea'), ('Oficinas', 15, [('CM adicional', 140)], (250, 180, 100), 'Oficinas')],
     niveles=[('N3 (azotea)', 'Azotea', 3), ('N2', 'Oficinas', 3), ('N1', 'Oficinas', 3)],
     mask=lambda: np.full((2, 4), pl.LOSA))
+EJEMPLOS['Guía ETABS · Ejercicio 1: casa de 2 niveles, vivienda, tableros 5×5'] = dict(
+    cx='5 5', cy='5 5', grupo='B', vig=(20, 40), col=(30, 30), sel=('N1', 'B-2'),
+    tipos=[('Azotea', 12, [('CM adicional', 150)], (100, 70, 15), 'Azotea'), ('Vivienda', 12, [('CM adicional', 150)], (170, 90, 70), 'Vivienda')],
+    niveles=[('N2 (azotea)', 'Azotea', 3), ('N1', 'Vivienda', 3)],
+    mask=lambda: np.full((2, 2), pl.LOSA))
+EJEMPLOS['Guía ETABS · Ejercicio 2: oficinas de 3 niveles, tableros 6×4 (trapecial)'] = dict(
+    cx='6 6', cy='4 4', grupo='B', vig=(25, 50), col=(40, 40), sel=('N1', 'B-2'),
+    tipos=[('Azotea', 10, [('CM adicional', 200)], (100, 70, 15), 'Azotea'), ('Oficinas', 10, [('CM adicional', 170)], (250, 180, 100), 'Oficinas')],
+    niveles=[('N3 (azotea)', 'Azotea', 3), ('N2', 'Oficinas', 3), ('N1', 'Oficinas', 4)],
+    mask=lambda: np.full((2, 2), pl.LOSA))
 USOS = {'Oficinas': (250, 180, 100), 'Azotea': (100, 70, 15), 'Biblioteca': (350, 250, 40), 'Vivienda': (170, 90, 70),
         'Otro (capturar CV)': None}
 

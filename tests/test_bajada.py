@@ -155,7 +155,7 @@ def test_formato_de_apuntes_totales_y_columnas_sin_losa():
     esperado = {'Azotea': (530, 100), 'Intermedio': (610, 350), 'Oficinas': (670, 250), 'Terraza': (700, 250)}
     vistos = {}
     for clave, e in ue.EJEMPLOS.items():
-        if clave.startswith('Tutorial'):
+        if clave.startswith(('Tutorial', 'Guía')):
             continue
         for nom, hl, comp, cv, uso in e['tipos']:
             if nom in esperado:
@@ -207,3 +207,31 @@ def test_comprobacion_tutorial_etabs():
     tipos20 = {t[0]: ue._tipo(dict(hl='20', comp=ue._df_pisos(t[2]), cv=[str(x) for x in t[3]])) for t in e['tipos']}
     r20 = ed.comprobacion(niveles, masks, dx, dy, tipos20, 300.0, 384.0, {'Azotea': 20, 'Oficinas': 20}, 2.4, 'CG', 'B')
     assert r20['tot']['servicio'] / 1000 == pytest.approx(642.84)
+
+
+def _comp_ejemplo(prefijo, pp_v, pp_c, grupo='B'):
+    import ame_edificio as ed
+    import ame_planta as pl
+    import ui_edificio as ue
+    e = ue.EJEMPLOS[[k for k in ue.EJEMPLOS if k.startswith(prefijo)][0]]
+    dx, dy = pl.parse_claros(e['cx']), pl.parse_claros(e['cy'])
+    tipos = {t[0]: ue._tipo(dict(hl=str(t[1]), comp=ue._df_pisos(t[2]), cv=[str(x) for x in t[3]])) for t in e['tipos']}
+    niv = [dict(nombre=n[0], tipo=n[1], h=float(n[2])) for n in e['niveles']]
+    masks = [e['mask']() for _ in niv]
+    hl = {t[0]: t[1] for t in e['tipos']}
+    return ed.comprobacion(niv, masks, dx, dy, tipos, pp_v, pp_c, hl, 2.4, 'CG', grupo)
+
+
+def test_guia_etabs_ejercicios():
+    r1 = _comp_ejemplo('Guía ETABS · Ejercicio 1', 192.0, 216.0)
+    t = r1['tot']
+    assert [round(t[k] / 1000, 3) for k in ('pp_losa', 'pp_vigas', 'pp_cols', 'cm_ad', 'cv', 'servicio')] == [57.6, 23.04, 11.664, 30.0, 27.0, 149.304]
+    assert t['factorada_grupo'] / 1000 == pytest.approx(199.4952)
+    assert sorted(round(c[2] / 1000, 2) for c in r1['cols']) == [10.38] * 4 + [18.5] * 4 + [33.79]
+    assert r1['suma_cols'] == pytest.approx(t['servicio'])
+    r2 = _comp_ejemplo('Guía ETABS · Ejercicio 2', 300.0, 384.0)
+    t = r2['tot']
+    assert [round(t[k] / 1000, 3) for k in ('pp_losa', 'pp_vigas', 'pp_cols', 'cm_ad', 'cv', 'servicio')] == [69.12, 54.0, 34.56, 51.84, 57.6, 267.12]
+    assert sorted(round(c[2] / 1000, 2) for c in r2['cols']) == [19.5] * 4 + [32.46] * 2 + [33.36] * 2 + [57.48]
+    assert max(c[3] for c in r2['cols']) / 1000 == pytest.approx(77.604)
+    assert r2['suma_cols'] == pytest.approx(t['servicio'])
