@@ -215,5 +215,4 @@ def mostrar(res_sismo=None):
         st.latex(rf"CM = \dfrac{{{wcm:g}({at:g})}}{{{lv:g}}} + {pp_v:g} = {w['cm']:,.1f}\ \text{{kg/m}}\qquad "
                  rf"CV = \dfrac{{{wcv:g}({at:g})}}{{{lv:g}}} = {w['cv']:,.1f}\ \text{{kg/m}}")
         st.latex(rf"w_u = {fcm:g}({w['cm']:,.1f}) + {fcv:g}({w['cv']:,.1f}) = {w['wu']:,.1f}\ \text{{kg/m}} \approx {w['wu'] / 1000:.2f}\ \text{{t/m}}")
-        st.caption('Con esa w_u (y las cargas puntuales de las vigas secundarias) captura la viga en «Viga continua»: diagramas, '
-                   'flexión, estribos y la revisión de la flecha.')
+        st.caption('Con esa w_u saca los diagramas en ETABS y captura el Mu y el Vu de la sección en «Examen 3».')

@@ -405,149 +405,175 @@ def _viga_completa():
         st.markdown(f'- {t}')
 
 
+@st.cache_data(show_spinner=False, max_entries=8)
+def _exportar_viga(datos, puntos, tramos, proyecto, autor):
+    """PDF, Excel y texto de la viga (se calculan una vez por cada combinación de datos)."""
+    import ame_seccion as sx
+    res = sx.calcular(dict(datos), [dict(p) for p in puntos], [dict(t) for t in tramos])
+    return sx.pdf(res, proyecto, autor), sx.excel(res), sx.texto(res).encode('utf-8')
+
+
+def _num_o(valor, defecto=0.0):
+    """Celda de texto → número (admite coma decimal); vacío → defecto."""
+    t = str(valor if valor is not None else '').strip().replace(',', '.')
+    if t in ('', 'nan', 'None'):
+        return defecto
+    return float(t)
+
+
 def mostrar_seccion():
-    """Examen 3 · Herramientas de una sección: flexión, tanteos del eje neutro, estribos, revisión de una separación y cargas."""
-    st.caption('Cálculos sueltos de UNA sección de concreto reforzado (NTC-C), para comprobar un punto del examen.')
-    s_flex, s_tant, s_cort, s_rev, s_viga = st.tabs(['Flexión: As', 'Tanteos (eje neutro)', 'Cortante: estribos',
-                                                     'Cortante: revisar una separación', 'Cargas y diagramas'])
-    with s_flex:
-        c1, c2, c3, c4 = st.columns(4)
-        b = c1.number_input('b (cm)', 5.0, 300.0, 40.0, key='cf_b')
-        h = c2.number_input('h (cm)', 10.0, 300.0, 80.0, key='cf_h')
-        r = c3.number_input('r (cm)', 1.0, 20.0, 5.0, key='cf_r')
-        Mu = c4.number_input('Mu (t·m)', 0.1, 5000.0, 35.03, key='cf_Mu')
-        c1, c2 = st.columns(2)
-        fc = c1.number_input("f′c (kg/cm²)", 100.0, 1000.0, 250.0, key='cf_fc')
-        fy = c2.number_input('fy (kg/cm²)', 2000.0, 6000.0, 4200.0, key='cf_fy')
-        res = p3.diseno_flexion(Mu, b, h, r, fc, fy)
-        if not res['ok']:
-            st.error('La sección no alcanza con acero subreforzado: cambia sección o concreto.')
-        else:
-            c1, c2, c3, c4 = st.columns(4)
-            c1.metric('As calculada', f'{res["As_calc"]:.2f} cm²')
-            c2.metric('As de diseño', f'{res["As_dis"]:.2f} cm²')
-            c3.metric('As,mín', f'{res["As_min"]:.2f} cm²')
-            c4.metric('As,máx', f'{res["As_max"]:.2f} cm²')
-            _tabla(pd.DataFrame(p3.proponer_armados(res['As_dis'])).assign(
-                MR=lambda d: [p3.momento_resistente(a, b, res['d'], fc, fy) / 1e5 for a in d['As']]).rename(
-                columns={'armado': 'Armado', 'As': 'As (cm²)', 'exceso': 'Exceso', 'MR': 'MR (t·m)'}), 2)
-            st.caption('MR se verifica con el área REAL del armado. Si b ≥ 40 cm el estribo lleva 4 ramas.')
-        with st.expander('Procedimiento', expanded=True):
-            _pasos(res['pasos'])
-        import ame_porticos as pt
-        sug_f, txt_f = pt.varilla_sugerida(h)
-        var_f = st.selectbox('Varilla para el armado detallado', list(pt.DIAMETROS), index=list(pt.DIAMETROS).index(sug_f),
-                             key=f'cf_var_{sug_f}', help=txt_f)
-        prop = st.checkbox('Yo propongo el número de varillas (la app calcula As real = n·Ab)', False, key='cf_prop')
-        n_prop = st.number_input('Número de varillas', 1, 30, 4, key='cf_nprop', disabled=not prop)
-        f_ = pt.ficha_punto(Mu, b, h, fc, fy, var_f, rec=max(r - 0.95 - pt.DIAMETROS[var_f] / 2, 1.5), est_db=0.95, r_fija=r,
-                            propuesta=(int(n_prop), var_f) if prop else None)
-        (st.success if f_['ok'] else st.error)(f'{f_["armado"]} = {f_["As_real"]:.2f} cm²; MR = {f_["MR"]:.2f} t·m '
-                                                f'{"≥" if f_["MR"] >= Mu else "<"} Mu = {Mu:.2f} t·m' if f_['As_real'] else 'Sin solución')
-        st.markdown('##### Cálculo detallado')
-        _desarrollo(f_)
-    with s_tant:
-        c1, c2, c3, c4 = st.columns(4)
-        b = c1.number_input('b (cm)', 5.0, 300.0, 35.0, key='ct_b')
-        d = c2.number_input('d (cm)', 5.0, 300.0, 55.0, key='ct_d')
-        As = c3.number_input('As (cm²)', 0.1, 500.0, 11.94, key='ct_As')
-        cp = c4.number_input('Tanteo de c (cm, 0 = resolver)', 0.0, 300.0, 25.0, key='ct_c')
-        fc = c1.number_input("f′c", 100.0, 1000.0, 250.0, key='ct_fc')
-        fy = c2.number_input('fy', 2000.0, 6000.0, 4200.0, key='ct_fy')
-        lim = p3.limites_flexion(b, d, fc, fy)
-        if cp > 0:
-            e = p3.tanteo_eje_neutro(As, b, d, fc, fy, c_prop=cp)
-            st.markdown(f'**Tanteo c = {cp:g} cm:** a = β1·c = {e["a"]:.2f} cm; C = a·b·f″c = {e["C"]:,.1f} kg; '
-                        f'εs = 0.003(d − c)/c = {e["es"]:.5f} → {"fluye" if e["fluye"] else "NO fluye"}; fs = {e["fs"]:,.0f}; '
-                        f'T = As·fs = {e["T"]:,.1f} kg → {"C > T: baja c" if e["C"] > e["T"] else "C < T: sube c"}.')
-        e = p3.tanteo_eje_neutro(As, b, d, fc, fy)
-        c1, c2, c3, c4 = st.columns(4)
-        c1.metric('c (cm)', f'{e["c"]:.3f}')
-        c2.metric('a (cm)', f'{e["a"]:.3f}')
-        c3.metric('εs', f'{e["es"]:.5f}')
-        c4.metric('MR (t·m)', f'{e["MR"] / 1e5:.2f}')
-        st.caption(f'Equilibrio C = T = {e["T"]:,.1f} kg; el acero {"fluye → subreforzada" if e["fluye"] else "NO fluye → sobrerreforzada"}. '
-                   f'Asb = {lim["Asb"]:.2f}, As,máx = {lim["As_max"]:.2f}, As,mín = {lim["As_min"]:.2f} cm² '
-                   f'(con As = {As:g}: {"dentro de los límites" if lim["As_min"] <= As <= lim["As_max"] else "FUERA de los límites"}).')
-    with s_cort:
-        c1, c2, c3, c4 = st.columns(4)
-        b = c1.number_input('b (cm)', 5.0, 300.0, 25.0, key='cc_b')
-        h = c2.number_input('h (cm)', 10.0, 300.0, 50.0, key='cc_h')
-        r = c3.number_input('r (cm)', 1.0, 20.0, 5.0, key='cc_r')
-        L = c4.number_input('Claro L (cm)', 10.0, 3000.0, 500.0, key='cc_L')
-        c1, c2, c3, c4 = st.columns(4)
-        Vu = c1.number_input('Vu (t)', 0.1, 500.0, 14.83, key='cc_Vu')
-        As = c2.number_input('As longitudinal (cm²)', 0.1, 500.0, 11.4, key='cc_As')
-        est = c3.selectbox('Estribo', ['#3 (2 ramas)', '#3 (4 ramas)', '#4 (2 ramas)', '#4 (4 ramas)', '#2 (2 ramas)'], key='cc_est')
-        fyest = c4.selectbox('fy del estribo', [4200.0, 2530.0], key='cc_fyest')
-        c1, c2 = st.columns(2)
-        fc = c1.number_input("f′c", 100.0, 1000.0, 250.0, key='cc_fc')
-        av_bar = {'#2': 0.32, '#3': 0.71, '#4': 1.27}[est[:2]]
-        Av = av_bar * (4 if '4 ramas' in est else 2)
-        c2.metric('Av', f'{Av:.2f} cm²')
-        res = p3.cortante_viga(Vu * 1000, b, h - r, h, L, fc, fyest, Av, As)
-        if res['ok']:
-            c1, c2, c3 = st.columns(3)
-            c1.metric('VcR (kg)', f'{res["VcR"]:,.0f}')
-            c2.metric('smáx (cm)', f'{res["s_max"]:.1f}')
-            c3.metric('Estribos', f'{est[:2]} @ {res["s_usar"]} cm')
-        else:
-            st.error('Vu excede el límite 2.65·FR·b·d·√f′c: agranda la sección.')
-        import ame_porticos as pt
-        db_l = st.selectbox('Varilla longitudinal (para 8 db de la zona de confinamiento)', list(pt.DIAMETROS), index=list(pt.DIAMETROS).index('#8'),
-                            key='cc_varl')
-        integ = p3.integridad_estructural(h, h - r, pt.DIAMETROS[db_l], pt.DIAMETROS[est[:2]] if est[:2] in pt.DIAMETROS else 0.64, 25.0)
-        st.markdown('**Zona de confinamiento (integridad estructural)**')
-        for tit, tx in integ['tex']:
-            st.latex(tx)
-        with st.expander('Procedimiento', expanded=True):
-            _pasos(res['pasos'])
-    with s_rev:
-        st.caption('Revisa una separación que ya propusiste (hoja «CORTANTE (2)» del Excel): VsR = FR·Av·fy·d/s y VR = VcR + VsR ≥ Vu.')
-        c1, c2, c3, c4 = st.columns(4)
-        b = c1.number_input('b (cm)', 5.0, 300.0, 30.0, key='cr_b')
-        h = c2.number_input('h (cm)', 10.0, 300.0, 70.0, key='cr_h')
-        r = c3.number_input('r (cm)', 1.0, 20.0, 5.0, key='cr_r')
-        fc = c4.number_input("f′c", 100.0, 1000.0, 250.0, key='cr_fc')
-        c1, c2, c3, c4 = st.columns(4)
-        Vu = c1.number_input('Vu (t)', 0.0, 500.0, 35.184, key='cr_Vu')
-        As = c2.number_input('As en tensión (cm²)', 0.1, 500.0, 30.40, key='cr_As')
-        est = c3.selectbox('Estribo', ['#3', '#4', '#2'], key='cr_est')
-        ramas = c4.number_input('Ramas', 1, 6, 3, key='cr_ramas')
-        c1, c2, c3 = st.columns(3)
-        s_prop = c1.number_input('Separación propuesta s (cm)', 2.0, 60.0, 15.0, 1.0, key='cr_s')
-        fyest = c2.selectbox('fy del estribo', [4200.0, 2530.0], key='cr_fyest')
-        s_tope = c3.number_input('Tope de smáx (cm)', 10.0, 60.0, 25.0, 1.0, key='cr_tope')
-        Av = {'#2': 0.32, '#3': 0.71, '#4': 1.27}[est] * ramas
-        rv = p3.revision_cortante(Vu * 1000, b, h - r, fc, fyest, Av, As, s_prop, s_tope)
-        c1, c2, c3 = st.columns(3)
-        c1.metric('VcR (t)', f'{rv["VcR"] / 1000:.2f}')
-        c2.metric('VsR (t)', f'{rv["VsR"] / 1000:.2f}')
-        c3.metric('VR (t)', f'{rv["VR"] / 1000:.2f}')
-        (st.success if rv['ok'] else st.error)(
-            f'E{est}, {ramas} ramas @ {s_prop:g} cm: ' + ('PASA' if rv['ok'] else
-            'NO PASA (' + ', '.join(t for t, ok in (('VR < Vu', not rv['ok_resistencia']), ('s > smáx', not rv['ok_separacion'])) if ok) + ')'))
-        for tit, tx in rv['tex']:
-            st.markdown(f'*{tit}*')
-            st.latex(tx)
-    with s_viga:
-        c1, c2, c3 = st.columns(3)
-        w = c1.number_input('w (t/m), ya factorizada o no', 0.01, 500.0, 3.55, key='cv_w')
-        L = c2.number_input('L (m)', 0.5, 50.0, 5.0, key='cv_L')
-        c3.caption('Carga última: wu = FC_CM·CM + FC_CV·CVmáx. Grupo B: 1.3 / 1.5; Grupo A: 1.5 / 1.7.')
-        s = p3.viga_simple(w, L)
-        e = p3.viga_doble_empotrada(w, L)
-        _tabla(pd.DataFrame({'Apoyos': ['Simplemente apoyada', 'Doblemente empotrada'],
-                             'Vu (t)': [s['Vu'], e['Vu']], 'Mu − (t·m)': [0.0, e['Mu_neg']],
-                             'Mu + (t·m)': [s['Mu'], e['Mu_pos']]}), 3)
-        st.markdown('**Wu de una viga (Grupo B/A)**')
-        c1, c2, c3, c4 = st.columns(4)
-        cm = c1.number_input('CM (t/m)', 0.0, 500.0, 1.0, key='cv_cm')
-        cvm = c2.number_input('CVmáx (t/m)', 0.0, 500.0, 0.5, key='cv_cvm')
-        pp = c3.number_input('Peso propio (t/m)', 0.0, 50.0, 0.768, key='cv_pp')
-        grupo = c4.radio('Grupo', ['B', 'A'], horizontal=True, key='cv_grupo')
-        fcm, fcv = (1.3, 1.5) if grupo == 'B' else (1.5, 1.7)
-        st.metric(f'wu = {fcm}(CM + pp) + {fcv}·CVmáx', f'{fcm * (cm + pp) + fcv * cvm:.4f} t/m')
+    """Examen 3 · viga por secciones: varios puntos de flexión y varios tramos de cortante en una sola página, y al final el
+    armado de TODA la viga, con exportación a PDF, Excel y texto."""
+    import matplotlib.pyplot as plt
+
+    import ame_porticos as pt
+    import ame_seccion as sx
+    st.caption('Captura la viga una vez: sus datos, los Mu de cada punto y los Vu de cada tramo (de ETABS o del diagrama). La página '
+               'diseña cada sección y arma al final el armado de toda la viga. Con un solo punto y un solo tramo es una sección suelta.')
+    c1, c2, c3, c4, c5 = st.columns(5)
+    b = c1.number_input('b (cm)', 5.0, 300.0, 35.0, key='sx_b')
+    h = c2.number_input('h (cm)', 10.0, 300.0, 70.0, key='sx_h')
+    r = c3.number_input('r (cm)', 1.0, 20.0, 5.0, key='sx_r')
+    fc = c4.number_input("f′c (kg/cm²)", 100.0, 1000.0, 250.0, key='sx_fc')
+    fy = c5.number_input('fy (kg/cm²)', 2000.0, 6000.0, 4200.0, key='sx_fy')
+    sug, txt_sug = pt.varilla_sugerida(h)
+    c1, c2, c3, c4, c5 = st.columns(5)
+    var = c1.selectbox('Varilla longitudinal', list(pt.DIAMETROS), index=list(pt.DIAMETROS).index(sug), key=f'sx_var_{sug}', help=txt_sug)
+    est = c2.selectbox('Estribo', ['#3', '#4'], index=1, key='sx_est')
+    ramas = c3.selectbox('Ramas del estribo', [2, 3, 4], index=2 if b >= 40 else 0, key=f'sx_ramas_{b >= 40}')
+    fyest = c4.selectbox('fy del estribo', [4200.0, 2530.0], key='sx_fyest')
+    s_tope = c5.number_input('Tope de la separación (cm)', 10.0, 40.0, 25.0, 1.0, key='sx_stope',
+                             help='El profesor prefiere 25 cm cuando rige el tope; los apuntes marcan 30 cm.')
+
+    st.markdown('**Puntos de flexión** (una fila por sección: caras de apoyo y centros de claro)')
+    base_p = pd.DataFrame({'Punto': ['a', 'b', 'c'], 'Mu (t·m)': ['41.6', '15.26', '49.91'],
+                           'Tensión': ['superior', 'inferior', 'superior'], 'Armado propuesto': ['', '', ''],
+                           'Tanteo de c (cm)': ['', '', '']})
+    ep = st.data_editor(base_p, num_rows='dynamic', hide_index=True, width='stretch', key='sx_tabla_p',
+                        column_config={'Punto': st.column_config.TextColumn('Punto'),
+                                       'Mu (t·m)': st.column_config.TextColumn('Mu (t·m)'),
+                                       'Tensión': st.column_config.SelectboxColumn('Lecho en tensión', options=['superior', 'inferior'], required=True),
+                                       'Armado propuesto': st.column_config.TextColumn('Armado propuesto', help='Opcional, ej. 4#8. Vacío: la app lo propone.'),
+                                       'Tanteo de c (cm)': st.column_config.TextColumn('Tanteo de c (cm)', help='Opcional: evalúa ese tanteo del eje neutro.')})
+    st.markdown('**Tramos de cortante** (una fila por tramo)')
+    base_t = pd.DataFrame({'Tramo': ['1', '2'], 'Vu (t)': ['36.2', '44.3'], 'As en tensión (cm²)': ['', ''],
+                           'Separación propuesta (cm)': ['', '']})
+    et = st.data_editor(base_t, num_rows='dynamic', hide_index=True, width='stretch', key='sx_tabla_t',
+                        column_config={c: st.column_config.TextColumn(c) for c in base_t.columns} | {
+                            'As en tensión (cm²)': st.column_config.TextColumn('As en tensión (cm²)', help='Vacío: se usa el mayor As real superior.'),
+                            'Separación propuesta (cm)': st.column_config.TextColumn('Separación propuesta (cm)', help='Opcional: revisa que esa separación pase.')})
+    try:
+        ep = ep.dropna(subset=['Punto', 'Mu (t·m)', 'Tensión'])
+        et = et.dropna(subset=['Tramo', 'Vu (t)'])
+        puntos = [dict(punto=str(x['Punto']), Mu=_num_o(x['Mu (t·m)']), lecho=x['Tensión'], prop=str(x['Armado propuesto'] or '').strip(),
+                       c_prop=_num_o(x['Tanteo de c (cm)'])) for _, x in ep.iterrows()]
+        tramos = [dict(tramo=str(x['Tramo']), Vu=_num_o(x['Vu (t)']), As=_num_o(x['As en tensión (cm²)'], None),
+                       s_prop=_num_o(x['Separación propuesta (cm)'])) for _, x in et.iterrows()]
+    except ValueError:
+        st.error('Hay una celda que no es un número (decimales con punto o coma).')
+        return
+    datos = dict(b=b, h=h, r=r, fc=fc, fy=fy, var=var, est=est, ramas=int(ramas), fy_est=fyest, s_tope=s_tope)
+    try:
+        res = sx.calcular(datos, puntos, tramos)
+    except ValueError as e:
+        st.error(str(e))
+        return
+    if res['error']:
+        st.error(res['error'])
+        return
+    malos = [t for t, ok in (('flexión', res['ok_flex']), ('cortante', res['ok_cort'])) if not ok]
+    _veredicto(res['ok'], 'La viga cumple: subreforzada en todos los puntos, el cortante no excede el límite y el armado alcanza.',
+               'La viga NO cumple: ' + ', '.join(malos) + '. Revisa las tablas de abajo.')
+
+    pr, xl, tx = _exportar_viga(tuple(sorted(datos.items())), tuple(tuple(sorted(p.items())) for p in puntos),
+                                tuple(tuple(sorted(t.items(), key=lambda kv: kv[0])) for t in tramos),
+                                st.session_state.get('proyecto', ''), st.session_state.get('autor', ''))
+    d1, d2, d3 = st.columns(3)
+    d1.download_button('Descargar PDF', pr, 'viga_concreto.pdf', 'application/pdf', width='stretch', key='sx_dl_pdf')
+    d2.download_button('Descargar Excel', xl, 'viga_concreto.xlsx',
+                       'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', width='stretch', key='sx_dl_xlsx')
+    d3.download_button('Descargar texto', tx, 'viga_concreto.txt', 'text/plain', width='stretch', key='sx_dl_txt')
+
+    st.markdown('#### Armado de toda la viga')
+    cols = st.columns(2)
+    for i, (et_, val, det_) in enumerate(sx.resumen(res)):
+        with cols[i % 2].container(border=True):
+            st.markdown(f'**{et_}**')
+            st.markdown(f'### {val}')
+            st.caption(det_)
+
+    st.markdown('#### 1 · Datos y revisiones de la viga')
+    _desarrollo(res['viga'])
+    st.markdown('#### 2 · Flexión en cada punto')
+    enc, filas = sx.tabla_flexion(res)
+    st.dataframe(pd.DataFrame(filas, columns=enc), hide_index=True, width='stretch')
+    for e in res['puntos']:
+        if e['error']:
+            st.error(f'Punto {e["punto"]}): {e["error"]}')
+            continue
+        with st.container(border=True):
+            _desarrollo(e['ficha'], f'{e["punto"]})  Mu = {e["Mu"]:g} t·m · ' + ('✔' if e['ficha']['ok'] else '✘ revisa'))
+            if e['alternativas']:
+                _tabla(pd.DataFrame(e['alternativas']).rename(columns={'armado': 'Armado', 'As': 'As (cm²)', 'exceso': 'Exceso', 'MR': 'MR (t·m)'}), 2)
+    fig = sx.figura(res)
+    st.pyplot(fig)
+    plt.close(fig)
+    st.caption('Rojo = no cumple la separación libre o no caben las barras. La numeración de pares (agrupadas) sigue la práctica de clase.')
+    st.markdown('#### 3 · Tanteo del eje neutro')
+    filas = [[e['punto'], e['ficha']['As_real'], e['tanteo']['c'], e['tanteo']['a'], e['tanteo']['es'],
+              'sí' if e['tanteo']['fluye'] else 'NO', e['tanteo']['MR'] / 1e5] for e in res['puntos'] if e['tanteo']]
+    st.dataframe(pd.DataFrame(filas, columns=['Punto', 'As real (cm²)', 'c (cm)', 'a (cm)', 'εs', 'Fluye', 'MR (t·m)']), hide_index=True,
+                 width='stretch')
+    for e in res['puntos']:
+        if e['tanteo_manual']:
+            st.markdown(f'**Punto {e["punto"]}), tanteo c = {e["c_prop"]:g} cm**')
+            for t in sx._lineas_tanteo(e['tanteo_manual']):
+                st.markdown(f'- {t}')
+    st.markdown('#### 4 · Varillas corridas y bastones')
+    cor = res['corrido']
+    st.markdown(f'- Mayor As real = {cor["As_max_real"]:.2f} cm²; 50 % = {0.5 * cor["As_max_real"]:.2f} cm²; As,mín = {res["lim"]["As_min"]:.2f} cm²')
+    st.markdown(f'- Corrido: máx(As,mín; 50 % As mayor) = {cor["As_corr"]:.2f} cm² → n = {cor["As_corr"]:.2f}/{res["ab"]} = '
+                f'{cor["As_corr"] / res["ab"]:.2f} → **{cor["n"]}{var}** ({cor["As"]:.2f} cm²) arriba y abajo')
+    st.markdown('- Bastones por punto: ' + (' · '.join(f'{p}) +{n}{var}' for p, n in cor['bastones']) if cor['bastones'] else
+                                            'ninguno, las corridas alcanzan en todos los puntos'))
+    st.markdown('#### 5 · Cortante: estribos por tramo')
+    for tit, tx_ in res['lim_cort']:
+        st.markdown(f'*{tit}*')
+        st.latex(tx_)
+    st.caption(f'Si no escribes el As en tensión de un tramo se usa el mayor As real superior ({res["As_auto"]:.2f} cm²).')
+    for i, t in enumerate(res['tramos'], 1):
+        c_ = t['cort']
+        with st.container(border=True):
+            st.markdown(f'##### {i}. Tramo {t["tramo"]}:  Vu = {t["Vu"]:g} t')
+            for tit, tx_ in c_['tex']:
+                st.markdown(f'*{tit}*')
+                st.latex(tx_)
+            if c_['ok']:
+                st.success(f'E {est}, {ramas} ramas @ {c_["s_usar"]} cm  (rige {c_["rige"]} en smáx)')
+                if t['alt']:
+                    st.warning(f'@ {c_["s_usar"]} cm es muy cerrado para colar. Alternativas con s ≥ 10 cm: '
+                               + ' · '.join(o['texto'] for o in t['alt'][:4]))
+                elif c_['s_usar'] < 10:
+                    st.warning(f'@ {c_["s_usar"]} cm es muy cerrado para colar y ningún estribo #3/#4 de 2–4 ramas da s ≥ 10 cm: agranda la sección.')
+            else:
+                st.error('Vu excede el límite de la sección: agranda b o h.')
+            if t['rev']:
+                for tit, tx_ in t['rev']['tex'][2:]:
+                    st.markdown(f'*{tit}*')
+                    st.latex(tx_)
+                _veredicto(t['rev']['ok'], f's = {t["s_prop"]:g} cm: PASA', f's = {t["s_prop"]:g} cm: NO PASA')
+    enc, filas = sx.tabla_cortante(res)
+    st.markdown('**Resumen de cortante**')
+    _tabla(pd.DataFrame([[(x if not isinstance(x, str) or x != '—' else np.nan) for x in f_] for f_ in filas], columns=enc), 4)
+    st.markdown('#### 6 · Zona de confinamiento y acero de piel')
+    for tit, tx_ in res['integ']['tex']:
+        st.latex(tx_)
+    st.success(f'En 2h = {res["integ"]["Lconf"]:g} cm desde la cara de cada apoyo: E {est}, {ramas} ramas @ '
+               f'mín(s por cortante; {res["integ"]["s_usar"]}) cm')
+    for tit, tx_ in res['piel']['tex']:
+        st.latex(tx_)
+    for t in res['piel']['lineas']:
+        st.markdown(f'- {t}')
 
 
 def mostrar_viga_puntos():

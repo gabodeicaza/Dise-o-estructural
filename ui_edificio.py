@@ -498,8 +498,7 @@ def mostrar(res_sismo=None):
                               columns=['Tramo', 'L (m)', 'A losa (m²)', 'CM (t/m)', 'CV máx (t/m)', f'wu gravedad (t/m) [{bj.FC_GRUPO[grupo][0]:g}/{bj.FC_GRUPO[grupo][1]:g}]',
                                        'w accidental 1.1(CM+CVacc) (t/m)'])
             st.dataframe(df.style.format({c: '{:,.3f}' for c in df.columns[2:]}), hide_index=True, width='stretch')
-            st.caption(f'Nivel {nombre_lvl}. CM incluye el peso propio de la viga. Con estas cargas y los claros captura la viga en «Examen 3 → Viga continua» '
-                       '(la acción del sismo se suma con el pórtico).')
+            st.caption(f'Nivel {nombre_lvl}. CM incluye el peso propio de la viga. Con los Mu y Vu que te dé ETABS captura la sección en «Examen 3».')
 
 
         with tab_e:
@@ -515,7 +514,7 @@ def analisis_eje(niveles, masks, dx, dy, tipos, pp_v, pp_c, vb, vh, cb, ch, fc, 
     """Pórtico plano de un eje del edificio (p. ej. el eje C): análisis con las cargas de la bajada y el sismo, y diseño de sus vigas."""
     import ui_porticos as up
     st.caption('Arma el pórtico plano del eje con las cargas por tramo que salen de la planta, le aplica el sismo y diseña las vigas '
-               'como en la pestaña «Examen 3 → Pórtico»: envolvente, diagramas de M y V, armado y alzado de la viga continua del nivel.')
+               'con envolvente, diagramas de M y V, armado y alzado de la viga continua del nivel.')
     c1, c2, c3 = st.columns(3)
     eje = c1.selectbox('Eje a analizar (letra)', L, index=min(2, len(L) - 1), key='ed_eje_an')
     fila = L.index(eje)

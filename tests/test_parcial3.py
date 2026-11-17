@@ -88,9 +88,7 @@ def test_pestana_tercer_parcial_sin_errores():
     from streamlit.testing.v1 import AppTest
     at = AppTest.from_file(str(Path(__file__).resolve().parent.parent / 'app_web.py'), default_timeout=120).run()
     assert not at.exception, [e.value for e in at.exception]
-    assert any(m.label == 'FE' for m in at.metric)          # mampostería
-    assert any(m.label == 'MR (t·m)' for m in at.metric)    # concreto
-    assert any(m.label == 'VBu (t)' for m in at.metric)     # viento / estático
+    assert any('Armado de toda la viga' in m.value for m in at.markdown)    # examen 3: la viga por secciones
 
 
 # ----------------------------------------------------------------- pórtico, envolvente y armado
@@ -179,7 +177,7 @@ def test_pestana_porticos_sin_errores():
     from streamlit.testing.v1 import AppTest
     at = AppTest.from_file(str(Path(__file__).resolve().parent.parent / 'app_web.py'), default_timeout=180).run()
     assert not at.exception, [e.value for e in at.exception]
-    assert len(at.tabs) >= 8
+    assert len(at.tabs) >= 7
 
 
 def test_tablas_aceptan_decimales_como_texto():
@@ -565,6 +563,6 @@ def test_app_organizada_por_examenes():
     etiquetas = [t.label for t in at.tabs]
     e2, e3 = etiquetas.index('Examen 2 · Análisis sísmico'), etiquetas.index('Examen 3 · Concreto reforzado, mampostería y viento')
     assert e2 < etiquetas.index('4 · Herramientas') < e3
-    assert {'Viga continua', 'Pórtico', 'Viga por puntos (Mu dados)', 'Sección: flexión y cortante', 'Mampostería', 'Viento'} \
-        <= set(etiquetas[e3:])
-    assert any(m.label == 'VR (t)' for m in at.metric)
+    assert etiquetas[e3:] == [etiquetas[e3]]               # el examen 3 es una sola página, sin pestañas internas
+    assert any('Armado de toda la viga' in m.value for m in at.markdown)
+    assert {'Descargar PDF', 'Descargar Excel', 'Descargar texto'} <= {b.label for b in at.get('download_button')}
