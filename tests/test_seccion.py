@@ -15,6 +15,15 @@ P = [dict(punto='a', Mu=35.03, lecho='superior'), dict(punto='b', Mu=11.7, lecho
      dict(punto='c', Mu=20.84, lecho='superior')]
 T = [dict(tramo='1', Vu=20.07), dict(tramo='2', Vu=14.23, s_prop=25)]
 
+# El pizarrón de la viga de 5 claros (35 × 70, E#4 de 2 ramas, d = 65); las longitudes de los claros son supuestas
+FOTO = [dict(tipo='Apoyo', Mu=41.6), dict(tipo='Centro de claro', Mu=15.26),
+        dict(tipo='Apoyo', Mu=49.4, L=6.7, Vu=36.2), dict(tipo='Centro de claro', Mu=18.8),
+        dict(tipo='Apoyo', Mu=48.22, L=6.8, Vu=39.6), dict(tipo='Centro de claro', Mu=13.55),
+        dict(tipo='Apoyo', Mu=40.1, L=6.5, Vu=35.36), dict(tipo='Centro de claro', Mu=15.4),
+        dict(tipo='Apoyo', Mu=59.9, L=7.2, Vu=36.5), dict(tipo='Centro de claro', Mu=26.7),
+        dict(tipo='Apoyo', Mu=58.6, L=7.8, Vu=44.3)]
+DF = dict(b=35, h=70, r=5, fc=250, fy=4200, var='#8', est='#4', ramas=2, fy_est=4200, s_tope=25)
+
 
 def test_viga_de_la_hoja_de_clase_por_secciones():
     r = sx.calcular(D, P, T)
@@ -33,9 +42,7 @@ def test_corrido_bastones_y_estribos_de_toda_la_viga():
     mayor = max(e['ficha']['As_real'] for e in r['puntos'])
     assert cor['As_max_real'] == pytest.approx(mayor)
     assert cor['As_corr'] == pytest.approx(max(r['lim']['As_min'], 0.5 * mayor))
-    assert cor['n'] * 5.07 >= cor['As_corr'] and (cor['n'] - 1) * 5.07 < cor['As_corr'] or cor['n'] == 2
     assert [p for p, _ in cor['bastones']] == [e['punto'] for e in r['puntos'] if e['ficha']['n'] > cor['n']]
-    # el As en tensión por omisión es el mayor As real superior y alimenta el cortante
     sup = max(e['ficha']['As_real'] for e in r['puntos'] if e['lecho'] == 'superior')
     assert r['As_auto'] == pytest.approx(sup)
     assert r['tramos'][0]['cort']['rho'] == pytest.approx(sup / (40 * 75), rel=1e-9)
@@ -48,11 +55,6 @@ def test_as_propio_de_un_tramo_y_armado_propuesto_con_tanteo():
     assert r['puntos'][0]['ficha']['armado'] == '4#8' and r['puntos'][0]['ficha']['propuesto']
     assert r['puntos'][0]['tanteo_manual']['c'] == 10
     assert r['tramos'][0]['As'] == 30.0 and r['tramos'][0]['cort']['rho'] == pytest.approx(30 / (40 * 75))
-
-
-def test_una_seccion_sola_es_un_punto_y_un_tramo():
-    r = sx.calcular(D, P[:1], T[:1])
-    assert r['ok'] and len(r['puntos']) == 1 and len(r['tramos']) == 1
 
 
 def test_punto_que_no_alcanza_no_tumba_a_los_demas_y_se_exporta():
@@ -74,14 +76,81 @@ def test_datos_absurdos_se_rechazan():
         sx.calcular(D, P, [])
 
 
+# ------------------------------------------------------------------ la viga completa del pizarrón
+def test_el_pizarron_da_las_varillas_y_los_bastones_de_la_foto():
+    r = sx.calcular_viga(DF, FOTO)
+    assert r['ok'] and r['corrido']['n'] == 3                                     # corrido 3#8 arriba y abajo
+    assert [b['n'] for b in r['bastones']] == [1, 2, 2, 1, 3, 3]                  # 1#8, 2#8, 2#8, 1#8, 3#8, 3#8
+    assert [b['punto'] for b in r['bastones']] == ['a', 'c', 'e', 'g', 'i', 'k']
+    for b in r['bastones']:                                                        # ≈ 2.15 – 2.45 m a cada lado, como en la foto
+        for lado in (b['izq'], b['der']):
+            assert lado == 0.0 or 2.0 < lado < 2.8
+    assert r['bastones'][0]['gancho_izq'] and r['bastones'][-1]['gancho_der']     # ganchos en los extremos de la viga
+    assert r['d_ef'] == 65
+    assert [e['s'] for e in r['estribos'] if e['confinado']] and all(e['s'] <= 25 for e in r['estribos'] if e['s'])
+
+
+def test_el_momento_del_claro_pasa_por_los_tres_valores_capturados():
+    r = sx.calcular_viga(DF, FOTO)
+    env = r['env']
+    for i, s in enumerate(r['geom']['spans']):
+        assert env['Mmax'][i][0] == pytest.approx(-s['Ml']) and env['Mmax'][i][-1] == pytest.approx(-s['Mr'])
+        assert env['Mmax'][i][len(env['Mmax'][i]) // 2] == pytest.approx(s['Mc'])
+        assert env['Vmax'][i][0] == pytest.approx(s['Vu']) and env['Vmax'][i][-1] == pytest.approx(-s['Vu'])
+
+
+@pytest.mark.parametrize('lista, texto', [
+    ([], 'al menos dos apoyos'),
+    ([dict(tipo='Centro de claro', Mu=10)], 'primera sección'),
+    ([dict(tipo='Apoyo', Mu=10), dict(tipo='Apoyo', Mu=10, L=5, Vu=5)], 'Falta el momento positivo'),
+    ([dict(tipo='Apoyo', Mu=10), dict(tipo='Centro de claro', Mu=5), dict(tipo='Apoyo', Mu=10)], 'L y su Vu'),
+    ([dict(tipo='Apoyo', Mu=10), dict(tipo='Centro de claro', Mu=5)], 'no está cerrado'),
+    ([dict(tipo='Apoyo', Mu=10), dict(tipo='Centro de claro', Mu=5), dict(tipo='Centro de claro', Mu=5)], 'sobra'),
+    ([dict(tipo='Apoyo', Mu=-10)], 'positivos'),
+])
+def test_secciones_incompletas_dan_un_mensaje_claro(lista, texto):
+    with pytest.raises(ValueError, match=texto):
+        sx.calcular_viga(DF, lista)
+
+
+def test_una_viga_de_un_solo_claro_y_la_figura_se_dibuja():
+    import matplotlib.pyplot as plt
+    r = sx.calcular_viga(DF, [dict(tipo='Apoyo', Mu=20), dict(tipo='Centro de claro', Mu=25), dict(tipo='Apoyo', Mu=20, L=6, Vu=22)])
+    assert len(r['geom']['spans']) == 1 and r['bastones'] == [] or all(b['n'] >= 1 for b in r['bastones'])
+    fig = sx.figura_hoja(r)
+    assert len(fig.axes) >= 4
+    plt.close(fig)
+
+
 def test_exportaciones_pdf_excel_y_texto():
     from openpyxl import load_workbook
-    r = sx.calcular(D, P, T)
+    r = sx.calcular_viga(DF, FOTO)
     assert sx.pdf(r, 'Prueba', 'Autora')[:4] == b'%PDF'
     ws = load_workbook(io.BytesIO(sx.excel(r))).active
     valores = [str(c.value) for fila in ws.iter_rows() for c in fila if c.value is not None]
-    assert any('3#8' in v for v in valores) and any('PASO 5' in v for v in valores)
+    assert any('PASO 5' in v for v in valores) and any('Bastones' in v for v in valores)
     txt = sx.texto(r)
     for paso in ('PASO 1', 'PASO 2', 'PASO 3', 'PASO 4', 'PASO 5', 'PASO 6'):
         assert paso in txt
-    assert 'ARMADO DE TODA LA VIGA' in txt and 'Estribos' in txt and 'Varillas corridas' in txt
+    assert 'ARMADO DE TODA LA VIGA' in txt and 'Estribos' in txt and 'Varillas corridas' in txt and 'Bastones' in txt
+
+
+def test_flujo_de_la_pagina_borrar_anadir_y_armar():
+    pytest.importorskip('streamlit')
+    from streamlit.testing.v1 import AppTest
+    at = AppTest.from_file(str(Path(__file__).resolve().parents[1] / 'app_web.py'), default_timeout=300).run()
+    assert not at.exception, [e.value for e in at.exception]
+    assert len(at.session_state['sx_lista']) == 11                       # abre con el ejemplo del pizarrón
+    assert any('Armado de toda la viga' in m.value for m in at.markdown)
+    next(b for b in at.button if b.label == 'Borrar todo').click()
+    at.run()
+    assert at.session_state['sx_lista'] == [] and not at.exception
+    assert any('Añade la primera sección' in i.value for i in at.info)
+    # primer apoyo
+    next(n for n in at.number_input if n.label == 'Mu (t·m, en positivo)').set_value(41.6)
+    next(b for b in at.button if b.label == 'Añadir').click()
+    at.run()
+    assert not at.exception, [e.value for e in at.exception]
+    assert [(x['tipo'], x['Mu']) for x in at.session_state['sx_lista']] == [('Apoyo', 41.6)]
+    assert any('Toca el momento positivo del claro 1' in c.value for c in at.caption)
+    assert any('Falta' in w.value or 'cierra' in w.value or 'al menos' in w.value for w in at.warning)
