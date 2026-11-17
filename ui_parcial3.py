@@ -418,6 +418,18 @@ def _exportar_viga(datos, momentos, largos, vus, proyecto, autor):
     return sx.pdf(res, proyecto, autor), sx.excel(res), sx.texto(res).encode('utf-8')
 
 
+_NL = chr(10)
+EJEMPLO_ETABS = dict(
+    sx_mom=_NL.join('153.70 10 154.38 10 154.38 10 144.35 10 144.78 10 164.33 10 164.33'.split()),
+    sx_largos=_NL.join('7.2 5.2 7.2 7.2 7.2 5.2'.split()),
+    sx_vus=_NL.join('52.84 66.05 51.01 51.07 51.14 68.55'.split()),
+    sx_b=50.0, sx_h=90.0, sx_r=5.0)
+
+
+def _cargar_etabs():
+    st.session_state.update(EJEMPLO_ETABS)
+
+
 def mostrar_seccion():
     """Examen 3 · viga completa: capturas la columna de momentos, el largo de cada crujía y el Vu de cada crujía, y la página arma
     el render de la viga (diagramas, corridas, bastones, estribos y secciones) con exportación a PDF, Excel y texto."""
@@ -444,6 +456,8 @@ def mostrar_seccion():
         s_tope = c5.number_input('Tope de la separación (cm)', 10.0, 40.0, 25.0, 1.0, key='sx_stope',
                                  help='El profesor prefiere 25 cm cuando rige el tope; los apuntes marcan 30 cm.')
 
+    st.button('Cargar el ejercicio de ETABS (6 vigas de la envolvente)', on_click=_cargar_etabs, key='sx_cargar_etabs',
+              help='Mu = |mínimo| de M3 de cada tramo, Vu = máximo |V2|, claro libre = longitud − 0.8 m; sección 50×90 supuesta.')
     c1, c2, c3 = st.columns([1.2, 1, 1])
     t_mom = c1.text_area('Momentos Mu (t·m), en positivo', EJEMPLO_MOMENTOS, height=290, key='sx_mom',
                          help='Una columna, de izquierda a derecha: apoyo, centro del claro, apoyo, centro, …, apoyo. '

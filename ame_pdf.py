@@ -96,7 +96,11 @@ def _imagen(fig, ancho_cm):
     buf.seek(0)
     w, h = fig.get_size_inches()
     ancho = ancho_cm * cm
-    return Image(buf, width=ancho, height=ancho * h / w)
+    alto = ancho * h / w
+    tope = 22.5 * cm                      # que nunca sea más alta que el marco de la página
+    if alto > tope:
+        ancho, alto = ancho * tope / alto, tope
+    return Image(buf, width=ancho, height=alto)
 
 
 def _anchos(enc, filas, total):

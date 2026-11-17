@@ -168,3 +168,12 @@ def test_la_pagina_arma_el_render_desde_tres_columnas():
     area['Momentos Mu (t·m), en positivo'].set_value(chr(10).join(['20', '25']))   # faltan datos: mensaje claro, sin romper
     at.run()
     assert not at.exception and any('necesitas 3 momentos' in w.value for w in at.warning)
+
+
+def test_ejercicio_etabs_de_seis_claros_se_exporta_a_pdf():
+    mom = '153.70 10 154.38 10 154.38 10 144.35 10 144.78 10 164.33 10 164.33'.split()
+    lista = sx.lista_desde_columnas([float(x) for x in mom], [7.2, 5.2, 7.2, 7.2, 7.2, 5.2],
+                                    [52.84, 66.05, 51.01, 51.07, 51.14, 68.55])
+    r = sx.calcular_viga({**DF, 'b': 50, 'h': 90, 'ramas': 4}, lista)
+    assert r['ok'] and len(r['geom']['spans']) == 6
+    assert sx.pdf(r)[:4] == b'%PDF'
