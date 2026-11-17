@@ -405,62 +405,29 @@ def _viga_completa():
         st.markdown(f'- {t}')
 
 
-EJEMPLO_VIGA = [dict(tipo='Apoyo', Mu=41.6), dict(tipo='Centro de claro', Mu=15.26),
-                dict(tipo='Apoyo', Mu=49.4, L=6.7, Vu=36.2), dict(tipo='Centro de claro', Mu=18.8),
-                dict(tipo='Apoyo', Mu=48.22, L=6.8, Vu=39.6), dict(tipo='Centro de claro', Mu=13.55),
-                dict(tipo='Apoyo', Mu=40.1, L=6.5, Vu=35.36), dict(tipo='Centro de claro', Mu=15.4),
-                dict(tipo='Apoyo', Mu=59.9, L=7.2, Vu=36.5), dict(tipo='Centro de claro', Mu=26.7),
-                dict(tipo='Apoyo', Mu=58.6, L=7.8, Vu=44.3)]
-_COLS_VIGA = ['Tipo', 'Mu (t·m)', 'L del claro (m)', 'Vu del claro (t)', 'Armado propuesto']
+EJEMPLO_MOMENTOS = '41.6\n15.26\n49.4\n18.8\n48.22\n13.55\n40.1\n15.4\n59.9\n26.7\n58.6'
+EJEMPLO_LARGOS = '6.7\n6.8\n6.5\n7.2\n7.8'
+EJEMPLO_VUS = '36.2\n39.6\n35.36\n36.5\n44.3'
 
 
 @st.cache_data(show_spinner=False, max_entries=8)
-def _exportar_viga(datos, lista, proyecto, autor):
+def _exportar_viga(datos, momentos, largos, vus, proyecto, autor):
     """PDF, Excel y texto de la viga (se calculan una vez por cada combinación de datos)."""
     import ame_seccion as sx
-    res = sx.calcular_viga(dict(datos), [dict(x) for x in lista])
+    res = sx.calcular_viga(dict(datos), sx.lista_desde_columnas(list(momentos), list(largos), list(vus)))
     return sx.pdf(res, proyecto, autor), sx.excel(res), sx.texto(res).encode('utf-8')
 
 
-def _lista_a_df(lista):
-    return pd.DataFrame([[x['tipo'], x['Mu'], x.get('L'), x.get('Vu'), x.get('prop', '')] for x in lista], columns=_COLS_VIGA)
-
-
-def _df_a_lista(df):
-    def num(v):
-        return None if pd.isna(v) else float(v)
-    out = []
-    for _, x in df.iterrows():
-        if pd.isna(x['Tipo']) or pd.isna(x['Mu (t·m)']):
-            continue
-        out.append(dict(tipo=x['Tipo'], Mu=float(x['Mu (t·m)']), L=num(x['L del claro (m)']), Vu=num(x['Vu del claro (t)']),
-                        prop='' if pd.isna(x['Armado propuesto']) else str(x['Armado propuesto'])))
-    return out
-
-
-def _siguiente(lista):
-    """Qué sección toca añadir según lo que ya hay."""
-    if not lista:
-        return 'Apoyo', 'Empieza por el apoyo del extremo izquierdo (su momento negativo, en valor positivo).'
-    n_apoyos = sum(1 for x in lista if x['tipo'] == 'Apoyo')
-    if lista[-1]['tipo'] == 'Apoyo':
-        return 'Centro de claro', f'Toca el momento positivo del claro {n_apoyos}.'
-    return 'Apoyo', f'Toca el apoyo {n_apoyos + 1}: su momento negativo y, porque cierra el claro {n_apoyos}, la longitud y el Vu de ese claro.'
-
-
 def mostrar_seccion():
-    """Examen 3 · viga por secciones: añades cada sección (apoyo o centro de claro) con su momento y la página arma la viga completa:
-    diagramas, armado con corridas y bastones, estribos, secciones y exportación a PDF, Excel y texto."""
+    """Examen 3 · viga completa: capturas la columna de momentos, el largo de cada crujía y el Vu de cada crujía, y la página arma
+    el render de la viga (diagramas, corridas, bastones, estribos y secciones) con exportación a PDF, Excel y texto."""
     import matplotlib.pyplot as plt
 
     import ame_porticos as pt
     import ame_seccion as sx
-    if 'sx_lista' not in st.session_state:
-        st.session_state['sx_lista'] = [dict(x) for x in EJEMPLO_VIGA]
-        st.session_state['sx_ver'] = 0
-    ver = st.session_state['sx_ver']
-    st.caption('Añade las secciones de izquierda a derecha con los valores de tus diagramas. La página recoge lo que necesita, diseña '
-               'cada sección y arma la viga como en el pizarrón. Al abrir trae un ejemplo: bórralo con «Borrar todo».')
+    st.caption('Escribe los datos de tus diagramas y la página arma el render: los momentos en una columna (de izquierda a derecha), '
+               'el largo de cada crujía y el Vu de cada crujía. Al abrir trae el ejemplo del pizarrón (con largos supuestos): '
+               'cámbialo por los tuyos.')
     with st.expander('Datos de la viga', expanded=True):
         c1, c2, c3, c4, c5 = st.columns(5)
         b = c1.number_input('b (cm)', 5.0, 300.0, 35.0, key='sx_b')
@@ -477,56 +444,26 @@ def mostrar_seccion():
         s_tope = c5.number_input('Tope de la separación (cm)', 10.0, 40.0, 25.0, 1.0, key='sx_stope',
                                  help='El profesor prefiere 25 cm cuando rige el tope; los apuntes marcan 30 cm.')
 
-    lista = st.session_state['sx_lista']
-    tipo_sig, ayuda = _siguiente(lista)
-    with st.container(border=True):
-        st.markdown('**Añadir sección**')
-        st.caption(ayuda)
-        c1, c2, c3, c4, c5 = st.columns([1.3, 1, 1, 1, 1])
-        tipo = c1.radio('Sección', list(sx.TIPOS), index=list(sx.TIPOS).index(tipo_sig), key=f'sx_tipo_{ver}_{tipo_sig}')
-        Mu = c2.number_input('Mu (t·m, en positivo)', 0.0, 5000.0, 0.0, key=f'sx_nMu_{ver}')
-        cierra = tipo == 'Apoyo' and any(x['tipo'] == 'Apoyo' for x in lista)
-        Ln = c3.number_input('L del claro (m)', 0.0, 100.0, 0.0, key=f'sx_nL_{ver}', disabled=not cierra,
-                             help='Longitud libre del claro, de cara a cara de apoyo.')
-        Vn = c4.number_input('Vu del claro (t)', 0.0, 1000.0, 0.0, key=f'sx_nVu_{ver}', disabled=not cierra)
-        pn = c5.text_input('Armado propuesto (opcional)', '', key=f'sx_nprop_{ver}', placeholder='ej. 4#8')
-        b1, b2, b3, b4 = st.columns(4)
-        if b1.button('Añadir', type='primary', width='stretch', key=f'sx_add_{ver}'):
-            if cierra and (Ln <= 0 or Vn <= 0):
-                st.error('Este apoyo cierra un claro: escribe la longitud L y el Vu de ese claro.')
-            else:
-                nuevo = dict(tipo=tipo, Mu=Mu, prop=pn.strip())
-                if cierra:
-                    nuevo.update(L=Ln, Vu=Vn)
-                st.session_state['sx_lista'] = lista + [nuevo]
-                st.session_state['sx_ver'] = ver + 1
-                st.rerun()
-        if b2.button('Quitar la última', width='stretch', key=f'sx_del_{ver}', disabled=not lista):
-            st.session_state['sx_lista'] = lista[:-1]
-            st.session_state['sx_ver'] = ver + 1
-            st.rerun()
-        if b3.button('Borrar todo', width='stretch', key=f'sx_clr_{ver}', disabled=not lista):
-            st.session_state['sx_lista'] = []
-            st.session_state['sx_ver'] = ver + 1
-            st.rerun()
-        if b4.button('Cargar el ejemplo del pizarrón', width='stretch', key=f'sx_ej_{ver}'):
-            st.session_state['sx_lista'] = [dict(x) for x in EJEMPLO_VIGA]
-            st.session_state['sx_ver'] = ver + 1
-            st.rerun()
-    with st.expander(f'Secciones añadidas ({len(lista)}) · puedes corregir cualquier celda o borrar filas', expanded=False):
-        ed = st.data_editor(_lista_a_df(lista), num_rows='dynamic', hide_index=True, width='stretch', key=f'sx_ed_{ver}',
-                            column_config={'Tipo': st.column_config.SelectboxColumn('Tipo', options=list(sx.TIPOS), required=True),
-                                           'Mu (t·m)': st.column_config.NumberColumn('Mu (t·m)', min_value=0.0, format='%g'),
-                                           'L del claro (m)': st.column_config.NumberColumn('L del claro (m)', min_value=0.0, format='%g'),
-                                           'Vu del claro (t)': st.column_config.NumberColumn('Vu del claro (t)', min_value=0.0, format='%g'),
-                                           'Armado propuesto': st.column_config.TextColumn('Armado propuesto')})
-        lista = _df_a_lista(ed)
-        st.session_state['sx_lista'] = lista
+    c1, c2, c3 = st.columns([1.2, 1, 1])
+    t_mom = c1.text_area('Momentos Mu (t·m), en positivo', EJEMPLO_MOMENTOS, height=290, key='sx_mom',
+                         help='Una columna, de izquierda a derecha: apoyo, centro del claro, apoyo, centro, …, apoyo. '
+                              'Con n crujías van 2n + 1 valores. Puedes pegar la columna de Excel.')
+    t_len = c2.text_area('Largo de cada crujía (m)', EJEMPLO_LARGOS, height=290, key='sx_largos',
+                         help='Claro libre, de cara a cara de apoyo, uno por crujía.')
+    t_vu = c3.text_area('Vu de cada crujía (t)', EJEMPLO_VUS, height=290, key='sx_vus',
+                        help='Un valor por crujía. Con un solo valor se usa en todas.')
+    try:
+        momentos = sx.parse_columna(t_mom, 'Momentos')
+        largos = sx.parse_columna(t_len, 'Largo de cada crujía')
+        vus = sx.parse_columna(t_vu, 'Vu de cada crujía')
+        n = len(largos)
+        c1.caption(f'{len(momentos)} momentos' + (f' · {n} crujías → {2 * n + 1} momentos' if n else ''))
+        lista = sx.lista_desde_columnas(momentos, largos, vus)
+    except ValueError as e:
+        st.warning(str(e))
+        return
 
     datos = dict(b=b, h=h, r=r, fc=fc, fy=fy, var=var, est=est, ramas=int(ramas), fy_est=fyest, s_tope=s_tope)
-    if not lista:
-        st.info('Añade la primera sección para empezar.')
-        return
     try:
         res = sx.calcular_viga(datos, lista)
     except ValueError as e:
@@ -546,8 +483,7 @@ def mostrar_seccion():
                'medidas desde el eje de cada apoyo (cara de apoyo, sin ancho de columna). Los claros usan la forma parabólica de una '
                'carga uniforme que pasa por los tres momentos que diste.')
 
-    pr, xl, tx = _exportar_viga(tuple(sorted(datos.items())),
-                                tuple(tuple(sorted((k, v) for k, v in x.items())) for x in lista),
+    pr, xl, tx = _exportar_viga(tuple(sorted(datos.items())), tuple(momentos), tuple(largos), tuple(vus),
                                 st.session_state.get('proyecto', ''), st.session_state.get('autor', ''))
     d1, d2, d3 = st.columns(3)
     d1.download_button('Descargar PDF', pr, 'viga_concreto.pdf', 'application/pdf', width='stretch', key='sx_dl_pdf')

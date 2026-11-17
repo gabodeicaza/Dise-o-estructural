@@ -155,6 +155,45 @@ def armar(lista):
     return puntos, tramos, dict(xn=xn, spans=spans)
 
 
+def parse_columna(txt, nombre):
+    """Una columna (o lista) de números pegada como texto: separados por renglones, espacios, comas o punto y coma.
+    Admite coma decimal si va un solo número por renglón."""
+    t = str(txt or '').strip()
+    if not t:
+        return []
+    renglones = [r.strip() for r in t.replace(';', '\n').splitlines() if r.strip()]
+    trozos = []
+    for r in renglones:
+        trozos += [r.replace(',', '.')] if len(renglones) > 1 and r.count(',') == 1 and ' ' not in r else r.replace(',', ' ').split()
+    try:
+        return [float(x) for x in trozos]
+    except ValueError:
+        raise ValueError(f'«{nombre}» debe ser una lista de números (uno por renglón o separados por espacios).')
+
+
+def lista_desde_columnas(momentos, largos, vus):
+    """Las tres columnas que captura la usuaria → lista de secciones para `calcular_viga`.
+    momentos: apoyo, centro del claro, apoyo, …, apoyo (2n + 1 valores en positivo); largos: n claros libres (m);
+    vus: n valores (uno por claro; con un solo valor se usa en todos)."""
+    n = len(largos)
+    if n < 1:
+        raise ValueError('Escribe el largo de cada crujía.')
+    if len(momentos) != 2 * n + 1:
+        raise ValueError(f'Con {n} crujía(s) necesitas {2 * n + 1} momentos (apoyo, centro del claro, apoyo, …, apoyo) y escribiste '
+                         f'{len(momentos)}.')
+    if len(vus) == 1 and n > 1:
+        vus = list(vus) * n
+    if len(vus) != n:
+        raise ValueError(f'Necesitas un Vu por crujía ({n}) y escribiste {len(vus)}.')
+    if min(largos) <= 0 or min(vus) <= 0:
+        raise ValueError('Los largos y los Vu deben ser positivos.')
+    lista = [dict(tipo='Apoyo', Mu=momentos[0])]
+    for k in range(n):
+        lista.append(dict(tipo='Centro de claro', Mu=momentos[2 * k + 1]))
+        lista.append(dict(tipo='Apoyo', Mu=momentos[2 * k + 2], L=largos[k], Vu=vus[k]))
+    return lista
+
+
 def _envolvente(geom, npts=41):
     """Diagramas de cada claro como en el pizarrón: momento parabólico por tres puntos (cara izquierda, centro, cara derecha) y
     cortante lineal de +Vu a −Vu (carga uniforme)."""

@@ -135,22 +135,36 @@ def test_exportaciones_pdf_excel_y_texto():
     assert 'ARMADO DE TODA LA VIGA' in txt and 'Estribos' in txt and 'Varillas corridas' in txt and 'Bastones' in txt
 
 
-def test_flujo_de_la_pagina_borrar_anadir_y_armar():
+def test_columnas_de_captura_arman_la_lista_de_secciones():
+    assert sx.parse_columna('41.6' + chr(10) + '15,26' + chr(10) + ' 49.4', 'M') == [41.6, 15.26, 49.4]
+    assert sx.parse_columna('6.7 6.8, 6.5', 'L') == [6.7, 6.8, 6.5]
+    assert sx.parse_columna('', 'L') == []
+    with pytest.raises(ValueError, match='Momentos'):
+        sx.parse_columna('4x', 'Momentos')
+    lista = sx.lista_desde_columnas([41.6, 15.26, 49.4, 18.8, 48.22], [6.7, 6.8], [36.2, 39.6])
+    assert [x['tipo'] for x in lista] == ['Apoyo', 'Centro de claro', 'Apoyo', 'Centro de claro', 'Apoyo']
+    assert lista[2]['L'] == 6.7 and lista[2]['Vu'] == 36.2 and lista[4]['L'] == 6.8 and lista[4]['Vu'] == 39.6
+    assert [x['Vu'] for x in sx.lista_desde_columnas([1, 2, 3, 4, 5], [6, 6], [30])[2::2]] == [30, 30]      # un Vu para todas
+    with pytest.raises(ValueError, match='5 momentos'):
+        sx.lista_desde_columnas([1, 2, 3], [6, 6], [30])
+    with pytest.raises(ValueError, match='Vu por crujía'):
+        sx.lista_desde_columnas([1, 2, 3, 4, 5], [6, 6], [30, 30, 30])
+
+
+def test_la_pagina_arma_el_render_desde_tres_columnas():
     pytest.importorskip('streamlit')
     from streamlit.testing.v1 import AppTest
     at = AppTest.from_file(str(Path(__file__).resolve().parents[1] / 'app_web.py'), default_timeout=300).run()
     assert not at.exception, [e.value for e in at.exception]
-    assert len(at.session_state['sx_lista']) == 11                       # abre con el ejemplo del pizarrón
-    assert any('Armado de toda la viga' in m.value for m in at.markdown)
-    next(b for b in at.button if b.label == 'Borrar todo').click()
-    at.run()
-    assert at.session_state['sx_lista'] == [] and not at.exception
-    assert any('Añade la primera sección' in i.value for i in at.info)
-    # primer apoyo
-    next(n for n in at.number_input if n.label == 'Mu (t·m, en positivo)').set_value(41.6)
-    next(b for b in at.button if b.label == 'Añadir').click()
+    assert any('Armado de toda la viga' in m.value for m in at.markdown)           # abre con el ejemplo del pizarrón
+    area = {a.label: a for a in at.text_area}
+    area['Momentos Mu (t·m), en positivo'].set_value(chr(10).join(['20', '25', '20']))
+    area['Largo de cada crujía (m)'].set_value('6')
+    area['Vu de cada crujía (t)'].set_value('22')
     at.run()
     assert not at.exception, [e.value for e in at.exception]
-    assert [(x['tipo'], x['Mu']) for x in at.session_state['sx_lista']] == [('Apoyo', 41.6)]
-    assert any('Toca el momento positivo del claro 1' in c.value for c in at.caption)
-    assert any('Falta' in w.value or 'cierra' in w.value or 'al menos' in w.value for w in at.warning)
+    assert any('Armado de toda la viga' in m.value for m in at.markdown)
+    area = {a.label: a for a in at.text_area}
+    area['Momentos Mu (t·m), en positivo'].set_value(chr(10).join(['20', '25']))   # faltan datos: mensaje claro, sin romper
+    at.run()
+    assert not at.exception and any('necesitas 3 momentos' in w.value for w in at.warning)
