@@ -426,8 +426,18 @@ EJEMPLO_ETABS = dict(
     sx_b=50.0, sx_h=90.0, sx_r=5.0)
 
 
+EJEMPLO_ETABS_2 = dict(
+    EJEMPLO_ETABS,
+    sx_mom=_NL.join('157.11 10 157.11 10 154.93 10 146.24 10 146.74 10 166.44 10 166.44'.split()),
+    sx_vus=_NL.join('53.80 66.32 51.69 51.75 51.84 69.16'.split()))
+
+
 def _cargar_etabs():
     st.session_state.update(EJEMPLO_ETABS)
+
+
+def _cargar_etabs_2():
+    st.session_state.update(EJEMPLO_ETABS_2)
 
 
 def mostrar_seccion():
@@ -456,8 +466,10 @@ def mostrar_seccion():
         s_tope = c5.number_input('Tope de la separación (cm)', 10.0, 40.0, 25.0, 1.0, key='sx_stope',
                                  help='El profesor prefiere 25 cm cuando rige el tope; los apuntes marcan 30 cm.')
 
-    st.button('Cargar el ejercicio de ETABS (6 vigas de la envolvente)', on_click=_cargar_etabs, key='sx_cargar_etabs',
-              help='Mu = |mínimo| de M3 de cada tramo, Vu = máximo |V2|, claro libre = longitud − 0.8 m; sección 50×90 supuesta.')
+    ayuda = 'Mu = |mínimo| de M3 de cada tramo, Vu = máximo |V2|, claro libre = longitud − 0.8 m; sección 50×90 supuesta.'
+    e1, e2 = st.columns(2)
+    e1.button('Cargar ejercicio ETABS 1 (6 vigas)', on_click=_cargar_etabs, key='sx_cargar_etabs', help=ayuda)
+    e2.button('Cargar ejercicio ETABS 2 (6 vigas)', on_click=_cargar_etabs_2, key='sx_cargar_etabs_2', help=ayuda)
     c1, c2, c3 = st.columns([1.2, 1, 1])
     t_mom = c1.text_area('Momentos Mu (t·m), en positivo', EJEMPLO_MOMENTOS, height=290, key='sx_mom',
                          help='Una columna, de izquierda a derecha: apoyo, centro del claro, apoyo, centro, …, apoyo. '
