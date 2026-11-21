@@ -249,10 +249,24 @@ def calcular_viga(d, lista):
     for e, p in zip(res['puntos'], puntos):
         e['x'], e['tipo'] = p['x'], p['tipo']
     env = _envolvente(geom)
+    zonas = [dict(e=i, x0=sp['x0'], x1=sp['x1'], Vu=sp['Vu'], ref=('apoyo', i)) for i, sp in enumerate(geom['spans'])]
+    _completar(res, env, zonas)
+    return res
+
+
+def _completar(res, env, zonas):
+    """Con los diagramas (env) ya armados: bastones, cortes y estribos a lo largo de la viga (común a la viga continua y a la general)."""
+    import ame_viga as av
     res['env'] = env
     cor = res['corrido']
     base = [dict(punto=e['punto'], lecho=e['lecho'], x=e['x'], ficha=e['ficha']) for e in res['puntos']]
-    bast = _bastones(env, base, cor['n'], res['d_ef'])
+    crudo = _bastones(env, base, cor['n'], res['d_ef'])
+    bast = {}                                     # un bastón por región de momento (el de mayor número de varillas)
+    for b in crudo:
+        k = (b['lecho'], round(b['x0'], 2), round(b['x1'], 2))
+        if k not in bast or b['n'] > bast[k]['n']:
+            bast[k] = b
+    bast = sorted(bast.values(), key=lambda b: (b['x'], b['lecho']))
     cor['bastones'] = [(b['punto'], b['n']) for b in bast]
     res['bastones'] = bast
     # secciones distintas a lo largo de la viga (para los cortes 1-1, 2-2, …)
@@ -265,10 +279,113 @@ def calcular_viga(d, lista):
             cortes.append(dict(num=len(cortes) + 1, x=e['x'], punto=e['punto'], n_top=nt, n_bot=nb))
     res['cortes'] = cortes
     # separación de estribos a lo largo de la viga (confinamiento 2h a cada lado de cada apoyo)
-    import ame_viga as av
     seps = [t['cort']['s_usar'] if t['cort']['ok'] else None for t in res['tramos']]
-    zonas = [dict(e=i, x0=s['x0'], x1=s['x1'], Vu=s['Vu'], ref=('apoyo', i)) for i, s in enumerate(geom['spans'])]
     res['estribos'] = av.tramos_estribos(env, zonas, seps, Lconf_m=2 * res['h'] / 100, s_conf=res['integ']['s_usar'])
+
+
+# ------------------------------------------------------------------ viga general: cualquier diagrama (voladizos, cargas puntuales, …)
+def _num(v):
+    if v is None:
+        return None
+    if isinstance(v, str):
+        v = v.strip().replace(',', '.')
+        if not v:
+            return None
+    try:
+        f = float(v)
+    except (TypeError, ValueError):
+        raise ValueError(f'«{v}» no es un número.')
+    return None if math.isnan(f) else f
+
+
+def armar_general(filas, npts=61, eps=0.005):
+    """filas: dict(x (m), Mu (t·m con signo: + tensión abajo, − tensión arriba; vacío = 0), Vl y Vr (t con el signo del diagrama, a la
+    izquierda y a la derecha del punto; si solo das uno vale para los dos), apoyo (bool), Mc (t·m positivo, momento del signo contrario
+    en el mismo punto, opcional)). Entre dos puntos consecutivos el cortante es lineal (carga uniforme) y el momento sale de integrarlo
+    pasando por los dos Mu; en un punto con carga puntual el cortante salta. Devuelve (puntos, tramos, geom, env)."""
+    import numpy as np
+    est = []
+    for f in filas:
+        x = _num(f.get('x'))
+        if x is None:
+            continue                                                  # renglón vacío
+        est.append(dict(x=x, M=_num(f.get('Mu')) or 0.0, Vl=_num(f.get('Vl')), Vr=_num(f.get('Vr')), apoyo=bool(f.get('apoyo')),
+                        Mc=abs(_num(f.get('Mc')) or 0.0)))
+    if len(est) < 2:
+        raise ValueError('Captura al menos dos puntos (los dos extremos de la viga) con su x.')
+    est.sort(key=lambda e: e['x'])
+    x0 = est[0]['x']
+    for e in est:
+        e['x'] -= x0
+    if any(b['x'] - a['x'] < 1e-6 for a, b in zip(est[:-1], est[1:])):
+        raise ValueError('Dos puntos tienen la misma x: junta sus datos en un renglón (con Vu izq y Vu der si hay carga puntual).')
+    if not any(e['apoyo'] for e in est):
+        raise ValueError('Marca al menos un punto como apoyo.')
+    for i, e in enumerate(est):
+        if e['Vl'] is None and e['Vr'] is None:
+            raise ValueError(f'Falta el cortante del punto x = {e["x"] + x0:g} m (Vu izq o Vu der).')
+        if i == 0 or e['Vl'] is None:
+            e['Vl'] = e['Vr'] if e['Vl'] is None else e['Vl']
+        if i == len(est) - 1 or e['Vr'] is None:
+            e['Vr'] = e['Vl'] if e['Vr'] is None else e['Vr']
+    xs, M, V, segs, avisos, ext = [], [], [], [], [], []
+    for k, (a, b) in enumerate(zip(est[:-1], est[1:])):
+        L = b['x'] - a['x']
+        w = (a['Vr'] - b['Vl']) / L                                   # carga uniforme equivalente (t/m, hacia abajo)
+        t = np.linspace(0, L, npts)
+        Mk = a['M'] + (b['M'] - a['M']) * t / L + 0.5 * w * t * (L - t)
+        xs.append(a['x'] + t)
+        M.append(Mk)
+        V.append(a['Vr'] - w * t)
+        dM, iV = b['M'] - a['M'], L * (a['Vr'] + b['Vl']) / 2
+        segs.append(dict(x0=a['x'], x1=b['x'], L=L, Mi=a['M'], Mj=b['M'], Vr=a['Vr'], Vl=b['Vl'], w=w, dM=dM, iV=iV))
+        if abs(dM - iV) > max(0.6, 0.03 * max(abs(a['M']), abs(b['M']), abs(dM))):
+            avisos.append(f'Tramo x = {a["x"] + x0:g} → {b["x"] + x0:g} m: el cambio de momento ({dM:.2f} t·m) no coincide con el área del '
+                          f'cortante ({iV:.2f} t·m). Revisa esos Mu o Vu; el diagrama se dibuja con tus Mu y la forma que da el cortante.')
+        if abs(w) > 1e-9:
+            ts = a['Vr'] / w
+            if 0.02 < ts < L - 0.02:
+                Ms = a['M'] + (b['M'] - a['M']) * ts / L + 0.5 * w * ts * (L - ts)
+                if (w > 0 and Ms > eps) or (w < 0 and Ms < -eps):
+                    ext.append((a['x'] + ts, Ms))
+    puntos = []
+    for e in est:
+        if abs(e['M']) > eps:
+            puntos.append(dict(x=e['x'], Mu=abs(e['M']), lecho='inferior' if e['M'] > 0 else 'superior', tipo='apoyo' if e['apoyo'] else 'punto'))
+        if e['Mc'] > eps:
+            lecho = 'superior' if e['M'] >= 0 else 'inferior'
+            puntos.append(dict(x=e['x'], Mu=e['Mc'], lecho=lecho, tipo='apoyo' if e['apoyo'] else 'punto'))
+    for x, Ms in ext:
+        puntos.append(dict(x=x, Mu=abs(Ms), lecho='inferior' if Ms > 0 else 'superior', tipo='máx. del claro'))
+    if not puntos:
+        raise ValueError('Todos los momentos son cero: captura al menos un Mu.')
+    puntos.sort(key=lambda p: (p['x'], p['lecho']))
+    for i, p in enumerate(puntos):
+        p['punto'] = LETRAS[i] if i < len(LETRAS) else f'p{i + 1}'
+        p['prop'] = ''
+    tramos = [dict(tramo=str(i + 1), Vu=max(abs(s_['Vr']), abs(s_['Vl'])), x0=s_['x0'], x1=s_['x1']) for i, s_ in enumerate(segs)]
+    xn = [e['x'] for e in est]
+    ap = [i for i, e in enumerate(est) if e['apoyo']]
+    env = dict(x=np.array(xs), xn=np.array(xn), tipos=['Articulado'] * len(xn), ap=ap, Mmax=np.array(M), Mmin=np.array(M),
+               Vmax=np.array(V), Vmin=np.array(V), cos=np.ones(len(M)))
+    geom = dict(general=True, xn=xn, est=est, segs=segs, x0=x0, ap=ap, avisos=avisos)
+    return puntos, tramos, geom, env
+
+
+def calcular_general(d, filas):
+    """Viga con cualquier diagrama: ver `armar_general`. Devuelve lo mismo que `calcular_viga`."""
+    puntos, tramos, geom, env = armar_general(filas)
+    res = calcular(d, [dict(punto=p['punto'], Mu=p['Mu'], lecho=p['lecho'], prop='') for p in puntos],
+                   [dict(tramo=t['tramo'], Vu=t['Vu']) for t in tramos])
+    res['geom'] = geom
+    res['filas'] = filas
+    res['avisos'] = list(geom['avisos'])
+    if res['error']:
+        return res
+    for e, p in zip(res['puntos'], puntos):
+        e['x'], e['tipo'] = p['x'], p['tipo']
+    zonas = [dict(e=i, x0=t['x0'], x1=t['x1'], Vu=t['Vu'], ref=('apoyo', i)) for i, t in enumerate(tramos)]
+    _completar(res, env, zonas)
     return res
 
 
@@ -298,6 +415,38 @@ def _dibujar_seccion(ax, b, h, rec, est_db, db, n_top, n_bot, titulo):
     ax.set_title(titulo, fontsize=10, color='#0B2545', fontweight='bold')
 
 
+def _paneles_general(res, aV, aM, oscuro, azul):
+    """Diagramas de cortante y momento de la viga general (como en el pizarrón: momento positivo hacia arriba)."""
+    import numpy as np
+    geom, env = res['geom'], res['env']
+    vm = max(1.0, float(np.abs(env['Vmax']).max()))
+    for k in range(len(geom['segs'])):
+        aV.fill_between(env['x'][k], 0, env['Vmax'][k], color='#4C9BE8', alpha=0.35, lw=0)
+        aV.plot(env['x'][k], env['Vmax'][k], color='#0B3D75', lw=1.4)
+        aM.fill_between(env['x'][k], 0, env['Mmax'][k], color='#F2C12E', alpha=0.35, lw=0)
+        aM.plot(env['x'][k], env['Mmax'][k], color='#6b5300', lw=1.4)
+    est = geom['est']
+    for k, e in enumerate(est):
+        aV.plot([e['x'], e['x']], [e['Vl'], e['Vr']], color='#0B3D75', lw=1.0)
+        if k > 0 and abs(e['Vl']) > 1e-9:
+            aV.annotate(f'{e["Vl"]:g}', (e['x'], e['Vl']), xytext=(-3, 3 if e['Vl'] > 0 else -3), textcoords='offset points', ha='right',
+                        va='bottom' if e['Vl'] > 0 else 'top', fontsize=9, color=oscuro)
+        if k < len(est) - 1 and abs(e['Vr']) > 1e-9 and not (k > 0 and abs(e['Vr'] - e['Vl']) < 1e-9):
+            aV.annotate(f'{e["Vr"]:g}', (e['x'], e['Vr']), xytext=(3, 3 if e['Vr'] > 0 else -3), textcoords='offset points', ha='left',
+                        va='bottom' if e['Vr'] > 0 else 'top', fontsize=9, color=oscuro)
+    aV.set_ylim(-1.35 * vm, 1.35 * vm)
+    for p in res['puntos']:
+        Ms = p['Mu'] if p['lecho'] == 'inferior' else -p['Mu']
+        aM.annotate(f'{p["Mu"]:g}', (p['x'], Ms), xytext=(0, 5 if Ms > 0 else -5), textcoords='offset points', ha='center',
+                    va='bottom' if Ms > 0 else 'top', fontsize=9, color=oscuro)
+    lo, hi = float(env['Mmax'].min()), float(env['Mmax'].max())
+    lo, hi = min(lo, 0.0), max(hi, 0.0)
+    pad = 0.18 * max(hi - lo, 1.0)
+    aM.set_ylim(lo - pad, hi + pad)
+    aM.annotate('', xy=(0, hi), xytext=(res['d_ef'] / 100, hi), arrowprops=dict(arrowstyle='<->', lw=0.9, color=azul))
+    aM.text(res['d_ef'] / 100 + 0.15, hi, f'd = {res["d_ef"]:g} cm', ha='left', va='center', fontsize=8.5, color=azul)
+
+
 def figura_hoja(res):
     """Lo que se dibuja en el pizarrón: cortante, momento, alzado de la viga con corridas, bastones (con sus longitudes), cortes y
     estribos, y debajo las secciones 1-1, 2-2, …"""
@@ -321,32 +470,38 @@ def figura_hoja(res):
             ax.spines[s].set_visible(False)
     # ---- Vu
     aV.axhline(0, color='0.35', lw=0.9)
-    for s in geom['spans']:
+    gen = bool(geom.get('general'))
+    if gen:
+        _paneles_general(res, aV, aM, oscuro, azul)
+    for s in ([] if gen else geom['spans']):
         aV.fill([s['x0'], s['x0'], s['x1'], s['x1']], [0, s['Vu'], -s['Vu'], 0], color='#4C9BE8', alpha=0.35, lw=0)
         aV.plot([s['x0'], s['x1']], [s['Vu'], -s['Vu']], color='#0B3D75', lw=1.4)
         aV.plot([s['x0'], s['x0']], [0, s['Vu']], color='#0B3D75', lw=1.0)
         aV.plot([s['x1'], s['x1']], [0, -s['Vu']], color='#0B3D75', lw=1.0)
         aV.annotate(f'{s["Vu"]:g}', (s['x0'], s['Vu']), xytext=(3, 3), textcoords='offset points', fontsize=9, color=oscuro)
         aV.annotate(f'{s["Vu"]:g}', (s['x1'], -s['Vu']), xytext=(-3, -3), textcoords='offset points', fontsize=9, color=oscuro, ha='right', va='top')
-    vm = max(s['Vu'] for s in geom['spans'])
-    aV.set_ylim(-1.35 * vm, 1.35 * vm)
+    if not gen:
+        vm = max(s['Vu'] for s in geom['spans'])
+        aV.set_ylim(-1.35 * vm, 1.35 * vm)
     aV.set_ylabel('Vu (t)')
     # ---- Mu (positivo hacia arriba, como en el pizarrón)
     aM.axhline(0, color='0.35', lw=0.9)
-    for e, s in enumerate(geom['spans']):
+    for e, s in enumerate([] if gen else geom['spans']):
         aM.fill_between(env['x'][e], 0, env['Mmax'][e], color='#F2C12E', alpha=0.35, lw=0)
         aM.plot(env['x'][e], env['Mmax'][e], color='#6b5300', lw=1.4)
         aM.annotate(f'{s["Mc"]:g}', ((s['x0'] + s['x1']) / 2, s['Mc']), xytext=(0, 4), textcoords='offset points', ha='center', fontsize=9, color=oscuro)
-    for k, x in enumerate(xn):
+    for k, x in enumerate([] if gen else xn):
         v = res['puntos']
         apo = [p for p in v if p['tipo'] == 'apoyo']
         aM.annotate(f'{apo[k]["Mu"]:g}', (x, -apo[k]['Mu']), xytext=(0, -5), textcoords='offset points', ha='center', va='top', fontsize=9, color=oscuro)
     mm = max(res['Mu_max'], 1.0)
-    aM.set_ylim(-1.3 * mm, 0.95 * max(s['Mc'] for s in geom['spans']) + 0.25 * mm)
+    if not gen:
+        aM.set_ylim(-1.3 * mm, 0.95 * max(s['Mc'] for s in geom['spans']) + 0.25 * mm)
     aM.set_ylabel('Mu (t·m)')
     yy = 0.28 * mm
-    aM.annotate('', xy=(0, yy), xytext=(res['d_ef'] / 100, yy), arrowprops=dict(arrowstyle='<->', lw=0.9, color=azul))
-    aM.text(res['d_ef'] / 100 + 0.15, yy, f'd = {res["d_ef"]:g} cm', ha='left', va='center', fontsize=8.5, color=azul)
+    if not gen:
+        aM.annotate('', xy=(0, yy), xytext=(res['d_ef'] / 100, yy), arrowprops=dict(arrowstyle='<->', lw=0.9, color=azul))
+        aM.text(res['d_ef'] / 100 + 0.15, yy, f'd = {res["d_ef"]:g} cm', ha='left', va='center', fontsize=8.5, color=azul)
     # ---- alzado
     aE.set_ylim(-2.45, 2.0)
     aE.set_yticks([])
@@ -359,6 +514,8 @@ def figura_hoja(res):
     for xg, sg in ((0.03, 1), (L - 0.03, -1)):               # ganchos de las corridas
         aE.plot([xg, xg], [yt, 0.36], color=azul, lw=3.0, zorder=4)
         aE.plot([xg, xg], [yb, 0.64], color=azul, lw=3.0, zorder=4)
+    for k in (geom.get('ap') or []):
+        aE.plot([xn[k]], [-0.07], marker='^', ms=11, color=oscuro, clip_on=False, zorder=6)
     bast = res['bastones']
     filas = []
     for i, b in enumerate(bast):
@@ -426,15 +583,19 @@ def _lineas_tanteo(e):
 
 def tabla_flexion(res):
     """(encabezados, filas) de la flexión punto por punto."""
+    gen = bool(res.get('geom', {}).get('general'))
     enc = ['Punto', 'Lecho', 'Mu (t·m)', 'As req (cm²)', 'Armado', 'As real (cm²)', 'MR (t·m)', 'Sep. libre (cm)', 'OK']
+    if gen:
+        enc = ['Punto', 'x (m)'] + enc[1:]
     filas = []
     for e in res['puntos']:
         f = e['ficha']
+        pre = [e['punto'], round(e['x'] + res['geom']['x0'], 3)] if gen else [e['punto']]
         if f['As_real']:
-            filas.append([e['punto'], e['lecho'], e['Mu'], f['As_usar'], f['armado'], f['As_real'], f['MR'], f['sep_libre'],
-                          '✔' if f['ok'] else '✘'])
+            filas.append(pre + [e['lecho'], e['Mu'], f['As_usar'], f['armado'], f['As_real'], f['MR'], f['sep_libre'],
+                                '✔' if f['ok'] else '✘'])
         else:
-            filas.append([e['punto'], e['lecho'], e['Mu'], '—', '—', '—', '—', '—', '✘'])
+            filas.append(pre + [e['lecho'], e['Mu'], '—', '—', '—', '—', '—', '✘'])
     return enc, filas
 
 
@@ -476,6 +637,13 @@ def bloques(res, con_figura=True):
     if res['error']:
         return B + [det.paso(1, 'Revisión de la sección', res['error'], 'Cambia las dimensiones o el concreto y vuelve a calcular.')]
     B.append(det.destacado('Armado de toda la viga', resumen(res)))
+    if res.get('geom', {}).get('general'):
+        g = res['geom']
+        B.append(det.tabla('Puntos capturados (x en m, momento con signo: + tensión abajo, − tensión arriba)',
+                           ['x (m)', 'Mu (t·m)', 'Vu izq (t)', 'Vu der (t)', 'Apoyo'],
+                           [[e['x'] + g['x0'], e['M'], e['Vl'], e['Vr'], 'sí' if e['apoyo'] else ''] for e in g['est']], 2))
+        for av_ in res.get('avisos') or []:
+            B.append(det.nota(av_))
     malos = [t for t, ok in (('flexión', res['ok_flex']), ('cortante', res['ok_cort'])) if not ok]
     B.append(det.nota('La viga cumple: subreforzada en todos los puntos, el cortante no excede el límite y el armado alcanza.' if res['ok']
                       else 'La viga NO cumple una de las revisiones: ' + ', '.join(malos) + '.'))

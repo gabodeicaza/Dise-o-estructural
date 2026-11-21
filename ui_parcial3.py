@@ -440,16 +440,9 @@ def _cargar_etabs_2():
     st.session_state.update(EJEMPLO_ETABS_2)
 
 
-def mostrar_seccion():
-    """Examen 3 · viga completa: capturas la columna de momentos, el largo de cada crujía y el Vu de cada crujía, y la página arma
-    el render de la viga (diagramas, corridas, bastones, estribos y secciones) con exportación a PDF, Excel y texto."""
-    import matplotlib.pyplot as plt
-
+def _datos_viga():
+    """Datos de la sección y de los materiales (comunes a los dos modos de captura)."""
     import ame_porticos as pt
-    import ame_seccion as sx
-    st.caption('Escribe los datos de tus diagramas y la página arma el render: los momentos en una columna (de izquierda a derecha), '
-               'el largo de cada crujía y el Vu de cada crujía. Al abrir trae el ejemplo del pizarrón (con largos supuestos): '
-               'cámbialo por los tuyos.')
     with st.expander('Datos de la viga', expanded=True):
         c1, c2, c3, c4, c5 = st.columns(5)
         b = c1.number_input('b (cm)', 5.0, 300.0, 35.0, key='sx_b')
@@ -466,6 +459,14 @@ def mostrar_seccion():
         s_tope = c5.number_input('Tope de la separación (cm)', 10.0, 40.0, 25.0, 1.0, key='sx_stope',
                                  help='El profesor prefiere 25 cm cuando rige el tope; los apuntes marcan 30 cm.')
 
+    return dict(b=b, h=h, r=r, fc=fc, fy=fy, var=var, est=est, ramas=int(ramas), fy_est=fyest, s_tope=s_tope)
+
+
+def _entrada_continua(datos):
+    """Viga continua de carga uniforme: tres columnas (momentos, largos, Vu)."""
+    import ame_seccion as sx
+    st.caption('Viga continua con carga uniforme: los momentos en una columna (de izquierda a derecha), el largo de cada crujía y el Vu '
+               'de cada crujía. Al abrir trae el ejemplo del pizarrón de 5 claros (con largos supuestos): cámbialo por los tuyos.')
     ayuda = 'Mu = |mínimo| de M3 de cada tramo, Vu = máximo |V2|, claro libre = longitud − 0.8 m; sección 50×90 supuesta.'
     e1, e2 = st.columns(2)
     e1.button('Cargar ejercicio ETABS 1 (6 vigas)', on_click=_cargar_etabs, key='sx_cargar_etabs', help=ayuda)
@@ -489,12 +490,21 @@ def mostrar_seccion():
         st.warning(str(e))
         return
 
-    datos = dict(b=b, h=h, r=r, fc=fc, fy=fy, var=var, est=est, ramas=int(ramas), fy_est=fyest, s_tope=s_tope)
     try:
         res = sx.calcular_viga(datos, lista)
     except ValueError as e:
         st.warning(f'{e}')
         return
+    _resultado(res, lambda: _exportar_viga(tuple(sorted(datos.items())), tuple(momentos), tuple(largos), tuple(vus),
+                                           st.session_state.get('proyecto', ''), st.session_state.get('autor', '')))
+
+
+def _resultado(res, exportar):
+    """Veredicto, render, descargas, resumen y los seis pasos (comunes a los dos modos)."""
+    import matplotlib.pyplot as plt
+
+    import ame_seccion as sx
+    var, est, ramas = res['var'], res['est'], res['ramas']
     if res['error']:
         st.error(res['error'])
         return
@@ -506,11 +516,10 @@ def mostrar_seccion():
     st.pyplot(fig)
     plt.close(fig)
     st.caption('Las longitudes de los bastones van del punto donde el momento de ese signo se anula hasta una distancia d más allá, '
-               'medidas desde el eje de cada apoyo (cara de apoyo, sin ancho de columna). Los claros usan la forma parabólica de una '
-               'carga uniforme que pasa por los tres momentos que diste.')
+               'medidas desde el eje de cada apoyo (cara de apoyo, sin ancho de columna). Entre tus puntos, los diagramas '
+               'siguen la forma de una carga uniforme.')
 
-    pr, xl, tx = _exportar_viga(tuple(sorted(datos.items())), tuple(momentos), tuple(largos), tuple(vus),
-                                st.session_state.get('proyecto', ''), st.session_state.get('autor', ''))
+    pr, xl, tx = exportar()
     d1, d2, d3 = st.columns(3)
     d1.download_button('Descargar PDF', pr, 'viga_concreto.pdf', 'application/pdf', width='stretch', key='sx_dl_pdf')
     d2.download_button('Descargar Excel', xl, 'viga_concreto.xlsx',
@@ -591,6 +600,90 @@ def mostrar_seccion():
         for t in res['piel']['lineas']:
             st.markdown(f'- {t}')
 
+
+
+
+COLS_GENERAL = ['x (m)', 'Mu (t·m) con signo', 'Vu izq (t)', 'Vu der (t)', 'Apoyo', 'Mu contrario (opc.)']
+_N = float('nan')
+# pizarrón: voladizo de 2 m, claro de 8 m con una carga puntual a los 4 m, voladizo de 3 m (x medida desde la punta izquierda)
+EJEMPLO_GENERAL = [
+    [0.0, 0.0, -2.8, -2.8, False, _N],
+    [2.0, -11.7, -8.9, 14.23, True, _N],
+    [6.0, 20.84, 2.03, -7.87, False, _N],
+    [10.0, -35.03, -20.07, 16.25, True, _N],
+    [13.0, 0.0, 7.1, 7.1, False, _N]]
+EJEMPLO_GENERAL_VIGA = dict(sx_b=40.0, sx_h=80.0, sx_r=5.0, sx_fc=250.0)
+
+
+@st.cache_data(show_spinner=False, max_entries=8)
+def _exportar_general(datos, filas, proyecto, autor):
+    """PDF, Excel y texto de la viga general (una vez por cada combinación de datos)."""
+    import ame_seccion as sx
+    res = sx.calcular_general(dict(datos), [dict(zip(('x', 'Mu', 'Vl', 'Vr', 'apoyo', 'Mc'), f)) for f in filas])
+    return sx.pdf(res, proyecto, autor), sx.excel(res), sx.texto(res).encode('utf-8')
+
+
+def _cargar_general():
+    st.session_state.update(EJEMPLO_GENERAL_VIGA)
+    st.session_state['sx_g_base'] = pd.DataFrame(EJEMPLO_GENERAL, columns=COLS_GENERAL)
+    st.session_state['sx_g_ver'] = st.session_state.get('sx_g_ver', 0) + 1
+
+
+def _limpiar_general():
+    st.session_state['sx_g_base'] = pd.DataFrame([[_N, _N, _N, _N, False, _N]] * 6, columns=COLS_GENERAL)
+    st.session_state['sx_g_ver'] = st.session_state.get('sx_g_ver', 0) + 1
+
+
+def _entrada_general(datos):
+    """Viga con cualquier diagrama: una tabla de puntos (x, Mu con signo, Vu a cada lado, apoyo)."""
+    import ame_seccion as sx
+    st.caption('Un renglón por cada punto donde cambia algo en tus diagramas (extremos, apoyos, cargas puntuales, máximos). '
+               'x desde la punta izquierda; el momento lleva el signo del diagrama (+ tensión abajo, − tensión arriba); el cortante '
+               'va a cada lado del punto (si no hay carga puntual basta uno). Marca los apoyos. Entre un punto y otro, la app une '
+               'los diagramas como en tu pizarrón y revisa que el cambio de momento coincida con el área del cortante.')
+    b1, b2, _ = st.columns([1.3, 1, 3])
+    b1.button('Cargar el ejemplo del pizarrón', on_click=_cargar_general, key='sx_g_ejemplo',
+              help='Voladizo de 2 m, claro de 8 m con carga puntual a los 4 m y voladizo de 3 m; sección 40 × 80.')
+    b2.button('Limpiar la tabla', on_click=_limpiar_general, key='sx_g_limpiar')
+    df = st.data_editor(
+        st.session_state['sx_g_base'], num_rows='dynamic', hide_index=True, width='stretch', key=f'sx_g_ed_{st.session_state.get("sx_g_ver", 0)}',
+        column_config={
+            COLS_GENERAL[0]: st.column_config.NumberColumn(COLS_GENERAL[0], format='%g', help='Posición del punto, medida desde la punta izquierda.'),
+            COLS_GENERAL[1]: st.column_config.NumberColumn(COLS_GENERAL[1], format='%g', help='+ si el diagrama está arriba (tensión abajo), − si está abajo.'),
+            COLS_GENERAL[2]: st.column_config.NumberColumn(COLS_GENERAL[2], format='%g', help='Cortante justo a la izquierda del punto, con su signo.'),
+            COLS_GENERAL[3]: st.column_config.NumberColumn(COLS_GENERAL[3], format='%g', help='Cortante justo a la derecha; si es igual al de la izquierda puedes dejarlo vacío.'),
+            COLS_GENERAL[4]: st.column_config.CheckboxColumn(COLS_GENERAL[4], help='Marca los puntos que son apoyo (ahí va el confinamiento).'),
+            COLS_GENERAL[5]: st.column_config.NumberColumn(COLS_GENERAL[5], format='%g',
+                                                            help='Solo si en el mismo punto hay momento de los dos signos (envolvente): el valor positivo del signo contrario.')})
+
+    def val(v):
+        return None if v is None or (isinstance(v, float) and v != v) else float(v)
+    filas = tuple((val(r[COLS_GENERAL[0]]), val(r[COLS_GENERAL[1]]), val(r[COLS_GENERAL[2]]), val(r[COLS_GENERAL[3]]),
+                   bool(r[COLS_GENERAL[4]]), val(r[COLS_GENERAL[5]])) for _, r in df.iterrows())
+    try:
+        res = sx.calcular_general(datos, [dict(zip(('x', 'Mu', 'Vl', 'Vr', 'apoyo', 'Mc'), f)) for f in filas])
+    except ValueError as e:
+        st.warning(str(e))
+        return
+    for a in res.get('avisos') or []:
+        st.warning(a)
+    _resultado(res, lambda: _exportar_general(tuple(sorted(datos.items())), filas, st.session_state.get('proyecto', ''),
+                                              st.session_state.get('autor', '')))
+
+
+def mostrar_seccion():
+    """Examen 3 · una viga de concreto reforzado: capturas los diagramas (en tabla de puntos, o en tres columnas si es continua de carga
+    uniforme) y la página arma el render (diagramas, corridas, bastones, estribos y secciones) con PDF, Excel y texto."""
+    modo = st.radio('Tipo de viga', ['Viga general (cualquier diagrama)', 'Viga continua (3 columnas)'], horizontal=True, key='sx_modo',
+                    help='General: voladizos, cargas puntuales o cualquier diagrama de Mu y Vu. Continua: varios claros con carga uniforme, '
+                         'con tres columnas (momentos, largos, Vu).')
+    if 'sx_g_base' not in st.session_state:                    # primera vez: abre con el ejemplo del pizarrón (antes de crear los campos)
+        _cargar_general()
+    datos = _datos_viga()
+    if modo.startswith('Viga general'):
+        _entrada_general(datos)
+    else:
+        _entrada_continua(datos)
 
 def mostrar_viga_puntos():
     """Examen 3 · Viga por puntos: capturas los Mu y Vu del diagrama (de ETABS o del pórtico) y la app arma todo."""

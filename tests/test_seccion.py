@@ -156,7 +156,9 @@ def test_la_pagina_arma_el_render_desde_tres_columnas():
     from streamlit.testing.v1 import AppTest
     at = AppTest.from_file(str(Path(__file__).resolve().parents[1] / 'app_web.py'), default_timeout=300).run()
     assert not at.exception, [e.value for e in at.exception]
-    assert any('Armado de toda la viga' in m.value for m in at.markdown)           # abre con el ejemplo del pizarrón
+    assert any('Armado de toda la viga' in m.value for m in at.markdown)           # abre con el ejemplo del pizarrón (viga general)
+    at.radio(key='sx_modo').set_value('Viga continua (3 columnas)').run()
+    assert not at.exception, [e.value for e in at.exception]
     area = {a.label: a for a in at.text_area}
     area['Momentos Mu (t·m), en positivo'].set_value(chr(10).join(['20', '25', '20']))
     area['Largo de cada crujía (m)'].set_value('6')
@@ -177,3 +179,76 @@ def test_ejercicio_etabs_de_seis_claros_se_exporta_a_pdf():
     r = sx.calcular_viga({**DF, 'b': 50, 'h': 90, 'ramas': 4}, lista)
     assert r['ok'] and len(r['geom']['spans']) == 6
     assert sx.pdf(r)[:4] == b'%PDF'
+
+
+# ------------------------------------------------------------------ viga general (voladizos, cargas puntuales, cualquier diagrama)
+# pizarrón de 40 × 80: voladizo de 2 m, claro de 8 m con carga puntual a los 4 m, voladizo de 3 m
+G = [dict(x=0, Mu=0, Vl=-2.8, Vr=-2.8), dict(x=2, Mu=-11.7, Vl=-8.9, Vr=14.23, apoyo=True), dict(x=6, Mu=20.84, Vl=2.03, Vr=-7.87),
+     dict(x=10, Mu=-35.03, Vl=-20.07, Vr=16.25, apoyo=True), dict(x=13, Mu=0, Vl=7.1, Vr=7.1)]
+
+
+def test_viga_general_del_pizarron_coincide_con_la_hoja_de_clase():
+    import numpy as np
+    r = sx.calcular_general(D, G)
+    assert r['ok'] and not r['avisos']                                            # los diagramas del pizarrón cierran (ΔM = ∫V dx)
+    assert [(e['lecho'], e['Mu'], e['ficha']['armado']) for e in r['puntos']] == [
+        ('superior', 11.7, '2#8'), ('inferior', 20.84, '2#8'), ('superior', 35.03, '3#8')]          # mismas varillas que la hoja
+    assert r['corrido']['n'] == 2 and [(b['punto'], b['n']) for b in r['bastones']] == [('c', 1)]
+    b = r['bastones'][0]
+    assert b['gancho_der'] and not b['gancho_izq'] and b['der'] == pytest.approx(3.0)          # llega a la punta del voladizo
+    assert b['izq'] == pytest.approx(2.07 + 0.75, abs=0.05)                                    # cruce por cero a 2.07 m del apoyo + d
+    env = r['env']
+    i = int(np.argmin(np.abs(env['x'][1] - 2.91)))
+    assert abs(env['Mmax'][1][i]) < 0.5                                                          # el momento cruza por cero cerca de 2.9 m
+    assert [t['Vu'] for t in r['tramos']] == [8.9, 14.23, 20.07, 16.25]
+    assert [e['confinado'] for e in r['estribos']] == [False, True, False, True, False]
+
+
+def test_viga_general_avisa_si_los_diagramas_no_cierran():
+    mal = [dict(G[0]), dict(G[1], Mu=-30), *G[2:]]
+    r = sx.calcular_general(D, mal)
+    assert r['avisos'] and 'no coincide' in r['avisos'][0]
+
+
+def test_viga_general_con_momento_contrario_y_maximo_interior():
+    # claro con carga uniforme (w = 4 t/m, L = 6): Vu = ±12, M apoyos −10 → el máximo (+8) cae a los 3 m
+    f = [dict(x=0, Mu=-10, Vr=12, apoyo=True), dict(x=6, Mu=-10, Vl=-12, apoyo=True)]
+    r = sx.calcular_general(D, f)
+    assert any(e['tipo'] == 'máx. del claro' and e['lecho'] == 'inferior' and e['Mu'] == pytest.approx(8.0, abs=0.01) for e in r['puntos'])
+    r2 = sx.calcular_general(D, [dict(f[0], Mc=8), f[1]])                                       # momento positivo en el apoyo (envolvente)
+    assert any(e['lecho'] == 'inferior' and e['x'] == 0 and e['Mu'] == 8 for e in r2['puntos'])
+
+
+@pytest.mark.parametrize('filas, texto', [
+    ([dict(x=0, Mu=0, Vr=5)], 'al menos dos puntos'),
+    ([dict(x=0, Mu=0, Vr=5), dict(x=4, Mu=0, Vl=-5)], 'al menos un punto como apoyo'),
+    ([dict(x=0, Mu=0, Vr=5, apoyo=True), dict(x=0, Mu=0, Vl=-5)], 'misma x'),
+    ([dict(x=0, Mu=0, apoyo=True), dict(x=4, Mu=0, Vl=-5)], 'Falta el cortante'),
+    ([dict(x=0, Mu=0, Vr=0, apoyo=True), dict(x=4, Mu=0, Vl=0)], 'Todos los momentos son cero'),
+])
+def test_viga_general_mensajes_claros(filas, texto):
+    with pytest.raises(ValueError, match=texto):
+        sx.calcular_general(D, filas)
+
+
+def test_viga_general_se_dibuja_y_se_exporta():
+    import matplotlib.pyplot as plt
+    from openpyxl import load_workbook
+    r = sx.calcular_general(D, G)
+    fig = sx.figura_hoja(r)
+    assert len(fig.axes) >= 5
+    plt.close(fig)
+    assert sx.pdf(r, 'Prueba')[:4] == b'%PDF'
+    valores = [str(c.value) for fila in load_workbook(io.BytesIO(sx.excel(r))).active.iter_rows() for c in fila if c.value is not None]
+    assert any('Puntos capturados' in v for v in valores)
+    assert 'Puntos capturados' in sx.texto(r) and 'Bastones' in sx.texto(r)
+
+
+def test_la_pagina_abre_en_viga_general_y_acepta_la_tabla():
+    pytest.importorskip('streamlit')
+    from streamlit.testing.v1 import AppTest
+    at = AppTest.from_file(str(Path(__file__).resolve().parents[1] / 'app_web.py'), default_timeout=300).run()
+    assert not at.exception, [e.value for e in at.exception]
+    assert at.radio(key='sx_modo').value.startswith('Viga general')
+    assert any('Armado de toda la viga' in m.value for m in at.markdown)
+    assert {'Descargar PDF', 'Descargar Excel', 'Descargar texto'} <= {d.label for d in at.get('download_button')}
